@@ -26,6 +26,7 @@ wrap "$H/llvm-strip" llvm-strip
 wrap "$S/glslc" glslc
 RES=$("$PREFIX/bin/clang" -print-resource-dir)
 mkdir -p "$RES/lib/linux"; cp "$N"/rt/* "$RES/lib/linux/" || true
+cp "$N"/rt/libunwind.a "$N/sysroot/usr/lib/aarch64-linux-android/"   # clang links it by name (-l:libunwind.a); Termux's looks in the sysroot, not beside the builtins
 # proof: a whole game's host, built with this toolchain under bionic
 export ANDROID_NDK_HOME=$N NX2A_NDK_HOST=linux-aarch64 NX2A_PREBUILT=$W/bundle/prebuilt NX2A_HOME=$W/home DOTNET_ROOT=$PREFIX/lib/dotnet DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 PYTHONPATH=$W
 cd "$W"
