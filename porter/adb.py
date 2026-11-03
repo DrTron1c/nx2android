@@ -73,6 +73,9 @@ class Adb:
 
     def pick(self):   # the configured device, else the only one connected
         ready = [s for s, st, _ in self.devices() if st == 'device']
+        if self.serial and self.serial not in ready and ':' in self.serial:   # Wireless debugging: the adb server may have ended since the app connected (a port takes hours)
+            subprocess.run([self.exe, 'connect', self.serial], capture_output=True, text=True, errors='replace', timeout=30, env=self.env)
+            ready = [s for s, st, _ in self.devices() if st == 'device']
         if self.serial:
             if self.serial not in ready: raise AdbError(f'device {self.serial} is not connected (connected: {", ".join(ready) or "none"})')
             return self.serial
