@@ -14,7 +14,7 @@ for line in open(src, encoding='utf-8'):
     code = re.sub(SYM + r'@PAGEOFF', r':lo12:\1', code)
     code = re.sub(SYM + r'@PAGE', r'\1', code)
     code = code.replace('.private_extern', '.hidden')
-    code = re.sub(r'^(\s*)\.zerofill\s+__DATA,__bss,_(\w+),(\d+),(\d+)', lambda m: f'{m.group(1)}.bss\n{m.group(1)}.balign {1 << int(m.group(4))}\n{m.group(2)}:\n{m.group(1)}.zero {m.group(3)}\n{m.group(1)}.text', code, flags=re.M)
+    code = re.sub(r'^(\s*)\.zerofill\s+__DATA,__bss,_(\w+),(\d+),(\d+)', lambda m: f'{m.group(1)}.hidden {m.group(2)}\n{m.group(1)}.bss\n{m.group(1)}.balign {1 << int(m.group(4))}\n{m.group(2)}:\n{m.group(1)}.zero {m.group(3)}\n{m.group(1)}.text', code, flags=re.M)
     for pat, rep in SECTIONS: code = re.sub(r'^(\s*)' + pat, lambda m: m.group(1) + rep, code)
     code = re.sub(r'(\.globl\s+|\.hidden\s+|\b(?:bl|b|b\.\w+|cbz\s+\w+,|cbnz\s+\w+,|tbz\s+\w+,\s*#\d+,|tbnz\s+\w+,\s*#\d+,|adr\s+\w+,)\s*)' + SYM + r'\b', r'\1\2', code)
     code = re.sub(r'^(\s*)' + SYM + r':', r'\1\2:', code)   # label definitions

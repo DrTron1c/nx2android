@@ -1,0 +1,24 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'org.nx2a.builder'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'org.nx2a.builder'
+        minSdk 29
+        // 28 on purpose: from 29 Android refuses to run programs from an app's own storage, and this app's whole job is running the toolchain it unpacks there
+        //noinspection ExpiredTargetSdkVersion
+        targetSdk 28
+        versionCode System.getenv('NX2A_VERSION_CODE') ? System.getenv('NX2A_VERSION_CODE').toInteger() : 1
+        versionName '0.3.' + (System.getenv('NX2A_VERSION_CODE') ?: '0')
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    signingConfigs {
+        release {
+            storeFile file(System.getenv('NX2A_KEYSTORE') ?: 'missing.jks')
+            storePassword 'nx2android'; keyAlias 'builder'; keyPassword 'nx2android'
+        }
+    }
+    buildTypes { release { minifyEnabled false; signingConfig signingConfigs.release } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    lint { abortOnError false; checkReleaseBuilds false }
+}

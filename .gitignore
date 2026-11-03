@@ -26,3 +26,6 @@ title.keys
 
 # The player bundle (python packaging/build_bundle.py)
 /dist/
+builder/.gradle/
+builder/build/
+builder/app/build/

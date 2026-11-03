@@ -1,0 +1,138 @@
+# The builder app and what it downloads, on the release tag builder-tools:
+#   nx2android-builder.apk  the app
+#   toolchain.tar.gz        Python, clang, adb, glslc and the .NET runtime for Android, the NDK's sysroot, and nx_extract and the shader translator already built
+#   engine.tar.gz           porter and the engine
+#   versions.txt            what the app compares to know whether to download again
+name: builder
+on:
+  push:
+    branches: [switch2-android]
+    paths: ['builder/**', 'porter/**', 'nxnative/dm/**', 'nxnative/scripts/**', '.github/workflows/builder.yml']
+  workflow_dispatch:
+    inputs:
+      toolchain:
+        description: Build the toolchain bundle too
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: builder
+  cancel-in-progress: true
+jobs:
+  toolchain:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: The NDK's sysroot
+        run: |
+          curl -fsSL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          mkdir -p bundle/ndk/rt
+          unzip -q ndk.zip 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/*' 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/*aarch64*' 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/aarch64/*'
+          mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot bundle/ndk/sysroot
+          find android-ndk-r27c -name '*aarch64*android.a' -o -name 'libunwind.a' -path '*aarch64*' | xargs -I{} cp {} bundle/ndk/rt/
+          rm -rf android-ndk-r27c ndk.zip
+          rm -rf bundle/ndk/sysroot/usr/lib/{arm-linux-androideabi,i686-linux-android,x86_64-linux-android,riscv64-linux-android}
+      - name: nx_extract and the shader translator
+        run: |
+          dotnet build nxnative/dm/tools/nx_extract -c Release -o bundle/prebuilt/nx_extract -v q -nologo -p:UseAppHost=false
+          dotnet build nxnative/dm/gfx/tools/dmsh_xlate -c Release -o bundle/prebuilt/dmsh_xlate -v q -nologo -p:UseAppHost=false
+          printf '#!/system/bin/sh\nexec "$PREFIX/bin/dotnet" "${0%%/*}/nx_extract.dll" "$@"\n' > bundle/prebuilt/nx_extract/nx_extract
+          chmod 755 bundle/prebuilt/nx_extract/nx_extract
+      - name: Toolchain in Termux, and a host built with it under bionic
+        id: termux
+        continue-on-error: true
+        run: |
+          mkdir -p out ci home; chmod -R a+rwX .
+          docker run --rm --security-opt seccomp=unconfined -v "$PWD:/workdir" termux/termux-docker:aarch64 bash /workdir/builder/toolchain/make_bundle.sh 2>&1 | tail -400 | tee ci/termux.log
+          test -s out/usr.tar.gz
+      - name: Pack
+        if: steps.termux.outcome == 'success'
+        run: |
+          sudo chown -R "$USER" bundle out ci
+          cd bundle && tar --format=gnu -czf ../out/rest.tar.gz ndk prebuilt && cd ..
+          mkdir -p merged && cd merged && tar -xzf ../out/usr.tar.gz && tar -xzf ../out/rest.tar.gz && tar --format=gnu -czf ../toolchain.tar.gz . && cd ..
+          ls -la toolchain.tar.gz | tee -a ci/termux.log
+          rm -rf merged out
+      - uses: actions/upload-artifact@v4
+        if: steps.termux.outcome == 'success'
+        with:
+          name: toolchain
+          path: toolchain.tar.gz
+          retention-days: 3
+          compression-level: 0
+      - name: Publish the logs
+        if: always()
+        run: |
+          sudo chown -R "$USER" ci 2>/dev/null || true
+          mkdir -p ci; cd ci; rm -rf .git
+          git init -q -b ci-toolchain .
+          git config user.name ci; git config user.email ci@users.noreply.github.com
+          git add -A; git commit -qm "toolchain logs of ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}" ci-toolchain
+  app:
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    if: always()
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: The app's signing key (the same one every build, so updates install over the app)
+        run: |
+          mkdir -p key
+          gh release download builder-signing --repo "$GITHUB_REPOSITORY" -p builder.jks -D key || true
+          if [ ! -f key/builder.jks ]; then
+            keytool -genkeypair -keystore key/builder.jks -storepass nx2android -keypass nx2android -alias builder -keyalg RSA -keysize 2048 -validity 10000 -dname CN=nx2android
+            gh release create builder-signing key/builder.jks --repo "$GITHUB_REPOSITORY" --prerelease --title "Builder signing key" --notes "Keeps the builder app's signature the same between builds." --target "$GITHUB_SHA"
+          fi
+          echo "NX2A_KEYSTORE=$PWD/key/builder.jks" >> "$GITHUB_ENV"
+      - name: Build the app
+        continue-on-error: true
+        id: gradle
+        run: |
+          mkdir -p ci
+          cd builder && NX2A_VERSION_CODE=$GITHUB_RUN_NUMBER gradle assembleRelease --no-daemon 2>&1 | tail -80 | tee ../ci/app.log
+          test -f app/build/outputs/apk/release/app-release.apk
+      - name: The engine
+        run: |
+          mkdir -p eng/nx2android/nxnative
+          cp -r porter eng/nx2android/; cp requirements.txt eng/nx2android/
+          cp -r nxnative/dm nxnative/scripts eng/nx2android/nxnative/
+          rm -rf eng/nx2android/nxnative/dm/{ios,mac,sanitizers,third_party/ryujinx,third_party/dav1d,gfx/tests,host/tests,tools/tests,tools/fuzz,gfx/tools/dmsh_xlate_bin}
+          find eng -name '__pycache__' -prune -exec rm -rf {} +
+          tar --format=gnu -czf engine.tar.gz -C eng nx2android
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: toolchain
+      - name: Publish
+        run: |
+          gh release view builder-tools --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create builder-tools --repo "$GITHUB_REPOSITORY" --prerelease --title "nx2android Builder" --notes "The builder app and the tools it downloads. Install nx2android-builder.apk on your tablet." --target "$GITHUB_SHA"
+          OLD=$(gh release download builder-tools --repo "$GITHUB_REPOSITORY" -p versions.txt -O - 2>/dev/null || true)
+          T=$(echo "$OLD" | awk '{print $1}'); [ -f toolchain.tar.gz ] && T=$GITHUB_SHA && gh release upload builder-tools toolchain.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload builder-tools engine.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
+          echo "${T:-none} $GITHUB_SHA" > versions.txt
+          gh release upload builder-tools versions.txt --clobber --repo "$GITHUB_REPOSITORY"
+          if [ -f builder/app/build/outputs/apk/release/app-release.apk ]; then cp builder/app/build/outputs/apk/release/app-release.apk nx2android-builder.apk; gh release upload builder-tools nx2android-builder.apk --clobber --repo "$GITHUB_REPOSITORY"; fi
+      - name: Publish the logs
+        if: always()
+        run: |
+          mkdir -p ci; ls -la *.tar.gz *.apk 2>/dev/null > ci/published.txt || true; cat versions.txt >> ci/published.txt 2>/dev/null || true
+          cd ci; rm -rf .git
+          git init -q -b ci-app .
+          git config user.name ci; git config user.email ci@users.noreply.github.com
+          git add -A; git commit -qm "app logs of ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}" ci-app
