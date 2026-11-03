@@ -495,7 +495,7 @@ static void au_release_pending(aout *a) {
     int released = qh != qt;
     while (qh != qt) {
         if (rw - rr >= RELMAX) die("AudioOut released queue overflow while stopping");
-        a->rel[rw++ & (RELMAX - 1)] = a->q[qh++ & (QMAX - 1)];
+        a->rel[rw++ & (RELMAX - 1)] = a->q[qh++ & (QMAX - 1)].b;
     }
     atomic_store_explicit(&a->rel_tail, rw, memory_order_release);
     atomic_store_explicit(&a->q_head, qh, memory_order_release); a->pos = 0;

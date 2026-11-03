@@ -871,7 +871,9 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     if (!freopen(p, "w", stderr)) __android_log_print(ANDROID_LOG_ERROR, "dmhost", "cannot write %s", p);
     setvbuf(stderr, NULL, _IOLBF, 0);
     setenv("DM_ROOT", g_root, 1);
-    snprintf(p, sizeof p, "%s/RomFS", g_root); setenv("DM_ROMFS", p, 0);
+    snprintf(p, sizeof p, "%s/RomFS.img", g_root);   // a Switch 2 game keeps its RomFS as one image
+    if (access(p, R_OK)) snprintf(p, sizeof p, "%s/RomFS", g_root);
+    setenv("DM_ROMFS", p, 0);
     snprintf(p, sizeof p, "%s/save", act->internalDataPath); mkdir(p, 0700); setenv("DM_SAVE", p, 0);
     snprintf(p, sizeof p, "%s/temp", act->internalDataPath); mkdir(p, 0700); setenv("DM_TEMP", p, 0);
     snprintf(p, sizeof p, "%s/shaders.dmsv", g_root); setenv("DM_VK_SHADERS", p, 0);

@@ -1,0 +1,4 @@
+# Written for the Switch 2 merge: upstream played this game on a Mac; it has not been played on Android
+status	experimental
+orientation	landscape
+requires	bcn

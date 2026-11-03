@@ -11,9 +11,10 @@ def _parser():
     i = sub.add_parser('inspect', help='what a game folder holds and whether it can be ported'); i.add_argument('folder'); i.add_argument('--json', action='store_true')
     i.add_argument('-k', '--keys', help='prod.keys (default: the configured one): reads the title ID of a dump with no [title ID] in its name')
     po = sub.add_parser('port', help='make the APK and the data pack (and install them)')
-    po.add_argument('folder', help='the game\'s folder: its base game NSP / XCI / NSZ / XCZ, updates and DLC')
+    po.add_argument('folder', help='the game\'s folder: its base game NSP / XCI / NSZ / XCZ, updates and DLC; for a Switch 2 game a .nup file or a dump')
     po.add_argument('-k', '--keys', help='prod.keys (default: the configured one)')
     po.add_argument('-o', '--out', help='folder for the APK and the data pack (default: the game folder)')
+    po.add_argument('--work', help='where the build folder goes (default: the game folder)')
     po.add_argument('-p', '--version', default='', help='version to pack, v<N> (default: the newest in the folder)')
     po.add_argument('-l', '--language', default='', help='game language, a code or a name (default: English)')
     po.add_argument('--app-name', default='', help='the app\'s name on the device (default: the game\'s name)')
@@ -131,7 +132,7 @@ def cmd_port(a):
         env = os.environ.get('NX2A_VERCODE_OFFSET', '').strip() or '0'
         try: offset = int(env)
         except ValueError: print(f'NX2A_VERCODE_OFFSET is not a number: {env}', file=sys.stderr); return 2
-    opts = pipeline.Options(folder=Path(a.folder), keys=Path(a.keys) if a.keys else None, out=Path(a.out) if a.out else None, version=a.version, language=a.language,
+    opts = pipeline.Options(folder=Path(a.folder), keys=Path(a.keys) if a.keys else None, out=Path(a.out) if a.out else None, work=Path(a.work) if a.work else None, version=a.version, language=a.language,
                             app_name=a.app_name, install=a.install, device=a.device, replace_signer=a.replace_signer, debug=a.debug, experimental=a.experimental, package=a.package, fps60=a.fps60, touch=a.touch, mt_replay=a.mt_replay, vulkan_driver=a.vulkan_driver,
                             vercode_offset=offset, alias_headroom=a.alias_headroom, jobs=a.jobs)
     return _with_progress(a.progress, lambda: pipeline.emit_result(pipeline.Port(opts).run()))

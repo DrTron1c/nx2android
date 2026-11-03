@@ -41,6 +41,8 @@ static _Atomic uint64_t g_now = 1;
 static inline void stamp_page(range_t *r, uintptr_t p) {
     uint64_t g = atomic_fetch_add(&g_now, 1) + 1; atomic_store(&r->gen[p], g);
     uint64_t o = atomic_load(&r->last); while (o < g && !atomic_compare_exchange_weak(&r->last, &o, g)) {}
+    // Publish completion after the generation: a checker may have cached "clean" using the incremented clock before the generation store
+    atomic_fetch_add(&g_now, 1);
 }
 static _Atomic uint64_t g_faults, g_preps, g_released;
 static _Atomic uint64_t g_adds_total;

@@ -1,6 +1,6 @@
 # The data pack: everything the app reads from its files folder on the device (/sdcard/Android/data/<package>/files, front_android.c), as a folder beside the APK:
 #   mods/          the rewritten code modules (patch_nso.py's outputs)
-#   RomFS/         the game's files (the packed version's merged RomFS)
+#   RomFS/         the game's files (the packed version's merged RomFS); RomFS.img in its place for a Switch 2 game
 #   aoc/<index>/   the DLC the player has
 #   shaders.dmsv   the Vulkan shaders (dm/android/tools/shader_vk.py)
 #   nintendo_ext.ttf  the button-icon font, the stand-in for the Nintendo extension shared font (dm/tools/make_ext_font.py; env.txt's DM_SHARED_FONT_EXT)
@@ -42,6 +42,9 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
     if tmp.exists(): shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
     n = b = 0
+    if Path(romfs).is_file():   # a Switch 2 game's RomFS is one image (porter.switch2), which the app takes in place of the folder (front_android.c)
+        if progress: progress('the RomFS')
+        link_or_copy(Path(romfs), tmp / 'RomFS.img'); n += 1; b += Path(romfs).stat().st_size; romfs = None
     for what, src, sub in (('the rewritten modules', patched, 'mods'), ('the RomFS', romfs, 'RomFS'), ('the DLC', aoc, 'aoc')):
         if not src: continue
         if progress: progress(what)

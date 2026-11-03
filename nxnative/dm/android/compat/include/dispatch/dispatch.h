@@ -29,3 +29,19 @@ static inline long dispatch_semaphore_wait(dispatch_semaphore_t s, dispatch_time
     for (;;) { if (!sem_timedwait(s, &ts)) return 0; if (errno != EINTR) return 1; }
 }
 static inline void dispatch_release(void *o) { if (o) { sem_destroy((sem_t *)o); free(o); } }
+
+// dispatch_async_f on a global queue: a detached thread (hle_audio.c starts the audio device off the game's thread)
+#include <pthread.h>
+#ifndef QOS_CLASS_USER_INITIATED
+#define QOS_CLASS_USER_INITIATED 0x19
+#endif
+typedef void *dispatch_queue_t;
+typedef void (*dispatch_function_t)(void *);
+static inline dispatch_queue_t dispatch_get_global_queue(long prio, unsigned long flags) { (void)prio; (void)flags; return NULL; }
+typedef struct { void *ctx; dispatch_function_t fn; } dm_dispatch_job;
+static inline void *dm_dispatch_run(void *j) { dm_dispatch_job k = *(dm_dispatch_job *)j; free(j); k.fn(k.ctx); return NULL; }
+static inline void dispatch_async_f(dispatch_queue_t q, void *ctx, dispatch_function_t fn) {
+    (void)q; dm_dispatch_job *j = malloc(sizeof *j); j->ctx = ctx; j->fn = fn;
+    pthread_t t; if (pthread_create(&t, NULL, dm_dispatch_run, j)) { free(j); fn(ctx); return; }
+    pthread_detach(t);
+}

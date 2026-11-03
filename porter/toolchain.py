@@ -32,6 +32,13 @@ class Check:
     def as_dict(self): return dict(self.__dict__)
 
 
+def prebuilt(rel):
+    """On Android: a tool built with the toolchain bundle (NX2A_PREBUILT/<rel>), which stands in for building it here: no .NET SDK or NuGet runs on the device. None elsewhere"""
+    root = os.environ.get('NX2A_PREBUILT')
+    p = Path(root) / rel if root else None
+    return p if p and p.is_file() else None
+
+
 def _sdk_roots():   # Android SDK folders that may hold ndk/<version> and platform-tools
     out = [os.environ.get(k) for k in ('ANDROID_HOME', 'ANDROID_SDK_ROOT')]
     if os.name == 'nt': out.append(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Android', 'Sdk'))
@@ -116,6 +123,7 @@ def checks(cfg=None, keys=None):
     dn = find_dotnet(cfg)
     sdks = dotnet_sdks(dn) if dn else []
     good = [s for s in sdks if int(s.split('.')[0]) >= DOTNET_MAJOR]
+    if prebuilt('dmsh_xlate/dmsh_xlate.dll') and prebuilt('nx_extract/nx_extract') and dn: good = ['prebuilt tools']; sdks = good   # the runtime is enough for them
     out.append(Check('.NET SDK', bool(good), (f'{", ".join(sdks) or "no SDK"} ({dn})' if dn else 'dotnet not found'), path=str(dn or ''), fix='' if good else f'Download missing tools, or install the .NET SDK {DOTNET_MAJOR} (dotnet.microsoft.com)'))
     adb = find_adb(cfg)
     out.append(Check('adb', bool(adb), str(adb) if adb else 'not found: the tool cannot install on a device (the APK and data pack are still made)', required=False, path=str(adb or ''),
@@ -131,10 +139,10 @@ def checks(cfg=None, keys=None):
     return out
 
 
-def require(cfg=None, keys=None, adb=False):
-    """The checked tools for a port: {'ndk', 'dotnet', 'adb'}; ToolError naming every missing requirement"""
+def require(cfg=None, keys=None, adb=False, need_keys=True):
+    """The checked tools for a port: {'ndk', 'dotnet', 'adb'}; ToolError naming every missing requirement. need_keys False: a Switch 2 game, whose files are not encrypted"""
     rows = checks(cfg, keys)
-    bad = [r for r in rows if not r.ok and (r.required or (adb and r.name == 'adb'))]
+    bad = [r for r in rows if not r.ok and (r.required or (adb and r.name == 'adb')) and (need_keys or r.name != 'prod.keys')]
     if bad: raise ToolError('missing requirements: ' + '; '.join(f'{r.name}: {r.detail}' + (f' ({r.fix})' if r.fix else '') for r in bad))
     by = {r.name: r for r in rows}
     return {'ndk': Path(by['Android NDK'].path), 'dotnet': Path(by['.NET SDK'].path), 'adb': Path(by['adb'].path) if by['adb'].ok else None}

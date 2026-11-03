@@ -25,7 +25,8 @@ ap.add_argument('--adrenotools', action='store_true', help='also libadrenotools.
 a = ap.parse_args()
 if not (a.exe or a.lib): a.exe = a.lib = True
 
-host = 'windows-x86_64' if os.name == 'nt' else 'linux-x86_64' if sys.platform.startswith('linux') else 'darwin-x86_64'
+# NX2A_NDK_HOST: the toolchain bundle's own host folder, when this runs on an Android device (its clang is not Google's: android/builder/README.md)
+host = os.environ.get('NX2A_NDK_HOST') or ('windows-x86_64' if os.name == 'nt' else 'linux-x86_64' if sys.platform.startswith('linux') else 'darwin-x86_64')
 bin_ = Path(a.ndk) / 'toolchains/llvm/prebuilt' / host / 'bin'
 CC = str(bin_ / ('clang.exe' if os.name == 'nt' else 'clang'))
 TARGET = f'--target=aarch64-linux-android{a.api}'

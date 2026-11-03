@@ -7,7 +7,7 @@ import importlib.util, os, re, shutil, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, datapack, dumps, fpslocker, install, paths, profiles, toolchain
+from porter import config, datapack, dumps, fpslocker, install, paths, profiles, switch2, toolchain
 from porter.adb import Adb, AdbError
 from porter.paths import DM, NXNATIVE
 from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, profile_guess, say
@@ -15,7 +15,8 @@ from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, 
 PY = sys.executable
 # The letters of the button-icon font (make_ext_font.py knocks them out of the icons): a bold system font of the machine that ports, never shipped in the repository
 LETTER_FONTS = [f'{os.environ.get("WINDIR", "C:/Windows")}/Fonts/{f}' for f in ('ARLRDBD.TTF', 'arialbd.ttf')] + [
-    '/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf']
+    '/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf',
+    '/system/fonts/NotoSans-Bold.ttf', '/system/fonts/DroidSans-Bold.ttf', '/system/fonts/Roboto-Regular.ttf']
 
 
 @dataclass
@@ -23,6 +24,7 @@ class Options:
     folder: Path                       # the game's folder: the base game, its updates and DLC
     keys: Path = None                  # prod.keys
     out: Path = None                   # where the APK and the data pack go (default: the game folder)
+    work: Path = None                  # where the build folder goes (default: the game folder); on Android the game folder is shared storage, where nothing can run
     version: str = ''                  # v<N> to pack (default: the newest in the folder)
     language: str = ''                 # a code or a name (default: English)
     app_name: str = ''                 # the launcher label (default: the game's name in its control data)
@@ -128,6 +130,16 @@ def lost_patches(builds, exefs, mods, table=None):
 def inspect(folder, keys=None):
     """What a game folder holds, without extracting anything: the GUI's game card and `porter inspect`. keys: prod.keys (default: the configured one), which reads the title ID
     of a dump with neither a ticket nor a [title ID] tag (an untagged cartridge dump) from its NCA headers"""
+    if s2 := switch2.find(folder):
+        g, ap = profiles.by_title(s2.app); pack = switch2.newest(s2)
+        info = dict(title_id=f'{s2.app:016X}', base=s2.name(), updates=[{'version': f'v{v}', 'file': s2.name()} for v in s2.versions], dlc=[{'title_id': f'{t:016X}', 'file': s2.name()} for t in s2.dlc],
+                    profile=g.id if g else None, android=profiles.entry(g, ap).as_dict() if g and ap else None, versions=[pack], pack=pack, supported=bool(g and ap), reason='', compressed=[],
+                    experimental=False, switch2=True, name=g.get('name', g.id) if g else '')
+        if not g: info['reason'] = f'no game profile for {s2.app:016X}: only Pokémon Pokopia, Donkey Kong Bananza, Splatoon Raiders, Fire Emblem Fortune\'s Weave and Hyrule Warriors: Age of Imprisonment have one'
+        else:
+            info['reason'] = 'a Switch 2 game: experimental on Android, it has not been played on a device yet'
+            if pack not in g.builds(): info['reason'] += f'; {pack} is not the tested version ({", ".join(g.builds())})'
+        return info
     app, fam = nsp.scan_nsps(Path(folder), dumps.EXTS, keys or config.load().get('keys'))
     g, ap = profiles.by_title(app)
     files = [fam['base'], *(p for _, p in fam['updates']), *(p for _, _, p in fam['dlc'])]
@@ -169,12 +181,14 @@ class Port:
         if o.vulkan_driver:
             o.vulkan_driver = Path(o.vulkan_driver).expanduser().resolve()
             if not o.vulkan_driver.is_file() or o.vulkan_driver.suffix != '.so': raise BuildError(f'--vulkan-driver: not a .so library: {o.vulkan_driver}')
+        self.s2 = switch2.find(o.folder)
         keys = o.keys or self.cfg.get('keys')
-        if not keys: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
-        o.keys = Path(keys).expanduser().resolve()
-        try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install)
+        if not keys and not self.s2: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
+        o.keys = Path(keys).expanduser().resolve() if keys else None
+        try: self.tools = toolchain.require(self.cfg, str(o.keys) if o.keys else None, adb=o.install, need_keys=not self.s2)
         except toolchain.ToolError as e: raise BuildError(str(e)) from e
-        o.out = Path(o.out or self.cfg.get('out') or o.folder).expanduser().resolve()
+        o.work = Path(o.work or o.folder).expanduser().resolve()
+        o.out = Path(o.out or self.cfg.get('out') or o.work).expanduser().resolve()
         # the chosen dotnet first on PATH, in this process too: Windows finds a program by the parent's PATH, not the one passed to the child (upstream runs `dotnet` by name)
         os.environ['PATH'] = os.pathsep.join([str(self.tools['dotnet'].parent), os.environ.get('PATH', '')])
         os.environ['DOTNET_ROOT'] = str(toolchain.dotnet_root(self.tools['dotnet']))   # where nx_extract.exe's apphost looks for the runtime (else the system's, which may lack .NET 10)
@@ -208,13 +222,17 @@ class Port:
     def inputs(self):
         o = self.o
         say(f'game folder: {o.folder}')
-        self.app, self.fam = nsp.scan_nsps(o.folder, dumps.EXTS, o.keys)
+        if self.s2:
+            self.app, self.fam = self.s2.app, {'base': self.s2.path, 'updates': [], 'dlc': []}
+            say(f'Switch 2 game: {self.s2.name()}, no keys needed')
+        else: self.app, self.fam = nsp.scan_nsps(o.folder, dumps.EXTS, o.keys)
         tid = f'{self.app:016X}'
-        self.work = o.folder / f'{tid}_build'
+        self.work = o.work / f'{tid}_build'
         g, ap = profiles.by_title(self.app)
         self.provisional = False
         if not (g and ap):
             what = f'no game profile for {tid}' if not g else f'{g.get("name", g.id)} ({g.id}) has a game profile but is not ported to Android yet (no android.tsv in {g.dir})'
+            if self.s2: raise BuildError(f'{what}: a Switch 2 game needs a game profile, which only five games have (`porter profiles --all`)')
             if not o.experimental: raise BuildError(f'{what}: --experimental tries it anyway (profiles: `porter profiles`)')
             g, ap = self.experimental_profile(g, tid)
         self.g, self.ap = g, ap
@@ -222,7 +240,8 @@ class Port:
         if not re.fullmatch(r'[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+', self.package): raise BuildError(f'not a package name: {self.package}')
         say(f'game profile: {g.id} {g.get("name", "")} (Android: {ap.status}' + (f', tested on {ap.tested}' if ap.tested else '') + ')')
         builds, need = g.builds(), g.words('shader_versions')
-        have = nsp.nsp_versions(self.fam, builds)
+        have = [switch2.newest(self.s2)] if self.s2 else nsp.nsp_versions(self.fam, builds)
+        if self.s2 and o.version and switch2.has_version(self.s2, o.version): have = [o.version]
         self.derived, self.derived_mem, self.lost = '', '', []
         if self.provisional:   # the version the survey saw
             self.pkg_ver = o.version or g.get('package')
@@ -244,11 +263,14 @@ class Port:
     def check_space(self):
         """Stop before extracting when the game folder's drive cannot hold the port: a build folder takes about 1 to 2 times the game files (NEO 7.0 GB of 6.8,
         Viractal 2.7 of 1.4), less what an earlier port left there, plus a margin; an NSZ / XCZ counts as decompressed, and once more for its NSP while it is extracted"""
-        files = [f for f in self.o.folder.iterdir() if f.is_file() and f.suffix.lower()[1:] in dumps.EXTS]
-        game, temp = sum(dumps.size(f) for f in files), sum(dumps.size(f) for f in files if dumps.compressed(f))
+        if self.s2: game, temp = (self.s2.path.stat().st_size if self.s2.kind == 'nup' else sum(f.stat().st_size for f in self.s2.path.rglob('*') if f.is_file())), 0
+        else:
+            files = [f for f in self.o.folder.iterdir() if f.is_file() and f.suffix.lower()[1:] in dumps.EXTS]
+            game, temp = sum(dumps.size(f) for f in files), sum(dumps.size(f) for f in files if dumps.compressed(f))
         built = sum(f.stat().st_size for f in self.work.rglob('*') if f.is_file()) if self.work.is_dir() else 0
-        need, free = max(0, 2 * game + temp - built) + 2**30, shutil.disk_usage(self.o.folder).free
-        if free < need: raise BuildError(f'not enough disk space on {self.o.folder.anchor}: the port needs about {need / 2**30:.1f} GB more, {free / 2**30:.1f} GB is free')
+        root = self.o.work; root.mkdir(parents=True, exist_ok=True)
+        need, free = max(0, 2 * game + temp - built) + 2**30, shutil.disk_usage(root).free
+        if free < need: raise BuildError(f'not enough disk space on {root.anchor}: the port needs about {need / 2**30:.1f} GB more, {free / 2**30:.1f} GB is free')
 
     def use_profile_dir(self, pdir, first):   # every tool finds the game's profile in pdir (game.py DM_GAMES_DIR; first: before dm/games)
         dirs = [str(pdir)] + [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d and d != str(pdir)]
@@ -282,6 +304,7 @@ class Port:
 
     # ---- extract: nx_extract, each version the shaders come from, the DLC ----
     def extract(self):
+        if self.s2: return self.extract_switch2()
         o, g = self.o, self.g
         picks = nsp.pick_nsps(self.fam, self.have, self.versions)
         ex = self.work / 'extract'; ex.mkdir(parents=True, exist_ok=True)
@@ -298,7 +321,7 @@ class Port:
         m = self.unpack([p for v in self.versions if not fresh(v) for p in picks[v] if p] + ([] if dlc_reused else zdlc))
         picks = {v: tuple(m.get(p, p) if p else None for p in bu) for v, bu in picks.items()}
         PROG.stage('build nx_extract')
-        nx = nsp.build_nx_extract(NXNATIVE, self.work, self.logs, self.env)
+        nx = toolchain.prebuilt('nx_extract/nx_extract') or nsp.build_nx_extract(NXNATIVE, self.work, self.logs, self.env)
         PROG.end()
         self.dirs = {ver: nsp.extract(nx, o.keys, ex, ver, *picks[ver], None, self.logs, g) for ver in self.versions}
         bad = [] if self.derived else [f'{v}: {x}' for v in self.versions for x in nsp.build_mismatch(self.dirs[v], v, g)]
@@ -333,6 +356,30 @@ class Port:
             else: nsp.rmtree(dkf)
         self.drop_unpacked()   # everything that reads them has run, and the shader stages that follow need the room
         self.base = next((self.dirs[v] for v in self.versions if picks[v][1] is None), self.dirs[self.versions[0]])
+        self.naming()
+
+    def extract_switch2(self):
+        """A Switch 2 game is unpacked, not extracted: no keys, no nx_extract, its RomFS one image (porter.switch2)"""
+        g = self.g
+        PROG.stage('unpack the game', step=self.s2.name())
+        self.game, self.aoc = switch2.extract(self.s2, self.work, self.pkg_ver)
+        self.base = self.game; self.dirs = {self.pkg_ver: self.game}; self.versions = [self.pkg_ver]
+        PROG.end(f'{self.pkg_ver}, {self.romfs(self.game).stat().st_size / 2**30:.1f} GB')
+        bad = [] if self.derived else nsp.build_mismatch(self.game, self.pkg_ver, g)
+        if bad: self.derived = f'not the builds game profile {g.id} registers: {"; ".join(bad)}'
+        if self.derived:
+            say(f'[RED] {self.derived}: its shaders must be found again and its fixes may not fit')
+            pdir = self.work / 'profile-derived'
+            nsp.derive_profile(g, pdir / g.id, self.pkg_ver, self.game, g.words('modules'))
+            self.use_profile_dir(pdir, first=True); self.g = game.load(g.id); self.ap = android_profile.AndroidProfile(self.g)
+        else: self.mem_profile()
+        self.naming()
+
+    def romfs(self, d):   # a version's RomFS: the folder nx_extract writes, or the image a Switch 2 game unpacks to
+        return d / 'RomFS.img' if (d / 'RomFS.img').is_file() else d / 'RomFS'
+
+    def naming(self):   # what the app is called, its version and its language
+        o = self.o
         self.app_name = o.app_name or nacp.name(self.base / 'control.nacp') or self.g.get('name', self.g.id)
         self.display = nacp.version(self.game / 'control.nacp') or nacp.version(self.base / 'control.nacp') or '1.0'
         lang_in = o.language or self.cfg.get('language')
@@ -379,6 +426,8 @@ class Port:
     def check_graphics(self):
         """What the Android host can run: NVN games whose shaders are all in their files. The other kinds need a step upstream runs on a Mac (booting the game in the Mac host)
         or a graphics layer the Android host does not have yet"""
+        self.oodle_why = ''
+        if self.s2: return   # a Switch 2 game has a profile, which upstream brought up on NVN2
         src = profile_guess.build_sources(self.game / 'ExeFS', self.game / 'RomFS', self.g.words('modules'))
         gfx = src['graphics'][0]
         if gfx != 'nvn': raise BuildError(f'{self.app_name} renders with {gfx} ({src["graphics"][1]}): the Android host replays NVN only so far')
@@ -497,7 +546,7 @@ class Port:
     def shaders(self):
         sv = self.versions
         pkg = self.work / 'shader' / 'pkg'
-        try: nsp.split_shaders(PY, NXNATIVE, [self.dirs[v] / 'RomFS' for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
+        try: nsp.split_shaders(PY, NXNATIVE, [self.romfs(self.dirs[v]) for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
                                oodle=self.device_oodle if self.oodle_why else None,   # Oodle-compressed archives: the game's own decoder on the device
                                aoc=self.aoc)   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
         finally: self.device_oodle_end()
@@ -536,6 +585,7 @@ class Port:
         """The shader translator (dm/gfx/tools/dmsh_xlate over dm/third_party/ryujinx) built from the repository's source with the player's .NET SDK, once for every game,
         in <user dir>/tools/dmsh_xlate: (dmsh_xlate.dll, the source's key). Not the iOS chain's prebuilt dm/gfx/tools/dmsh_xlate_bin, which only a Mac can rebuild
         (its lock fingerprints Apple's Metal compiler): Android takes a translator fix as soon as it is in the source"""
+        if pre := toolchain.prebuilt('dmsh_xlate/dmsh_xlate.dll'): return pre, nsp.fingerprint(('files', [pre]))   # on the device: built with the toolchain bundle
         src = DM / 'gfx/tools/dmsh_xlate'; ryu = DM / 'third_party/ryujinx'
         files = sorted([*src.glob('*.cs'), *src.glob('*.csproj'), *ryu.glob('*.props')] + [p for p in (ryu / 'src').rglob('*') if p.suffix in ('.cs', '.csproj', '.props')
                                                                                          and not {'bin', 'obj'} & set(p.relative_to(ryu).parts)])
@@ -598,7 +648,7 @@ class Port:
         PROG.stage('data pack', step='button-icon font')
         font_env, font_files = self.button_font()
         dst = self.o.out / f'{app_stem(self.g, self.app_name)}-data'
-        man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.game / 'RomFS', shaders=self.dmsv,
+        man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.romfs(self.game), shaders=self.dmsv,
                              aoc=self.aoc, language=self.lang, package=self.package, env=self.fps_env + font_env + (['DM_VK_MT_REPLAY=1'] if self.o.mt_replay else [])
                              + ([f'DM_VK_DRIVER={self.o.vulkan_driver.name}'] if self.o.vulkan_driver else []), settings=TOUCH_SETTINGS if self.o.touch else None,
                              files={**self.fps_files, **font_files},

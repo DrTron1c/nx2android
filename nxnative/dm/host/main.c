@@ -80,6 +80,8 @@ static void host_preload(int argc, char **argv) {
 #if defined(__APPLE__)
         CFBundleRef b = CFBundleGetMainBundle(); CFTypeRef c = b ? CFBundleGetValueForInfoDictionaryKey(b, CFSTR("DMCommit")) : NULL; char cs[64] = "not recorded";
         if (c && CFGetTypeID(c) == CFStringGetTypeID()) CFStringGetCString((CFStringRef)c, cs, sizeof cs, kCFStringEncodingUTF8);
+#else
+        const char *cs = "android";
 #endif
         LOG("build: commit %s, shader chain %s, profile %s", cs, DMSH_CHAIN, DM_GAME_ID);
     }
