@@ -38,5 +38,7 @@ dotnet "$W/bundle/prebuilt/dmsh_xlate/dmsh_xlate.dll" --source-sha 2>&1 | tee -a
 "$W/bundle/prebuilt/nx_extract/nx_extract" 2>&1 | head -2 | tee -a "$W/ci/ondevice-doctor.log" || true
 # pack
 pkg uninstall -y cmake ninja make || true
+# links that name Termux's path would point nowhere from the app's folder
+find "$PREFIX" -type l | while read -r l; do t=$(readlink "$l"); case "$t" in "$PREFIX"/*) ln -sfn "$(realpath -m --relative-to="$(dirname "$l")" "$t")" "$l";; esac; done
 cd "$PREFIX/.."
 tar --format=gnu -cf - --exclude='usr/share/doc' --exclude='usr/share/man' --exclude='usr/share/info' --exclude='usr/share/terminfo' --exclude='usr/include' --exclude='usr/var' --exclude='usr/tmp' --exclude='usr/lib/python3*/test' --exclude='usr/lib/python3*/__pycache__' --exclude='usr/lib/libclang.so*' --no-wildcards-match-slash --exclude='usr/lib/*.a' usr | gzip -6 > "$W/out/usr.tar.gz"

@@ -60,6 +60,12 @@ jobs:
           mkdir -p merged && cd merged && tar -xzf ../out/usr.tar.gz && tar -xzf ../out/rest.tar.gz && tar --format=gnu -czf ../toolchain.tar.gz . && cd ..
           ls -la toolchain.tar.gz | tee -a ci/termux.log
           rm -rf merged out
+      - name: Run the bundle from another folder, as the app does
+        if: steps.termux.outcome == 'success'
+        continue-on-error: true
+        run: |
+          chmod -R a+rwX ci toolchain.tar.gz
+          docker run --rm --security-opt seccomp=unconfined -v "$PWD:/workdir" termux/termux-docker:aarch64 bash /workdir/builder/toolchain/check_relocated.sh 2>&1 | tail -30 | tee ci/relocate-run.log
       - uses: actions/upload-artifact@v4
         if: steps.termux.outcome == 'success'
         with:
