@@ -14,7 +14,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent.parent / 'gfx/tools'
 sys.path.insert(0, str(TOOLS))
-import dmsh_facts, dmsh_chain   # noqa: E402  (DM_GAME picks the profile)
+import dmsh_ampere, dmsh_facts, dmsh_chain   # noqa: E402  (DM_GAME picks the profile)
 
 ap = argparse.ArgumentParser()
 ap.add_argument('pkg'); ap.add_argument('out')
@@ -102,16 +102,22 @@ def xfb_layout(key, ctl):
     return out
 
 def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback is captured natively (xfb_layout)
-    ci = rec.find(bytes.fromhex('34127698')); code = rec[0x38:ci]
-    c1o, c1t = struct.unpack_from('<2I', rec, ci + 0x700)
-    c1 = rec[0x38 + c1o:0x38 + c1t]
-    ab = vertex_ab(key, code, rec[ci:]) if stage == 'vs' else None
-    if ab: code, c1 = ab
-    if stage != 'cs': code = code[0x30:]
-    elif code[:4] == bytes.fromhex('79563412'): code = code[0x100:]
+    ci = rec.find(bytes.fromhex('34127698')); code = rec[0x38:ci]; extra = {}
+    xfb = None
+    if dmsh_ampere.is_nvn2(rec[ci:]):   # NVN2 (Switch 2): Ampere code for the translator's Ampere frontend, as dmsh_build.py job_for
+        c1 = dmsh_ampere.c1_segment(rec[ci:], code); code = code[:dmsh_ampere.inst_len(rec[ci:])]; extra['arch'] = 'sm86'
+        if stage == 'cs': extra['nvn2_cs'] = [rec[ci + 0xb1], rec[ci + 0xb2], rec[ci + 0xb3], struct.unpack_from('<H', rec, ci + 0xba)[0], rec[ci + 0xa9] * 4]
+    else:
+        c1o, c1t = struct.unpack_from('<2I', rec, ci + 0x700)
+        c1 = rec[0x38 + c1o:0x38 + c1t]
+        ab = vertex_ab(key, code, rec[ci:]) if stage == 'vs' else None
+        if ab: code, c1 = ab
+        if stage != 'cs': code = code[0x30:]
+        elif code[:4] == bytes.fromhex('79563412'): code = code[0x100:]
+        xfb = xfb_layout(key, rec[ci:]) if stage == 'vs' else None
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
-    xfb = xfb_layout(key, rec[ci:]) if stage == 'vs' else None
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'subgroup': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {})}
+    j.update(extra)
     if key in FACTS: j.update(FACTS[key])
     else: j['no_facts'] = True
     return j, c1

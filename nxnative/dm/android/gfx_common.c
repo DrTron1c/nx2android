@@ -42,3 +42,32 @@ void dm_gfx_shot_at(long k, const char *path) { (void)k; (void)path; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_texlist(int target) { (void)target; }
 void dm_gfx_texraw(uint64_t serial, const char *path) { (void)serial; (void)path; }
+
+// ---------------- what the Metal backend added for Switch 2 games and its display link: nothing to do on Vulkan, or nothing to report ----------------
+void mtl_ab_gpu(uint64_t f, double gpu_ms, double frame_ms) { (void)f; (void)gpu_ms; (void)frame_ms; }
+unsigned mtl_cpu_tex_count(void) { return 0; }
+void mtl_cshoist_stats(uint64_t *a, uint64_t *b, uint64_t *c) { *a = *b = *c = 0; }
+void mtl_fb_stats(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d) { *a = *b = *c = *d = 0; }
+void mtl_geohoist_stats(uint64_t *a, uint64_t *b, uint64_t *c) { *a = *b = *c = 0; }
+void mtl_geomesh_stats(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d, uint64_t *e) { *a = *b = *c = *d = *e = 0; }
+void mtl_hybrid_stats(uint64_t *a, uint64_t *b, uint64_t *c) { *a = *b = *c = 0; }
+void mtl_sm_stats(uint64_t *a, uint64_t *b, uint64_t *c) { *a = *b = *c = 0; }
+int mtl_link_rate(void) { return 60; }
+int mtl_link_stalled(void) { return 0; }
+int mtl_link_tick(uint64_t n, double *target, double *lead_ms, int *ticks, double *gap_ms) { (void)n; (void)target; (void)lead_ms; (void)ticks; (void)gap_ms; return 0; }
+int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) { (void)ticks; (void)timeout_ns; return 0; }
+uint64_t mtl_pkg_edge_skips(void) { return 0; }
+void mtl_prepare(void) {}
+void mtl_present_flush(void) {}
+void mtl_present_test_stall(uint64_t ns) { (void)ns; }
+int mtl_probe_ramp_on(void) { return 0; }
+void mtl_prog_forget(const prog_t *p) { (void)p; }
+void mtl_prog_prefetch(const prog_t *p) { (void)p; }
+void mtl_pso_line(char *o, size_t n) { if (n) o[0] = 0; }
+int mtl_pso_prebuild_tool(void) { return 0; }
+void mtl_queue_activate(uint64_t serial) { (void)serial; }
+void mtl_queue_forget(uint64_t serial) { (void)serial; }
+void mtl_set_queue_origin_lower_left(int on) { (void)on; }
+uint64_t mtl_snap_acquire_wait(void) { return 0; }
+int mtl_snap_on(void) { return 0; }
+int mtl_warm_wait(int timeout_ms) { (void)timeout_ms; return 1; }

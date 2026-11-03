@@ -1,0 +1,53 @@
+# Compiles everything a port needs (no game files here) and pushes the logs to the ci-logs branch, so a build can be read without opening the Actions page.
+name: android-check
+on:
+  push:
+    branches: [switch2-android]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: android-check
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Android NDK r27c
+        run: |
+          curl -fsSL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q ndk.zip && rm ndk.zip
+          echo "NDK=$PWD/android-ndk-r27c" >> "$GITHUB_ENV"
+      - name: Python modules
+        run: pip install lz4 capstone pillow fonttools pyyaml backports.zstd pycryptodome
+      - name: Host for Pokopia (Switch 2) and a Switch 1 game
+        continue-on-error: true
+        run: |
+          mkdir -p ci
+          python nxnative/dm/android/build.py --game 0400A3A01EE4C000 --ndk "$NDK" --out out/s2 --release --lib --keep-going 2>&1 | tee ci/host-switch2.log
+          python nxnative/dm/android/build.py --game 0100F43008C44000 --ndk "$NDK" --out out/s1 --release --lib --only-compile --keep-going 2>&1 | tail -200 > ci/host-switch1.log
+      - name: .NET tools
+        continue-on-error: true
+        run: |
+          dotnet build nxnative/dm/tools/nx_extract -c Release -o out/nx_extract -v q -nologo 2>&1 | tail -60 | tee ci/nx_extract.log
+          dotnet build nxnative/dm/gfx/tools/dmsh_xlate -c Release -o out/xlate -v q -nologo 2>&1 | tail -60 | tee ci/xlate.log
+      - name: Unit tests
+        continue-on-error: true
+        run: python -m unittest discover tests 2>&1 | tail -60 | tee ci/tests.log
+      - name: Publish the logs
+        if: always()
+        run: |
+          mkdir -p ci; ls -la out/s2 2>/dev/null > ci/outputs.txt || true
+          cd ci
+          git init -q -b ci-logs .
+          git config user.name ci; git config user.email ci@users.noreply.github.com
+          git add -A; git commit -qm "logs of ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}" ci-logs

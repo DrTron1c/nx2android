@@ -20,6 +20,8 @@ int prog_key(const prog_t *p, unsigned st, uint8_t key[8]);
 static struct {
     const prog_t *prog; vkshader_t *sh[6]; int prog_ok;
     p_bind_buf ubo[6][16], ssbo[6][16];
+    uint8_t push[2][0x100];   // NVN2 push constants (c[24]): the graphics block, the compute block
+    float alpha_ref;
     uint64_t tex[6][256], samp[6][128], img[6][32], tex_sseq[6][256], samp_sseq[6][128];   // *_sseq: the sampler registrations made before the bind (gfx_vk_tex.c vk_samp_at)
     blend_st blend[8]; color_st color; chmask_st chmask; ms_st ms; poly_st poly; ds_st ds;
     uint32_t vattr[16]; vs_st vstream[16]; NVNbufferRange vbuf[16];
@@ -997,11 +999,13 @@ static uint32_t g_dispatch[3], g_draw_binst;
 #define SB_ALIGN 256   // storage buffers are bound from this boundary below their address (dm/android/tools/shader_vk.py SB_ALIGN, which the shaders were translated for)
 static void drv_segment(int st, int bank, uint8_t *d) {
     memset(d, 0, 0x1000);
+    if (bank == 24) { memcpy(d, S.push[st == 5 ? 1 : 0], sizeof S.push[0]); return; }   // NVN2 push constants (dmsh_abi.h DMSH_PUSH_BANK)
     if (bank == 0) {
         int base = st == 0 ? 0x110 : st == 5 ? 0x310 : st == 1 ? 0x510 : -1;
         if (base >= 0) for (int r = 0; r < 16; r++) { uint64_t a = S.ssbo[st][r].addr; uint32_t n = (uint32_t)S.ssbo[st][r].size; memcpy(d + base + 16 * r, &a, 8); memcpy(d + base + 16 * r + 8, &n, 4); }
         if (st != 5) { const float mp = 2047.0f; memcpy(d + 0x610, &mp, 4); memcpy(d + 0x644, &g_draw_binst, 4); }
-        else { memcpy(d + 0x200, g_dispatch, 12); for (int r = 0; r < 16; r++) { uint64_t a = S.ubo[5][r].addr; uint32_t n = (uint32_t)S.ubo[5][r].size; memcpy(d + 0x210 + 16 * r, &a, 8); memcpy(d + 0x210 + 16 * r + 8, &n, 4); } }
+        else { memcpy(d + 0x200, g_dispatch, 12); if (dm_sdk_ounce()) memcpy(d + 4, g_dispatch, 12);   // NVN2 compute keeps the counts at c0 + 4 (DMSH_C0_DISPATCH_NVN2)
+               for (int r = 0; r < 16; r++) { uint64_t a = S.ubo[5][r].addr; uint32_t n = (uint32_t)S.ubo[5][r].size; memcpy(d + 0x210 + 16 * r, &a, 8); memcpy(d + 0x210 + 16 * r + 8, &n, 4); } }
     } else for (int off = 0x20; off < 0x968; off += 8) { uint64_t h = c2_handle(st, off); memcpy(d + off, &h, 8); }
 }
 // vk_samp_by_id without the registry lock while no sampler ID was registered with other parameters (g_samp_gen): a 32-slot texture array took the lock
@@ -1553,6 +1557,10 @@ static void tf_state(const p_tf_state *t) {
         int i = tf_ctl_slot(t->ctl, 1); g_tf_ctl[i].ctl = t->ctl; g_tf_ctl[i].verts = g_tf_verts;
     }
 }
+// Multi-draws with a count: the count is read when the draw is replayed, so a count the GPU writes in this same submission shows a frame late. Vulkan's indirect-count
+// draws take one range, and these arrive as one record per possible draw (hle_nvn.c MDI_INLINE); a record past the count draws nothing
+int nvn_host_readable(uint64_t a, uint64_t n);
+static int mdi_within(uint64_t cnt, int i) { uint32_t n = 0; if (!nvn_host_readable(cnt, 4)) return 0; memcpy(&n, (const void *)(uintptr_t)cnt, 4); return (uint32_t)i < n; }
 static void draw(const p_draw *d);
 static void draw_tf(const p_draw_tf *t) {
     int i = tf_ctl_slot(t->ctl, 0);
@@ -1625,7 +1633,7 @@ static void vbuf_bound(VkCommandBuffer cb, uint32_t first, uint32_t nvert, uint3
     }
 }
 static void draw(const p_draw *d) {
-    if (d->mdi_cnt) VKRED_ONCE(52, "multi-draw indirect with a count: drawn once");
+    if (d->mdi_cnt && !mdi_within(d->mdi_cnt, d->mdi_i)) return;
     int prim = d->prim;
     // before prepare_draw, whose driver segment carries it (c0 + 0x644): set after it, each draw's segment had the draw before's. An indirect draw's is in GPU memory: 0
     g_draw_binst = d->ind ? 0 : (uint32_t)d->base_instance;
@@ -1659,7 +1667,7 @@ static void draw(const p_draw *d) {
     if (!(dbg_draw() & 1) && g_ok) { int xf = xfb_begin(cb); vkCmdDraw(cb, (uint32_t)d->count, inst, (uint32_t)d->first, (uint32_t)d->base_instance); if (xf) xfb_end(cb, prim, (uint32_t)d->count, inst); }
 }
 static void draw_idx(const p_draw_idx *d) {
-    if (d->mdi_cnt) VKRED_ONCE(55, "multi-draw indirect (indexed) with a count: drawn once");
+    if (d->mdi_cnt && !mdi_within(d->mdi_cnt, d->mdi_i)) return;
     int prim = d->prim;
     g_draw_binst = d->ind ? 0 : (uint32_t)d->base_instance;   // before prepare_draw (see draw)
     if (!prepare_draw(prim == 7 ? 4 : prim, 1)) return;
@@ -2039,8 +2047,8 @@ static void exec_ops(const uint8_t *p) {
             break; }
         case OP_BIND_VATTR: { const p_bind_vattr *v = (const p_bind_vattr *)a; memset(S.vattr, 0, sizeof S.vattr); for (int i = 0; i < v->n && i < 16; i++) S.vattr[v->first + i] = v->st[i]; break; }
         case OP_BIND_VSTREAM: { const p_bind_vstream *v = (const p_bind_vstream *)a; for (int i = 0; i < v->n && v->first + i < 16; i++) S.vstream[v->first + i] = v->st[i]; break; }
-        case OP_BIND_VBUF: { const p_bind_vbuf *v = (const p_bind_vbuf *)a; for (int i = 0; i < v->n && v->first + i < 16; i++) S.vbuf[v->first + i] = v->r[i]; break; }
-        case OP_BIND_UBO: { const p_bind_buf *b = (const p_bind_buf *)a; if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_ubo_gen[b->stage]++; } break; }
+        case OP_BIND_VBUF: case OP_BIND_VBUF1: { p_bind_vbuf vt; const p_bind_vbuf *v = vbuf_rec(h.op, a, &vt); for (int i = 0; i < v->n && v->first + i < 16; i++) S.vbuf[v->first + i] = v->r[i]; break; }
+        case OP_BIND_UBO: case OP_BIND_UBO_SMALL: { p_bind_buf bt; const p_bind_buf *b = bind_buf_rec(h.op, a, &bt); if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_ubo_gen[b->stage]++; } break; }
         case OP_BIND_SSBO: { const p_bind_buf *b = (const p_bind_buf *)a; if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 16 && memcmp(&S.ssbo[b->stage][b->index], b, sizeof *b)) { S.ssbo[b->stage][b->index] = *b; g_bind_gen[b->stage]++; } break; }
         case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_BIND_TEX1: bind_handles_rec(h.op, a); break;
         case OP_STENCIL: { const p_stencil *s = (const p_stencil *)a;
@@ -2065,6 +2073,26 @@ static void exec_ops(const uint8_t *p) {
         case OP_CLEAR_TEX: clear_tex((const p_clear_tex *)a); break;
         case OP_RENDER_COND: render_cond((const p_render_cond *)a); break;   // recorded only with the profile key render_cond (hle_nvn.c)
         case OP_DRAW_TF: if (!g_rc_skip) draw_tf((const p_draw_tf *)a); break;
+        case OP_MULTI_DRAW: { if (g_rc_skip) break; const p_multi_draw *m = (const p_multi_draw *)a;
+            for (int i = 0; i < m->max && (!m->cnt || mdi_within(m->cnt, i)); i++) {
+                uint64_t ind = m->ind + (uint64_t)i * (uint64_t)m->stride;
+                if (m->itype < 0) { p_draw d = {.prim = m->prim, .instances = 1, .ind = ind}; draw(&d); }
+                else { p_draw_idx d = {.prim = m->prim, .itype = m->itype, .instances = 1, .ibuf = m->ibuf, .ind = ind}; draw_idx(&d); }
+            }
+            break; }
+        case OP_ALPHA_REF: S.alpha_ref = ((const p_alpha_ref *)a)->ref; break;
+        case OP_PUSH_CONST: { const p_push_const *b = (const p_push_const *)a; int k = b->compute ? 1 : 0;
+            if ((size_t)b->offset + b->size <= sizeof S.push[k]) memcpy(S.push[k] + b->offset, b->data, b->size); else VKRED_ONCE(90, "push constants past the block: %u + %u", b->offset, b->size);
+            for (int i = 0; i < 6; i++) if ((i == 5) == (k == 1)) g_bind_gen[i]++;   // the stage's set memo: its driver segment changed
+            break; }
+        case OP_DRAW_TEX: VKRED_ONCE(91, "nvnCommandBufferDrawTexture is not implemented on Vulkan: nothing drawn"); break;
+        // DLSS has no Vulkan counterpart here: the input picture scaled to the output with a linear filter, so the frame still reaches the screen, unsharpened
+        case OP_DLSS: { const p_dlss *l = (const p_dlss *)a; const tex_t *in = l->tex[DLSS_COLOR], *out = l->tex[DLSS_OUTPUT];
+            VKRED_ONCE(92, "DLSS is scaled with a linear filter on Vulkan (%dx%d -> %dx%d)", l->iw, l->ih, l->ow, l->oh);
+            if (in && out) { p_copy_t2t c; memset(&c, 0, sizeof c); c.src = in; c.dst = out; c.flags = NVN_COPY_FLAGS_LINEAR_FILTER_BIT;
+                c.sr = (NVNcopyRegion){.xoffset = l->base[DLSS_COLOR][0], .yoffset = l->base[DLSS_COLOR][1], .width = l->iw, .height = l->ih, .depth = 1};
+                c.dr = (NVNcopyRegion){.xoffset = l->base[DLSS_OUTPUT][0], .yoffset = l->base[DLSS_OUTPUT][1], .width = l->ow, .height = l->oh, .depth = 1}; copy_t2t(&c); }
+            break; }
         case OP_TF_BIND: { const p_tf_bind *b = (const p_tf_bind *)a; if (b->index >= 0 && b->index < 4) g_tf[b->index] = *b; break; }
         case OP_TF_STATE: if (!V.has_xfb) VKRED_ONCE(80, "transform feedback: the device has none, its draws write nothing"); tf_state((const p_tf_state *)a); break;
         case OP_VP_SWIZZLE: { const p_vp_swizzle *b = (const p_vp_swizzle *)a; memcpy(S.vp_sw[b->first], b->sw, 4 * (size_t)b->n); break; }
