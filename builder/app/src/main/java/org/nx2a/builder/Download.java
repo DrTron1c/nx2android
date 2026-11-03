@@ -16,14 +16,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.zip.GZIPInputStream;
 
 /** Downloads a release file (resuming a cut-off download) and unpacks a .tar.gz with its links and modes. */
-final class Bundle {
+final class Download {
     static final String BASE = "https://github.com/DrTron1c/nx2android/releases/download/builder-tools/";
 
     interface Progress { void at(String what, long done, long total); }
 
     static String text(String name) throws IOException {
         HttpURLConnection c = open(BASE + name, 0);
-        try (InputStream in = c.getInputStream()) { return new String(in.readAllBytes(), StandardCharsets.UTF_8).trim(); } finally { c.disconnect(); }
+        try (InputStream in = c.getInputStream(); java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream()) {
+            byte[] b = new byte[4096]; for (int n; (n = in.read(b)) > 0; ) o.write(b, 0, n);
+            return new String(o.toByteArray(), StandardCharsets.UTF_8).trim();
+        } finally { c.disconnect(); }
     }
 
     private static HttpURLConnection open(String url, long from) throws IOException {

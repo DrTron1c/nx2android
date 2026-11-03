@@ -165,20 +165,20 @@ public final class MainActivity extends Activity implements PortService.Listener
         setBusy(true); stepText.setText("Checking the tools");
         bg(() -> {
             try {
-                Bundle.Progress p = (what, done, total) -> post(() -> onStep(what, done, total));
-                String want = Bundle.text("versions.txt");
+                Download.Progress p = (what, done, total) -> post(() -> onStep(what, done, total));
+                String want = Download.text("versions.txt");
                 File dl = new File(env.tmp, "dl"); dl.mkdirs();
                 String have = prefs.getString("versions", "");
                 String[] w = want.split("\\s+"), h = have.isEmpty() ? new String[]{"", ""} : have.split("\\s+");
                 if (!env.ready() || !w[0].equals(h[0])) {
-                    File t = Bundle.download("toolchain.tar.gz", dl, p);
+                    File t = Download.download("toolchain.tar.gz", dl, p);
                     for (File old : new File[]{env.usr, env.ndk, env.prebuilt}) delete(old);
-                    Bundle.unpack(t, env.root, p); t.delete();
+                    Download.unpack(t, env.root, p); t.delete();
                 }
                 if (!new File(env.engine, "porter/cli.py").exists() || w.length < 2 || !w[1].equals(h.length > 1 ? h[1] : "")) {
-                    File e = Bundle.download("engine.tar.gz", dl, p);
+                    File e = Download.download("engine.tar.gz", dl, p);
                     delete(env.engine);
-                    Bundle.unpack(e, env.root, p); e.delete();
+                    Download.unpack(e, env.root, p); e.delete();
                 }
                 prefs.edit().putString("versions", want).apply();
                 String doctor = env.run(env.porter("doctor"), 120);
@@ -193,7 +193,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (k != null && !isLink(f)) for (File x : k) delete(x);
         f.delete();
     }
-    private static boolean isLink(File f) { try { return !f.getCanonicalFile().equals(f.getAbsoluteFile()); } catch (Exception e) { return true; } }
+    private static boolean isLink(File f) { return java.nio.file.Files.isSymbolicLink(f.toPath()); }
 
     // ---- 2 and 3. game and keys ----
     private void pick(File start, boolean folder) {
