@@ -20,10 +20,9 @@ echo '--- adb'; $F/usr/bin/adb version | head -1
 echo '--- apk'; $F/usr/bin/python3 -c 'print("python ok")'
 echo ALL-RAN
 C
-# In this image /system/bin/sh is a link into Termux's prefix, which a real device's is not: only that one file stays where it was
+# In this image /system is inside Termux's prefix (usr/opt/aosp), which a real device's is not: that folder stays, and all the rest of the prefix goes, in one mv
 O=/data/data/com.termux/files/usr; G=$O.gone
-S=$(readlink -f /system/bin/sh); D=$(dirname "$S"); echo "sh is $S"
-mv "$O" "$G"
-export LD_LIBRARY_PATH=$G/lib
-case "$S" in "$O"/*) "$G/bin/mkdir" -p "$D"; "$G/bin/cp" -L "$G${S#"$O"}" "$S";; esac
+mkdir -p "$G"; cd "$O"
+mv $(ls -A | grep -v '^opt$') "$G/"
+cd /
 LD_LIBRARY_PATH=$F/usr/lib /system/bin/sh "$F/check.sh" > "$W/ci/relocated.log" 2>&1
