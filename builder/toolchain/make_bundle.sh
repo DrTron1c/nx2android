@@ -4,7 +4,11 @@
 set -euxo pipefail
 W=/workdir
 export PREFIX=/data/data/com.termux/files/usr
-yes | pkg update -y || true
+# Termux's own server, not a random mirror: a mirror caught mid-sync fails the whole build
+export TERMUX_PKG_NO_MIRROR_SELECT=1
+echo 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
+rm -f "$PREFIX/etc/termux/chosen_mirrors"
+for try in 1 2 3; do apt-get update && break; sleep 20; done
 yes | pkg upgrade -y || true
 pkg install -y python clang lld llvm shaderc android-tools dotnet-runtime-10.0 python-pillow python-pip zstd openssl ca-certificates cmake make ninja
 pip install --no-input lz4 capstone pyyaml fonttools pycryptodome "backports.zstd; python_version < '3.14'"
