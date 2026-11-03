@@ -806,6 +806,13 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
         {
             functionId = 0;
 
+            // nx2android: the Vulkan backend has no guest-to-GPU address table yet, and a raw guest address would fault the GPU
+            if (!gpuAccessor.QueryHostSupportsRawGlobalMemory())
+            {
+                gpuAccessor.Log($"Global memory operation \"{operation.Inst}\" traced to no storage buffer: left out on this host.");
+                return false;
+            }
+
             bool isSmall = IsSmallInt(operation.StorageKind);
 
             if (isSmall && operation.Inst.IsAtomic())

@@ -277,6 +277,14 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
+        /// Whether a global memory access traced to no storage buffer can go through a guest-to-GPU address table.
+        /// </summary>
+        bool QueryHostSupportsRawGlobalMemory()
+        {
+            return true;
+        }
+
+        /// <summary>
         /// Queries host GPU geometry shader passthrough support.
         /// </summary>
         /// <returns>True if the GPU and driver supports geometry shader passthrough, false otherwise</returns>

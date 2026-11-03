@@ -33,6 +33,14 @@ The tag (`v0.1.3`) is the latest nx2android version the game was tested on. Olde
 
 A game that is not in this table is not supported yet. The games we look at next, and the ones done: [docs/PORT_CHECKLIST.md](docs/PORT_CHECKLIST.md).
 
+## On an Android device, with no PC
+
+This fork adds **nx2android Builder**, an app that ports a game on the device itself. Install `nx2android-builder.apk` from the [`builder-tools` release](https://github.com/DrTron1c/nx2android/releases/tag/builder-tools), download the tools inside the app (about 1 GB), pick the game folder and tap **Port**. How it differs from a PC port: [builder/README.md](builder/README.md).
+
+## Switch 2 games (experimental)
+
+This fork merges the Switch 2 engine from [nxnative](https://github.com/seedds/nxnative). Pokémon Pokopia, Donkey Kong Bananza, Splatoon Raiders, Fire Emblem Fortune's Weave and Hyrule Warriors: Age of Imprisonment have profiles. Port them from your own `.nup` file or dump folder; they need no `prod.keys`. **None of them has been played on Android yet.** Known gaps on Vulkan: DLSS is a plain scale-up, AV1 movies show no picture, `nvnCommandBufferDrawTexture` draws nothing, and memory reached only through pointers stored in memory is left out (Donkey Kong Bananza's terrain needs it).
+
 ## For players: port a game without programming
 
 1. Download `nx2android-<version>-windows-x64.zip` (Windows) or `nx2android-<version>-macos-arm64.zip` (Mac with Apple silicon) from [Releases](https://github.com/shirai91/nx2android/releases/latest), unzip it and start **nx2android** (on a Mac, see [packaging/INSTALL.md](packaging/INSTALL.md#1-start-the-app) first).

@@ -117,7 +117,7 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
         xfb = xfb_layout(key, rec[ci:]) if stage == 'vs' else None
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'subgroup': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {})}
-    j.update(extra)
+    j.update(extra); j['no_raw_gmem'] = True   # no guest-to-GPU address table on Vulkan yet: such an access is left out, as before the Switch 2 merge
     if key in FACTS: j.update(FACTS[key])
     else: j['no_facts'] = True
     return j, c1
