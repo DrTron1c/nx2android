@@ -35,7 +35,7 @@ A game that is not in this table is not supported yet. The games we look at next
 
 ## On an Android device, with no PC
 
-This fork adds **nx2android Builder**, an app that ports a game on the device itself. Install `nx2android-builder.apk` from the [`builder-tools` release](https://github.com/DrTron1c/nx2android/releases/tag/builder-tools), download the tools inside the app (about 1 GB), pick the game folder and tap **Port**. How it differs from a PC port: [builder/README.md](builder/README.md).
+This fork adds **nx2android Builder**, an app that ports a game on the device itself. Install `nx2android-builder.apk` from the [`builder-tools` release](https://github.com/DrTron1c/nx2android/releases/tag/builder-tools), download the tools inside the app (about 300 MB), pick the game folder and tap **Port**. How it differs from a PC port: [builder/README.md](builder/README.md).
 
 ## Switch 2 games (experimental)
 

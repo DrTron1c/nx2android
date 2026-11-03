@@ -146,7 +146,7 @@ public final class MainActivity extends Activity implements PortService.Listener
 
     private void refresh() {
         boolean ready = env.ready();
-        toolsState.setText(ready ? "Installed." : "About 1 GB to download and 3 GB unpacked, from this project's GitHub releases.");
+        toolsState.setText(ready ? "Installed." : "About 300 MB to download and about 1 GB unpacked, from this project's GitHub releases.");
         toolsState.setTextColor(ready ? GOOD : DIM);
         toolsButton.setText(ready ? "Check for updates" : "Download tools");
         String f = prefs.getString("folder", null), k = prefs.getString("keys", null);
