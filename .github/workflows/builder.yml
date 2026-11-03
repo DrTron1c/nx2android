@@ -32,7 +32,9 @@ jobs:
         run: |
           curl -fsSL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
           mkdir -p bundle/ndk/rt
-          unzip -q ndk.zip 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/*' 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/*aarch64*' 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/aarch64/*'
+          which unzip || sudo apt-get install -y unzip
+          unzip -q ndk.zip 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/*' 'android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*' || [ $? -le 11 ]
+          test -d android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
           mv android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot bundle/ndk/sysroot
           find android-ndk-r27c -name '*aarch64*android.a' -o -name 'libunwind.a' -path '*aarch64*' | xargs -I{} cp {} bundle/ndk/rt/
           rm -rf android-ndk-r27c ndk.zip
@@ -69,7 +71,7 @@ jobs:
         if: always()
         run: |
           sudo chown -R "$USER" ci 2>/dev/null || true
-          mkdir -p ci; cd ci; rm -rf .git
+          mkdir -p ci; echo "$GITHUB_SHA ${{ steps.termux.outcome }}" > ci/status.txt; cd ci; rm -rf .git
           git init -q -b ci-toolchain .
           git config user.name ci; git config user.email ci@users.noreply.github.com
           git add -A; git commit -qm "toolchain logs of ${GITHUB_SHA}"
