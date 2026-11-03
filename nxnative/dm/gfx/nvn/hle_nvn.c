@@ -1331,7 +1331,6 @@ void dm_gfx_suspend(int on) {
 // One submission at a time: the Metal replay keeps one command buffer and one upload batch for the submission in progress (nvn_mtl.m g_cb). Fire Emblem: Three Houses initializes two queues and
 // submits on both from two threads; the second submission arrived while the first was replaying and the host stopped with "submit re-entered" at the ninth frame. NVN orders work on different queues only
 // through syncs, so replaying the two queues' submissions in lock order is one valid order
-static pthread_mutex_t g_sub_mu = PTHREAD_MUTEX_INITIALIZER;
 // Asynchronous replay (DM_NVN_ASYNC=1, off by default): QueueSubmitCommands and QueuePresentTexture hand their work to a replay thread and return, so the game's render
 // thread goes on (records the next frame) while the last one is replayed. NVN allows it: the GPU too runs a submission after the call returns, and the game keeps command memory,
 // buffers and pools alive until a sync it fenced after them signals. A game that waits for each frame's GPU work before it submits the next gains nothing (Xenoblade Chronicles 3:

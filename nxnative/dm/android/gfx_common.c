@@ -6,7 +6,7 @@
 #include <string.h>
 
 // ---------------- statistics and diagnostics: nothing to report ----------------
-void mtl_vbuf_stats(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d) { *a = *b = *c = *d = 0; }
+void mtl_vbuf_stats(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d, uint64_t *e, uint64_t *f) { *a = *b = *c = *d = *e = *f = 0; }
 void mtl_res_counts(uint32_t tick, const char *why) { (void)tick; (void)why; }
 void mtl_res_snapshot(mtl_res_count *out) { memset(out, 0, sizeof *out); }
 void mtl_alloc_stats(uint64_t *w, uint64_t *g, int *n) { *w = *g = 0; *n = 0; }
@@ -71,3 +71,6 @@ void mtl_set_queue_origin_lower_left(int on) { (void)on; }
 uint64_t mtl_snap_acquire_wait(void) { return 0; }
 int mtl_snap_on(void) { return 0; }
 int mtl_warm_wait(int timeout_ms) { (void)timeout_ms; return 1; }
+#include "nvn_capture.h"   // the capture tool is Mac only
+void nvn_cap_submit(int n, const uint64_t *handles) { (void)n; (void)handles; }
+void nvn_cap_present(const tex_t *t, const int crop[4]) { (void)t; (void)crop; }

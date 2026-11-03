@@ -51,8 +51,8 @@ for sh in sorted((DM / 'android/shaders').glob('*.*')):
     hdr.write_text(f'// generated from dm/android/shaders/{sh.name} by build.py (glslc)\nstatic const uint32_t {sh.stem}_{sh.suffix[1:]}_spv[] = {{{body}}};\n')
 
 def srcs(*globs): return [p for g in globs for p in sorted(DM.glob(g))]
-HOST = [p for p in srcs('host/*.c') if p.name not in ('hle_movie_avc.c',)]   # VideoToolbox: dm/android/movie_avc.c instead
-GFX = srcs('gfx/*.c', 'gfx/nvn/*.c', 'gfx/tex/*.c')
+HOST = [p for p in srcs('host/*.c') if p.name not in ('hle_movie_avc.c', 'hle_movie_av1.c', 'hle_cheats.c')]   # VideoToolbox: dm/android/movie_avc.c instead; AV1 and Mach VM cheats: android/host_stubs.c
+GFX = [p for p in srcs('gfx/*.c', 'gfx/nvn/*.c', 'gfx/tex/*.c') if p.name != 'nvn_capture.c']   # the Mac's capture tool (libcompression)
 PORT = [p for p in srcs('android/compat/*.c', 'android/*.c') if not (p.name == 'gfx_null.c' and a.gfx != 'null') and not (p.name.startswith('gfx_vk') and a.gfx != 'vk')]   # one graphics backend
 ASM = srcs('host/entry.S', 'gfx/nvn/nvn_entry.S', 'gfx/nvn/nvn_thunks.S')
 VPX = srcs('third_party/libvpx/**/*.c')

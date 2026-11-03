@@ -35,3 +35,10 @@ static inline int pthread_cond_timedwait_relative_np(pthread_cond_t *c, pthread_
     return pthread_cond_timedwait(c, m, &t);
 }
 #define MACH_PORT_NULL 0
+
+// What the Switch 2 merge's host code takes from Darwin
+#include <stddef.h>
+#include <unistd.h>
+#define st_mtimespec st_mtim
+#define vm_page_size ((size_t)getpagesize())
+int mergesort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));   // android/compat/mergesort.c
