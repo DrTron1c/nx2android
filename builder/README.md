@@ -13,6 +13,7 @@ What differs from a port on a PC:
 | Google's NDK | Termux's clang with the NDK's sysroot, wrapped to look like an NDK folder (`NX2A_NDK_HOST=linux-aarch64`) |
 | .NET SDK builds `nx_extract` and the shader translator | Both built once in CI, run with the .NET runtime (`NX2A_PREBUILT`) |
 | Build folder beside the game | In the app's storage (`--work`): shared storage cannot run programs or hold hard links |
+| Python's multiprocessing locks | Pipes (`toolchain/sitecustomize.py`): an Android app cannot create named semaphores |
 | adb over USB | adb to this device over Wireless debugging: only the shell user can write to another app's `Android/data` folder |
 
 Everything a run writes to the log is also in `nx2android/last-port.log` in shared storage.

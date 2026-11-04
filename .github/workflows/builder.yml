@@ -119,7 +119,7 @@ jobs:
       - name: The engine
         run: |
           mkdir -p eng/nx2android/nxnative
-          cp -r porter eng/nx2android/; cp requirements.txt eng/nx2android/
+          cp -r porter eng/nx2android/; cp requirements.txt builder/toolchain/sitecustomize.py eng/nx2android/
           cp -r nxnative/dm nxnative/scripts eng/nx2android/nxnative/
           rm -rf eng/nx2android/nxnative/dm/{ios,mac,sanitizers,third_party/ryujinx,third_party/dav1d,gfx/tests,host/tests,tools/tests,tools/fuzz,gfx/tools/dmsh_xlate_bin}
           find eng -name '__pycache__' -prune -exec rm -rf {} +
