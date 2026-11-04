@@ -11,7 +11,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-typedef struct __attribute__((packed)) { uint64_t key; uint32_t stage, spv_off, spv_len, refl_off, refl_len, pad; } bent;
+typedef struct __attribute__((packed)) { uint64_t key; uint32_t stage, spv_off, spv_len, refl_off, refl_len; uint16_t spv_high, refl_high; } bent;   // high: bits 32.. of the offsets (Pokémon Pokopia's bundle passes 4 GB)
+_Static_assert(sizeof(bent) == 32, "shader_vk.py writes 32-byte entries");
+static uint64_t bent_at(uint16_t high, uint32_t low) { return (uint64_t)high << 32 | low; }
 static const uint8_t *g_bundle; static uint32_t g_nent; static const bent *g_ent;
 void vk_shaders_open(const char *path) {
     int fd = open(path, O_RDONLY | O_CLOEXEC); struct stat st;
@@ -211,11 +213,11 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
               static int n; if (n++ < 16) VKLOG("[RED] shader %016llx (stage %d) is not in the bundle", (unsigned long long)key, stage); return NULL; }
     s = calloc(1, sizeof *s); s->key = key; s->stage = stage; s->set = set_of(stage);
     // reflection
-    const uint8_t *r = g_bundle + e->refl_off; uint32_t hdr[5]; memcpy(hdr, r, 20);
+    const uint8_t *r = g_bundle + bent_at(e->refl_high, e->refl_off); uint32_t hdr[5]; memcpy(hdr, r, 20);
     s->nbind = (int)hdr[0]; s->c1_len = hdr[1]; memcpy(s->local, hdr + 2, 12);
     s->b = (const dmsv_bind *)(r + 20); s->c1 = r + 20 + 20 * s->nbind;
     // SPIR-V with the stage's set
-    uint32_t nw = e->spv_len / 4; uint32_t *w = malloc(e->spv_len); memcpy(w, g_bundle + e->spv_off, e->spv_len);
+    uint32_t nw = e->spv_len / 4; uint32_t *w = malloc(e->spv_len); memcpy(w, g_bundle + bent_at(e->spv_high, e->spv_off), e->spv_len);
     int f64_used = 0; uint32_t xb = 4;
     for (uint32_t i = 5; i < nw;) { uint32_t n = w[i] >> 16, op = w[i] & 0xffff; if (!n) break; if (op == 71 && n >= 4 && w[i + 2] == 34) w[i + 3] = (uint32_t)s->set;   // OpDecorate DescriptorSet
         if (op == 22 && n == 3 && w[i + 2] == 64) f64_used = 1;   // OpTypeFloat 64

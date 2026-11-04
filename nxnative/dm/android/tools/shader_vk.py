@@ -9,7 +9,7 @@
 # --capture: shaders whose code no game file holds, saved on the device by the Vulkan backend (gfx_vk_shader.c vk_shader_missing: <key>.bin = "DMSC", u32 control length, u32 code length,
 #   control section, code area), translated beside the package's; a file whose content does not hash to its name, or whose key the package has, is left out
 # Bundle (read by the Vulkan backend, dm/android/gfx_vk_shader.c): "DMSV" u32 version, u32 count, then count entries {u64 key, u32 stage, u32 spv_off, u32 spv_len,
-#   u32 refl_off, u32 refl_len, u32 pad} sorted by key, then the blobs. refl is compact JSON: bindings, c1, local size, notes.
+#   u32 refl_off, u32 refl_len, u16 spv_off bits 32.., u16 refl_off bits 32..} sorted by key, then the blobs (Pokémon Pokopia's bundle passes 4 GB). refl is compact JSON: bindings, c1, local size, notes.
 import argparse, collections, concurrent.futures as cf, hashlib, json, mmap, os, re, struct, subprocess, sys, tempfile
 from pathlib import Path
 
@@ -360,7 +360,8 @@ def main():
             if not (i + 1) % 500 or i + 1 == len(made): print(f'packed {i + 1} of {len(made)}', flush=True)
         table.sort()
         f.seek(0); f.write(hdr)
-        for row in table: f.write(struct.pack('<QIIIIII', *row, 0))
+        for key, stage, spv_at, spv_len, refl_at, refl_len in table:
+            f.write(struct.pack('<Q5I2H', key, stage, spv_at & 0xffffffff, spv_len, refl_at & 0xffffffff, refl_len, spv_at >> 32, refl_at >> 32))
     entries = table
     print(f'{len(entries)} of {len(keys)} shaders → {a.out} ({off / 2**20:.1f} MB); failed: {dict(fails)}; binding kinds: {dict(kinds_all)}')
     for e, n in errs.most_common(8): print(f'  translator: {n:5d}  {e}')

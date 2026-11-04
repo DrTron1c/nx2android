@@ -35,6 +35,13 @@ def short_paths(paths):
         yield out
 
 
+def file_md5(p):   # a piece at a time: a shader bundle can be larger than the memory a tablet has free
+    h = hashlib.md5()
+    with open(p, 'rb') as f:
+        while b := f.read(1 << 20): h.update(b)
+    return h.hexdigest()
+
+
 class Adb:
     def __init__(self, exe, serial=None, timeout=120, log=print):
         self.exe, self.serial, self.timeout, self.log = str(exe), serial or None, timeout, log
@@ -213,7 +220,7 @@ class Adb:
     def remote_md5(self, rdir, rels):   # {relative path: MD5} of those files under rdir (missing ones left out)
         out, q = {}, shlex.quote(rdir)
         for i in range(0, len(rels), 64):
-            for ln in self.shell(f'cd {q} && md5sum ' + ' '.join(shlex.quote(r) for r in rels[i:i + 64]) + ' 2>/dev/null; true').splitlines():
+            for ln in self.shell(f'cd {q} && md5sum ' + ' '.join(shlex.quote(r) for r in rels[i:i + 64]) + ' 2>/dev/null; true', timeout=1800).splitlines():   # a game's shader bundle can pass 4 GB
                 h, _, name = ln.partition('  ')
                 if len(h) == 32: out[name] = h
         return out
@@ -228,7 +235,7 @@ class Adb:
         if have is None: have = self.remote_sizes(remote)
         same = [rel for rel, p in files if verify and verify(rel) and rel not in keep and rel not in skip and have.get(rel) == p.stat().st_size]
         rmd5 = self.remote_md5(remote, same) if same else {}
-        changed = {rel for rel, p in files if rel in same and rmd5.get(rel) != hashlib.md5(p.read_bytes()).hexdigest()}
+        changed = {rel for rel, p in files if rel in same and rmd5.get(rel) != file_md5(p)}
         todo = [(rel, p, p.stat().st_size) for rel, p in files
                 if rel not in skip and not rel.startswith('.dmpart') and (rel not in have if rel in keep else have.get(rel) != p.stat().st_size or rel in changed)]
         total, done = sum(s for _, _, s in todo), 0

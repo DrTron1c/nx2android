@@ -1,5 +1,5 @@
 # A stopped port goes on from where it was: shader_vk.py over a package, with a stand-in for the translator, stopped hard during translation and during packing
-import json, os, shutil, signal, stat, subprocess, sys, tempfile, unittest
+import json, os, shutil, signal, stat, struct, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 R = Path(__file__).resolve().parent.parent
@@ -80,6 +80,33 @@ class Resume(unittest.TestCase):
         self.assertEqual(code, 0, out[-600:])
         self.assertEqual(len(log.read_text().splitlines()), calls)   # nothing translated again
         self.assertEqual((self.d / 'b/out.dmsv').read_bytes(), want)
+
+    def test_a_bundle_past_4_gb(self):
+        code, out, _ = self.run_tool('small')
+        self.assertEqual(code, 0, out[-600:])
+        r = self.d / 'big/work'; r.mkdir(parents=True)
+        code, out, log = self.run_tool('big', r, stop_on='packed 3500')   # a place saved at shader 2000
+        self.assertEqual(code, -9)
+        place = json.loads((r / 'bundle.json').read_text()); skew = (5 << 30) - place['off']
+        place['off'] += skew; place['table'] = [[k, st, a + skew, n, b + skew, m] for k, st, a, n, b, m in place['table']]
+        (r / 'bundle.json').write_text(json.dumps(place))
+        with open(self.d / 'big/out.dmsv', 'r+b') as f: f.truncate(place['off'])   # sparse: no 5 GB are written
+        code, out, log = self.run_tool('big', r)
+        self.assertEqual(code, 0, out[-600:])
+        small = (self.d / 'small/out.dmsv').read_bytes()
+        count = struct.unpack_from('<I', small, 8)[0]
+        with open(self.d / 'big/out.dmsv', 'rb') as f:
+            head = f.read(12 + 32 * count)
+            self.assertEqual(head[:12], small[:12])
+            high = 0
+            for i in range(count):
+                key, stage, sa, sn, ra, rn, sh, rh = struct.unpack_from('<Q5I2H', head, 12 + 32 * i)
+                k2, s2, a2, n2, b2, m2, h1, h2 = struct.unpack_from('<Q5I2H', small, 12 + 32 * i)
+                self.assertEqual((key, stage, sn, rn, h1, h2), (k2, s2, n2, m2, 0, 0))
+                if (sh << 32 | sa) >= place['off']:   # those before it are at made-up offsets, in the sparse part
+                    high += 1; f.seek(sh << 32 | sa); self.assertEqual(f.read(sn), small[a2:a2 + n2])
+                    f.seek(rh << 32 | ra); self.assertEqual(f.read(rn), small[b2:b2 + m2])
+            self.assertGreater(high, 1000)
 
     def test_a_run_with_no_folder_leaves_none_of_its_files(self):
         code, out, _ = self.run_tool('c')
