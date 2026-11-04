@@ -547,10 +547,13 @@ class Port:
     def shaders(self):
         sv = self.versions
         pkg = self.work / 'shader' / 'pkg'
+        spill = self.work / 'tmp/split_spill'   # on a device the split keeps its shaders on disk (shader_split.py spill_write), and they go with the package written
+        if toolchain.prebuilt('nx_extract/nx_extract'):
+            nsp.rmtree(spill); spill.mkdir(parents=True); self.env['DM_SPLIT_SPILL'] = str(spill)
         try: nsp.split_shaders(PY, NXNATIVE, [self.romfs(self.dirs[v]) for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
                                oodle=self.device_oodle if self.oodle_why else None,   # Oodle-compressed archives: the game's own decoder on the device
                                aoc=self.aoc)   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
-        finally: self.device_oodle_end()
+        finally: self.device_oodle_end(); nsp.rmtree(spill)
         self.dmsv = self.aw / 'shaders.dmsv'; kf = self.aw / 'shaders.dmsv.key'; cap = self.aw / 'captured_shaders'
         PROG.stage('Vulkan shaders', step='building the translator')
         xlate, xkey = self.translator()

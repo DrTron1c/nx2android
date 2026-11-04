@@ -56,6 +56,7 @@
 # Pair table: (vertex key, pixel key) of every BNSH variation (every Unity program); dmsh_build uses it to give vertex shaders the outputs their pixel shaders read but they do not write (see dmsh_build.py vs_pad)
 import base64, collections, concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys, time, zlib
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../tools'))
+import builtins, mmap as host_mmap, os as host_os   # the host's own, for the spill files: romfs's open and os below also read inside a RomFS image
 from romfs import os, open, is_image
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games')); import game as _game
 from profile_guess import glsl_sources
@@ -2723,8 +2724,29 @@ def nso_image(path):   # an NSO's image (dm/tools/nso.py); nso.Error (a ValueErr
     import nso
     with open(path, 'rb') as f: return bytes(nso.load(f.read(), path).image)
 
+def spill_write(r, root):
+    """DM_SPLIT_SPILL (an Android port): a job's shaders go to a file instead of back through the pool, and the result names them by offset. The results of every job are kept until
+    all have finished, duplicates included, which is more than a tablet holds: Pokémon Pokopia's 131,426 shaders are 4.4 GB, and with them in memory a worker was killed at the end of the split"""
+    rel, uniq, pr, extra = r
+    if not uniq: return r
+    p, off, small = host_os.path.join(root, f'{host_os.getpid()}_{time.monotonic_ns()}.bin'), 0, {}
+    with builtins.open(p, 'wb') as f:
+        for key, (where, st, ctl, code) in uniq.items():
+            f.write(ctl); f.write(code)
+            small[key] = (where, st, (off, len(ctl)), (off + len(ctl), len(code))); off += len(ctl) + len(code)
+    return rel, (p, small), pr, extra
+
+def spill_read(r):
+    """A result of spill_write as scan_file gave it, its shaders views of the mapped file: the system takes those pages back whenever it needs them"""
+    rel, uniq, pr, extra = r
+    if not isinstance(uniq, tuple): return r
+    p, small = uniq
+    with builtins.open(p, 'rb') as f: m = memoryview(host_mmap.mmap(f.fileno(), 0, access=host_mmap.ACCESS_READ))
+    return rel, {k: (w, st, m[a:a + n], m[b:b + q]) for k, (w, st, (a, n), (b, q)) in small.items()}, pr, extra
+
 def scan_batch(jobs):   # scan_file over a batch of jobs, in a pool worker
-    return [scan_file(j) for j in jobs]
+    out, root = [scan_file(j) for j in jobs], os.environ.get('DM_SPLIT_SPILL')
+    return [spill_write(r, root) for r in out] if root else out
 
 
 def pooled(ex, jobs, total, start=0, chunk=1):
@@ -2737,7 +2759,7 @@ def pooled(ex, jobs, total, start=0, chunk=1):
         finished, pending = cf.wait(pending, timeout=0.5)
         done += sum(futures[f] for f in finished)
         if not pending or time.monotonic() - shown >= 0.5: print(f'progress: {done}/{total}', flush=True); shown = time.monotonic()
-    return [r for f in futures for r in f.result()]
+    return [spill_read(r) for f in futures for r in f.result()]
 
 
 def main():
@@ -2825,7 +2847,7 @@ def main():
         pairs |= pr
         for key, v in uniq.items():
             if key in keys:
-                if not same_shader(keys[key][2:4], v[2:4]): red(f'key {key} is the same but the control section or code area differs ({v[0]} / {keys[key][0]})')
+                if not same_shader(tuple(map(bytes, keys[key][2:4])), tuple(map(bytes, v[2:4]))): red(f'key {key} is the same but the control section or code area differs ({v[0]} / {keys[key][0]})')
                 continue
             keys[key] = v; per_src[group(v[0])] += 1
     prog = {(a, b) for a, b, *t in pairs if t} - pairs; pairs = {x for x in pairs if len(x) == 2}
@@ -2834,22 +2856,23 @@ def main():
     os.makedirs(pkg, exist_ok=True)
     for f in os.listdir(pkg):
         if f.endswith('.bin'): os.unlink(os.path.join(pkg, f))
-    recs = collections.defaultdict(list); rows = []; facts = {}; stat = collections.Counter()
+    recs = collections.Counter(); out_f = {}; rows = []; facts = {}; stat = collections.Counter()   # written as they are made: a package can be larger than memory
     for key in sorted(keys, key=lambda k: (group(keys[k][0]), keys[k][0], k)):   # the same input gives byte-identical output
-        where, st, ctl, code = keys[key]
+        where, st, ctl, code = keys[key]; ctl, code = bytes(ctl), bytes(code)
         name = f'{st}_{group(where)}.bin'
         rec = bytearray(b'BTCDBTCD' + bytes(0x30)); struct.pack_into('<2I', rec, 0x28, len(ctl), len(code)); rec += code + ctl
         if rec.find(CTL_MAGIC) != 0x38 + len(code): red(f'key {key}: the control magic appears in the code area, dmsh_build would split the record wrongly')
         if rec.count(b'BTCDBTCD') != 1: red(f'key {key}: the record separator appears inside the record')
-        rows.append((name, len(recs[name]), STAGE_NAME[st], key, where)); recs[name].append(bytes(rec)); stat[st] += 1
+        rows.append((name, recs[name], STAGE_NAME[st], key, where)); recs[name] += 1; stat[st] += 1
+        if name not in out_f: out_f[name] = open(os.path.join(pkg, name), 'wb')
+        out_f[name].write(rec)
         if st == 'cs':
             # NVN2: the thread group at +0x58 (32 1 1 in Donkey Kong Bananza's effects); shared memory taken from +0x64, not yet seen nonzero (unverified)
             at = (0x58, 0x64) if nvn2_ctl(ctl) else (0x748, 0x754)
             x, y, z = struct.unpack_from('<3I', ctl, at[0]); sh = struct.unpack_from('<I', ctl, at[1])[0]
             if not x * y * z: red(f'compute shader {key}: control +{at[0]:#x} thread group is 0 ({where})')
             facts[key] = {'local': [x, y, z], 'shared': (sh + 15) // 16 * 16}
-    for name, rr in recs.items():
-        with open(os.path.join(pkg, name), 'wb') as f: f.write(b''.join(rr))
+    for f in out_f.values(): f.close()
     with open(mapout, 'w') as f:
         kinds = ' / '.join(k for k, hit in (('BNSH / BAHS', any('#BNSH@' in r[4] or '#BAHS@' in r[4] for r in rows)), ('Unity Shader', any('#var' in r[4] and '#BNSH@' not in r[4] and '#MSHD#' not in r[4] and '#SDF#' not in r[4] and '#GLSLC@' not in r[4] and '#SNVN@' not in r[4] for r in rows)),
                                             ('Retro Studios SNVN', any('#SNVN@' in r[4] for r in rows)),
