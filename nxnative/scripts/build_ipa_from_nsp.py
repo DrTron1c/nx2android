@@ -715,7 +715,11 @@ def fingerprint(*items, env=None):
         if kind == 'files':
             for p in map(Path, v):
                 h.update(p.name.encode() + b'\0')
-                try: h.update(hashlib.sha256(p.read_bytes()).digest())
+                try:   # a piece at a time: Pokémon Pokopia's largest shader package is 4.25 GB, and this runs on a tablet too
+                    fh = hashlib.sha256()
+                    with open(p, 'rb') as f:
+                        while b := f.read(1 << 20): fh.update(b)
+                    h.update(fh.digest())
                 except OSError: h.update(b'missing')
         elif kind in ('tree', 'stat'):
             for rel, st in files_under(v): h.update(f'{rel}\0{st.st_size}\0{st.st_mtime_ns if kind == "stat" else ""}\n'.encode())

@@ -2573,9 +2573,11 @@ def var_pairs(found):
     """(vertex key, pixel key) within the same BNSH variation; (vertex key, pixel key, 'prog') within the same BAHS program variation (bahs_variations).
     The tables stay separate; dmsh_build.py pads against both, as the pipeline prebuild uses both."""
     var = collections.defaultdict(dict)
-    for where, st, ctl, code in found:
-        g = where if '#var' in where else BAHS_VAR.get(where)
-        if g: var[g][st] = skey(ctl, code)
+    if isinstance(found, Found): var = found.var
+    else:
+        for where, st, ctl, code in found:
+            g = where if '#var' in where else BAHS_VAR.get(where)
+            if g: var[g][st] = skey(ctl, code)
     return {(v['vs'], v['ps']) + (('prog',) if '#BAHS#prog' in g else ()) for g, v in var.items() if 'vs' in v and 'ps' in v}
 
 def scan_file(args):
@@ -2594,7 +2596,7 @@ def scan_file_in(args):
     stem, ext = os.path.splitext(path)
     if ext in ('.data', '.patch', '.debug', '.nxpc') and os.path.exists(stem + '.dict'): return rel, {}, set(), {}   # read through its Next Level Games index (nlg_shaders)
     with open(path, 'rb') as f: head = f.read(16)
-    found = []; trees = {}
+    found = Found() if host_os.environ.get('DM_SPLIT_SPILL') else []; trees = {}
     if len(args) > 2 and args[2][0] == b'ARH1':
         arh_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
@@ -2713,6 +2715,7 @@ def scan_file_in(args):
     return rel, uniq_keys(found), var_pairs(found), trees
 
 def uniq_keys(found):
+    if isinstance(found, Found): return found.done()
     uniq = {}
     for where, st, ctl, code in found:
         key = skey(ctl, code)
@@ -2724,29 +2727,72 @@ def nso_image(path):   # an NSO's image (dm/tools/nso.py); nso.Error (a ValueErr
     import nso
     with open(path, 'rb') as f: return bytes(nso.load(f.read(), path).image)
 
-def spill_write(r, root):
-    """DM_SPLIT_SPILL (an Android port): a job's shaders go to a file instead of back through the pool, and the result names them by offset. The results of every job are kept until
-    all have finished, duplicates included, which is more than a tablet holds: Pokémon Pokopia's 131,426 shaders are 4.4 GB, and with them in memory a worker was killed at the end of the split"""
-    rel, uniq, pr, extra = r
-    if not uniq: return r
-    p, off, small = host_os.path.join(root, f'{host_os.getpid()}_{time.monotonic_ns()}.bin'), 0, {}
-    with builtins.open(p, 'wb') as f:
-        for key, (where, st, ctl, code) in uniq.items():
-            f.write(ctl); f.write(code)
-            small[key] = (where, st, (off, len(ctl)), (off + len(ctl), len(code))); off += len(ctl) + len(code)
-    return rel, (p, small), pr, extra
+_SPILL = None   # this worker's spill file: [path, file, length], made at its first shader
 
+class Found:
+    """The shaders of one scan on a device (DM_SPLIT_SPILL, an Android port), in place of a list. A list holds every copy of every shader until the file is finished, and one file can hold nearly
+    all of a game's: Pokémon Pokopia's 0x38f972af.fdata has 125,950 of its 131,426 shaders (4.4 GB, one job), and on a 12 GB tablet a worker died with that file's batch unfinished. A test file of
+    1.5 GB of shaders took a worker to 3,128 MB as a list and 32 MB here. A shader's bytes go to the worker's spill file the first time its key is seen and later copies are compared with them, so the job keeps an index. uniq_keys and var_pairs give what they give for a list, with offsets for the bytes"""
+    def __init__(self): self.n, self.uniq, self.var = 0, {}, collections.defaultdict(dict)
+    def __len__(self): return self.n
+    def __iadd__(self, shaders): self.extend(shaders); return self
+    def extend(self, shaders):
+        for s in shaders: self.append(s)
+    def append(self, s):
+        global _SPILL
+        where, st, ctl, code = s
+        key = skey(ctl, code); self.n += 1
+        if g := where if '#var' in where else BAHS_VAR.get(where): self.var[g][st] = key
+        if not _SPILL:
+            p = host_os.path.join(host_os.environ['DM_SPLIT_SPILL'], f'{host_os.getpid()}_{time.monotonic_ns()}.bin')
+            _SPILL = [p, builtins.open(p, 'w+b'), 0]
+        p, f, off = _SPILL
+        if key in self.uniq:
+            (a, n), (_, m) = self.uniq[key][2:]
+            f.flush(); first = host_os.pread(f.fileno(), n + m, a)
+            if not same_shader((first[:n], first[n:]), (ctl, code)): red(f'key {key} is the same but the control section or code area differs ({where})')
+            return
+        f.write(ctl); f.write(code)
+        self.uniq[key] = (where, st, (off, len(ctl)), (off + len(ctl), len(code)))
+        _SPILL[2] = off + len(ctl) + len(code)
+    def done(self):
+        if not self.uniq: return {}
+        _SPILL[1].flush()
+        return _SPILL[0], self.uniq
+
+_MAPPED = {}
 def spill_read(r):
-    """A result of spill_write as scan_file gave it, its shaders views of the mapped file: the system takes those pages back whenever it needs them"""
+    """A result of a Found scan as a list's would be, its shaders views of the mapped spill file: the system takes those pages back whenever it needs them"""
     rel, uniq, pr, extra = r
     if not isinstance(uniq, tuple): return r
     p, small = uniq
-    with builtins.open(p, 'rb') as f: m = memoryview(host_mmap.mmap(f.fileno(), 0, access=host_mmap.ACCESS_READ))
+    if p not in _MAPPED:
+        with builtins.open(p, 'rb') as f: _MAPPED[p] = memoryview(host_mmap.mmap(f.fileno(), 0, access=host_mmap.ACCESS_READ))
+    m = _MAPPED[p]
     return rel, {k: (w, st, m[a:a + n], m[b:b + q]) for k, (w, st, (a, n), (b, q)) in small.items()}, pr, extra
 
 def scan_batch(jobs):   # scan_file over a batch of jobs, in a pool worker
-    out, root = [scan_file(j) for j in jobs], os.environ.get('DM_SPLIT_SPILL')
-    return [spill_write(r, root) for r in out] if root else out
+    out = []
+    for j in jobs:
+        if host_os.environ.get('DM_SPLIT_SPILL') and os.path.getsize(j[0]) >= 1 << 28: print(f'scanning {j[1]}', flush=True)   # a worker that dies names its file in the log
+        out.append(scan_file(j))
+    return out
+
+WORKERS, HELD = [], [0]   # every pool's worker processes, and the most memory of its own one of them was seen holding, in MB (mapped files, which the system can drop, are not counted)
+def held(p):
+    try:
+        with builtins.open(f'/proc/{p.pid}/status') as f: return int(re.search(r'RssAnon:\s+(\d+)', f.read())[1]) // 1024
+    except (OSError, TypeError, ValueError): return 0   # no /proc (a Mac), or the worker has gone
+
+def pool_broke():
+    """A line for the log when a worker dies, which the pool's own error does not say: how it ended (a signal as a negative code; the others end with -15 when the pool stops them), what workers
+    held, and what the system had left"""
+    codes = ' '.join(str(p.exitcode) for p in WORKERS)
+    try:
+        with builtins.open('/proc/meminfo') as f: left = re.search(r'MemAvailable:\s+(\d+)', f.read())
+        left = f', {int(left[1]) / 1024:,.0f} MB available now' if left else ''
+    except OSError: left = ''
+    print(f'[RED] a shader scan worker died: exit codes {codes} (-9 killed by the system, -11 or -7 a crash), a worker held up to {HELD[0]:,} MB{left}', flush=True)
 
 
 def pooled(ex, jobs, total, start=0, chunk=1):
@@ -2754,12 +2800,15 @@ def pooled(ex, jobs, total, start=0, chunk=1):
     the stage's count). The count is of the jobs finished in any order: counted in order it would stall behind one slow archive range while the others finish"""
     batches = [jobs[i:i + chunk] for i in range(0, len(jobs), chunk)]
     futures = {ex.submit(scan_batch, b): len(b) for b in batches}
+    WORKERS.extend(p for p in (getattr(ex, '_processes', None) or {}).values() if p not in WORKERS)
     done, pending, shown = start, set(futures), 0.0
     while pending:
         finished, pending = cf.wait(pending, timeout=0.5)
-        done += sum(futures[f] for f in finished)
+        done += sum(futures[f] for f in finished if not f.exception())   # a broken pool ends the jobs it had left, which are not done
+        HELD[0] = max([HELD[0]] + [held(p) for p in WORKERS])
         if not pending or time.monotonic() - shown >= 0.5: print(f'progress: {done}/{total}', flush=True); shown = time.monotonic()
-    return [spill_read(r) for f in futures for r in f.result()]
+    results = [r for f in futures for r in f.result()]
+    return [spill_read(r) for r in results] if host_os.environ.get('DM_SPLIT_SPILL') else results
 
 
 def main():
@@ -2824,9 +2873,12 @@ def main():
     fb_jobs, fbs = frostbite_jobs(files)   # EA SPORTS FC 27's Frostbite bundles, Oodle Leviathan decoded by the game's own decoder in the Mac host
     big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ck_jobs + zp_jobs + ah_jobs + fb_jobs
     files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in cpks and p not in zips and p not in arhs and p not in fbs]
-    with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {}, zdicts)) as ex:
-        n = len(big) + len(files)
-        results += pooled(ex, big, n) + pooled(ex, files, n, len(big), chunk=16)
+    try:
+        with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {}, zdicts)) as ex:
+            n = len(big) + len(files)
+            results += pooled(ex, big, n) + pooled(ex, files, n, len(big), chunk=16)
+    except cf.BrokenExecutor: pool_broke(); raise
+    if host_os.environ.get('DM_SPLIT_SPILL'): print(f'scan workers held up to {HELD[0]:,} MB', flush=True)
     trees, defer = {}, []
     for rel, uniq, pr, extra in results:
         if extra == 'defer': defer.append(rel)
@@ -2836,7 +2888,7 @@ def main():
         import unityfs
         for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
         byrel = {r: p for p, r in files}
-        with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex: again = list(ex.map(scan_file, [(byrel[r], r) for r in defer]))
+        with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex: again = [spill_read(r) for r in ex.map(scan_file, [(byrel[r], r) for r in defer])]
         for rel, uniq, pr, extra in again:
             if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow')
         results = [r for r in results if r[3] != 'defer'] + again
