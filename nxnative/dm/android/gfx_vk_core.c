@@ -388,6 +388,16 @@ void mtl_pool_del(const void *mem) {
         if (p.ahb) AHardwareBuffer_release(p.ahb);
     }
 }
+static uint64_t g_lazy_mb;
+// What the process holds and what the system has left, for the log: the kill comes with no message of its own
+void vk_mem_report(void) {
+    char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
+    FILE *f = fopen("/proc/self/status", "r");
+    if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); for (int i = 0; i < 5; i++) { char *p = strstr(b, k[i]); if (p) v[i] = atol(p + strlen(k[i])); } }
+    long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
+    if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }
+    VKLOG("[mem] process %ld MB (anon %ld, file %ld, shared %ld, swapped %ld); hardware buffers made on first use %llu MB; system available %ld MB, swap free %ld MB", v[0] >> 10, v[1] >> 10, v[2] >> 10, v[3] >> 10, v[4] >> 10, (unsigned long long)g_lazy_mb, avail >> 10, swapf >> 10);
+}
 // The hardware buffer of a lazy chunk, made at the first lookup that finds it (vk_pool_of). Under the write lock: nothing else is finding pools, and an entry cannot move
 static vkpool_t *pool_materialize(uint64_t lo) {
     vkpool_t *r = NULL;
@@ -396,7 +406,7 @@ static vkpool_t *pool_materialize(uint64_t lo) {
     if (r && !r->buf) {
         int rc = pool_zero_copy(r, (uint8_t *)(uintptr_t)r->lo, r->hi - r->lo);
         if (rc) die("[vk] memory pool %#llx +%#llx: no hardware buffer (%d), and the device has no memory left for it", (unsigned long long)r->lo, (unsigned long long)(r->hi - r->lo), rc);
-        static uint64_t mb; mb += (r->hi - r->lo) >> 20; static int n; if (n++ < 64 || !(n & 15)) VKLOG("memory pool chunk %#llx: hardware buffer made on first use (%llu MB in such buffers)", (unsigned long long)r->lo, (unsigned long long)mb);
+        static uint64_t mb; mb += (r->hi - r->lo) >> 20; g_lazy_mb = mb; static int n; if (n++ < 64 || !(n & 15)) VKLOG("memory pool chunk %#llx: hardware buffer made on first use (%llu MB in such buffers)", (unsigned long long)r->lo, (unsigned long long)mb);
     }
     pthread_rwlock_unlock(&g_pool_mu);
     return r;
