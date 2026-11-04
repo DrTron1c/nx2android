@@ -158,6 +158,7 @@ public final class MainActivity extends Activity implements PortService.Listener
             stepText.setText("Log copied. It is also saved in nx2android/last-port.log in your storage.");
         }), 8);
         add(c6, button("Get game log", false, v -> gameLog()), 8);
+        add(c6, button("Watch game memory for 7 minutes", false, v -> watchMemory()), 8);
         add(c6, button("Battery settings for this app", false, v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())))), 8);
         add(root, c6, 12);
 
@@ -313,6 +314,29 @@ public final class MainActivity extends Activity implements PortService.Listener
             try (java.io.FileWriter w = new java.io.FileWriter(new File("/sdcard/nx2android/game-log.txt"))) { w.write(out); saved = "Saved as nx2android/game-log.txt in your storage."; } catch (java.io.IOException e) { saved = "Copy it with Copy log."; }
             String s = saved;
             post(() -> { logText.setText(out); stepText.setText(s); stepText.setTextColor(GOOD); });
+        });
+    }
+
+    /** Android's own account of the game's memory while it runs, which the game cannot see from inside: nx2android/mem-watch.txt */
+    private void watchMemory() {
+        String d = prefs.getString("device", null);
+        if (d == null) { stepText.setText("Connect Wireless debugging first."); return; }
+        stepText.setText("Watching memory for 7 minutes. Open the game now."); stepText.setTextColor(TEXT);
+        String typed = connectPort.getText().toString().trim();
+        bg(() -> {
+            String port = typed;
+            Matcher f = Pattern.compile("_adb-tls-connect\\S*\\s+\\S*?(\\d+\\.\\d+\\.\\d+\\.\\d+):(\\d+)").matcher(env.run(env.adb("mdns", "services"), 10));
+            if (f.find()) port = f.group(2);
+            String target = validPort(port) ? "127.0.0.1:" + port : d;
+            env.run(env.adb("connect", target), 15);
+            try (java.io.FileWriter w = new java.io.FileWriter(new File("/sdcard/nx2android/mem-watch.txt"))) {
+                for (int i = 0; i < 28; i++) {
+                    w.write(env.run(env.adb("-s", target, "shell", "date; dumpsys meminfo org.nx2a.t0400a3a01ee4c000 | grep -E 'Native Heap|Graphics|EGL mtrack|GL mtrack|Other mtrack|Unknown|TOTAL|Gfx dev|\\.so mmap|Other mmap'; dumpsys meminfo | grep -E 'Total RAM|Free RAM|Used RAM|ZRAM|Lost RAM|GPU'; grep -E 'MemAvailable|SwapFree|^Cached|Shmem:|AnonPages|KernelStack|Slab:|Unevictable' /proc/meminfo"), 25));
+                    w.write("\n"); w.flush();
+                    Thread.sleep(15000);
+                }
+            } catch (Exception e) { post(() -> stepText.setText("Watching stopped: " + e.getMessage())); return; }
+            post(() -> stepText.setText("Saved as nx2android/mem-watch.txt in your storage."));
         });
     }
 
