@@ -393,7 +393,7 @@ static void on_pause_sig(int sig, siginfo_t *si, void *uc_) {
 // called by the gate on SVC entry / exit (gate_dispatch in hle.c)
 void thr_svc_enter(uint64_t *regs, uint64_t pc) {
     thr_t *t = pthread_getspecific(g_keythr); if (!t) return;
-    t->svc_pc = pc; t->svc_x18 = (uint64_t)(uintptr_t)pthread_getspecific(g_key18); atomic_store(&t->svc_regs, regs); atomic_fetch_or(&t->svc_state, 1);
+    t->svc_pc = pc; t->svc_x18 = (uint64_t)(uintptr_t)dm_tsd_get(g_key18); atomic_store(&t->svc_regs, regs); atomic_fetch_or(&t->svc_state, 1);
     if (atomic_load_explicit(&t->qos_pending, memory_order_relaxed) && atomic_exchange(&t->qos_pending, 0)) {
         pthread_mutex_lock(&G); qos_apply(t); pthread_mutex_unlock(&G);
     }
