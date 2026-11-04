@@ -97,8 +97,10 @@ class Progress:
     def __init__(self, mode='off'):
         self.mode, self.lock, self.k, self.n, self.cur, self.shown, self.ticker, self.tstop = mode, threading.RLock(), 0, 0, None, 0, None, None
 
-    def plan(self, n):   # the next n stages are numbered 1..n
-        with self.lock: self.k, self.n = 0, n
+    def plan(self, n, names=None):   # the next n stages are numbered 1..n; names: what a program showing the build lists ahead (a stage that turns up later joins the list)
+        with self.lock:
+            self.k, self.n = 0, n
+            if names and self.mode == 'json': self._json({'ev': 'plan', 'stages': names})
 
     def add(self, n):   # n more stages than planned (one that turns out to be needed: a provisional profile's heap check)
         with self.lock: self.n += n
@@ -704,6 +706,9 @@ def files_under(d):   # (relative path, stat) of every file under d, sorted; [] 
     return sorted(out, key=lambda x: x[0])
 
 
+PINNED = {}   # file name → the SHA-256 that stands for its content in fingerprint: a tool changed in how it runs, not in what it makes, keeps the results of earlier runs (porter/pipeline.py)
+
+
 def fingerprint(*items, env=None):
     """sha256 over a stage's inputs. Items: ('files', paths) = names and content (a missing file counts too); ('tree', folder) = relative path and size of every file under it
     (a RomFS: check_build pins its version, so names and sizes stand for its content); ('stat', folder) = relative path, size and mtime of every file under it (the translator's binaries);
@@ -715,6 +720,7 @@ def fingerprint(*items, env=None):
         if kind == 'files':
             for p in map(Path, v):
                 h.update(p.name.encode() + b'\0')
+                if p.name in PINNED: h.update(bytes.fromhex(PINNED[p.name])); continue
                 try:   # a piece at a time: Pokémon Pokopia's largest shader package is 4.25 GB, and this runs on a tablet too
                     fh = hashlib.sha256()
                     with open(p, 'rb') as f:
@@ -1270,7 +1276,10 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
     if aoc: env = dict(env, DM_SPLIT_AOC=str(aoc))
     PROG.set(step='splitting')
     tmp = pkg.with_name(pkg.name + '.partial'); rmtree(tmp); (tmp / 'tables').mkdir(parents=True)
-    run([py, repo / 'dm/gfx/tools/shader_split.py', ','.join(map(str, roms)), ','.join(map(str, mains)), tmp / 'pkg'] + [tmp / 'tables' / n for n in names], logs / 'shader_split.log', env=env)
+    def line(s):   # its files as they finish; a device also counts the shaders it has saved, which keep moving while one large file holds nearly all of them
+        if m := re.match(r'progress: (\d+)/(\d+)', s): PROG.set(done=int(m.group(1)), total=int(m.group(2)), unit='files')
+    if spill := env.get('DM_SPLIT_SPILL'): PROG.watch(lambda: {'note': f'{tree_size(Path(spill))[1] / 2**30:.1f} GB of shaders saved'})
+    run([py, repo / 'dm/gfx/tools/shader_split.py', ','.join(map(str, roms)), ','.join(map(str, mains)), tmp / 'pkg'] + [tmp / 'tables' / n for n in names], logs / 'shader_split.log', env=env, on_line=line)
     m = re.search(r'shaders: (\d+) \(', (logs / 'shader_split.log').read_text(errors='replace'))
     if m and m.group(1) == '0':   # dmsh_build.py would make no library, and the iOS shader step stop with no word of why
         raise BuildError('the shader split found no shaders in main or the RomFS: the game keeps them in a form shader_split.py does not read; locate them (docs/agents) and add a reader')

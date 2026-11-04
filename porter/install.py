@@ -1,11 +1,14 @@
 # Installing a port on a device over adb: the APK, then the data pack into the app's files folder (porter/adb.py pushes it in resumable pieces).
 # The player's own files there are kept: the pause menu's settings.txt, the logs, the Vulkan pipeline caches; saves are in the app's internal storage, which an update keeps.
-import shlex
+import os, shlex
 from pathlib import Path
 
 from porter import datapack
 from porter.adb import Adb, AdbError
 from porter.upstream import BuildError, PROG, say
+
+
+WAIT = 6 * 3600   # seconds an app on the device waits for Wireless debugging: everything before the install is done by then, and a stop here would only ask the player to tap again
 
 
 def install(apk, data, adb_exe, serial=None, replace_signer=False):
@@ -18,7 +21,7 @@ def install(apk, data, adb_exe, serial=None, replace_signer=False):
     PROG.stage('install', step='finding the device')
     pushing = False
     try:
-        dev = adb.pick()
+        dev = adb.pick(wait=WAIT if os.environ.get('NX2A_PREBUILT') else 0, waiting=lambda: PROG.set(step='waiting for Wireless debugging: turn it on in Developer options'))
         model = adb.prop('ro.product.model')
         say(f'device: {model or dev} ({dev}), GPU {adb.gpu() or "unknown"}')
         if 'bcn' in man.get('requires', []):   # the profile's requires: BC-compressed textures

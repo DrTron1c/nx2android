@@ -3,7 +3,9 @@
 # The same translator as the Apple chain (dm/gfx/tools/dmsh_xlate_bin, Ryujinx's translator with TargetApi.Vulkan) and the same jobs as dmsh_build.py
 # (control section / code area / c1 split, the VertexA + VertexB merge, the profile's answer table), but no MSL: Vulkan takes the SPIR-V as it is.
 # Geometry shaders are translated as Vulkan geometry shaders (the Apple chain emulates them in compute kernels).
-#   DM_GAME=<id> shader_vk.py <package dir> <out bundle> [--jobs N] [--keys k1,k2] [--xlate <dmsh_xlate.dll>] [--capture <dir>]
+#   DM_GAME=<id> shader_vk.py <package dir> <out bundle> [--jobs N] [--keys k1,k2] [--xlate <dmsh_xlate.dll>] [--capture <dir>] [--resume <dir>]
+# --resume: a folder kept between runs, for the same inputs only (porter names one per key). Finished batches of the translator are marked there and the bundle saves its place, so a port that
+#   is stopped (the app closed, the system killed it) goes on from there; on a tablet this step takes about an hour. The bundle file must be left as the stopped run left it
 # --capture: shaders whose code no game file holds, saved on the device by the Vulkan backend (gfx_vk_shader.c vk_shader_missing: <key>.bin = "DMSC", u32 control length, u32 code length,
 #   control section, code area), translated beside the package's; a file whose content does not hash to its name, or whose key the package has, is left out
 # Bundle (read by the Vulkan backend, dm/android/gfx_vk_shader.c): "DMSV" u32 version, u32 count, then count entries {u64 key, u32 stage, u32 spv_off, u32 spv_len,
@@ -18,6 +20,7 @@ import dmsh_ampere, dmsh_facts, dmsh_chain   # noqa: E402  (DM_GAME picks the pr
 
 ap = argparse.ArgumentParser()
 ap.add_argument('pkg'); ap.add_argument('out')
+ap.add_argument('--resume', help='a folder kept between runs of the same inputs: finished work is not done again')
 ap.add_argument('--jobs', type=int, default=os.cpu_count() or 8)
 ap.add_argument('--keys', default='')
 ap.add_argument('--dotnet', default=os.environ.get('DOTNET', 'dotnet'))
@@ -38,6 +41,7 @@ SB_ALIGN = 256
 # lane id >> 5, so it holds for 64 too. At 32 the warp code read only the first 32 lanes' ballot (Tears of the Kingdom: 32 shaders vote, ballot or shuffle)
 SUBGROUP = 128
 BATCH = 1500   # shaders per translator process
+SAVE_EVERY = 2000   # shaders between the bundle's saved places (--resume)
 # Adreno rounds a gather coordinate that sits on a texel edge the other way from Maxwell, so a gather can pick the wrong 2x2 texels. Eden moves gather coordinates
 # 1/512 texel on Qualcomm and Turnip (#4565, TotK's large dark squares); Ryujinx's TexturePass does the same with 8 bits (Program.cs QueryHostGatherBiasPrecision).
 # Tears of the Kingdom on the Adreno 830 drew dark boxes of whole 16x16 tiles in its tiled lighting (607 shaders gather, 38 of them compute): in 2 of 12 camera
@@ -104,7 +108,7 @@ def xfb_layout(key, ctl):
         out.append({'stride': strides[b], 'words': words})
     return out
 
-def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback is captured natively (xfb_layout)
+def job_for(key, stage, rec, w, write=True):   # dmsh_build.py job_for; transform feedback is captured natively (xfb_layout). write: False when the translator has already run for this key (--resume)
     ci = rec.find(bytes.fromhex('34127698')); code = rec[0x38:ci]; extra = {}
     xfb = None
     if dmsh_ampere.is_nvn2(rec[ci:]):   # NVN2 (Switch 2): Ampere code for the translator's Ampere frontend, as dmsh_build.py job_for
@@ -118,7 +122,8 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
         if stage != 'cs': code = code[0x30:]
         elif code[:4] == bytes.fromhex('79563412'): code = code[0x100:]
         xfb = xfb_layout(key, rec[ci:]) if stage == 'vs' else None
-    cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
+    cp = os.path.join(w, key + '.bin')
+    if write: open(cp, 'wb').write(code)
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'subgroup': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {})}
     j.update(extra); j['no_raw_gmem'] = True   # no guest-to-GPU address table on Vulkan yet: such an access is left out, as before the Switch 2 merge
     if key in FACTS: j.update(FACTS[key])
@@ -275,38 +280,61 @@ def main():
     if cap: print(f'{len(cap)} shaders captured at run time: {" ".join(f"{k} ({st})" for k, (st, _) in sorted(cap.items()))}', flush=True)
     keys = sorted(k for k in (a.keys.split(',') if a.keys else [*loc, *cap]) if k in loc or k in cap)
     packs = {}
-    w = tempfile.mkdtemp(prefix='shvk_', dir=os.environ.get('WORK'))
+    w = a.resume or tempfile.mkdtemp(prefix='shvk_', dir=os.environ.get('WORK'))
+    os.makedirs(w, exist_ok=True)
+    # Short batches, each its own translator process: a crash loses one batch, and the memory of a run stays flat. On a tablet this stage takes the longest, so it reports as it goes
+    chunks = [keys[i:i + BATCH] for i in range(0, len(keys), BATCH)]
+    mark = lambda ch: os.path.join(w, f'done_{ch[0]}_{len(ch)}')
+    todo = [ch for ch in chunks if not os.path.exists(mark(ch))]
+    write = {k for ch in todo for k in ch}
     jobs, c1s, stages = {}, {}, {}
-    for k in keys:
+    for i, k in enumerate(keys):
         if k in cap: stages[k], rec = cap[k]
         else:
             name, idx = loc[k]
             if name not in packs: packs[name] = records(os.path.join(a.pkg, name))
             stages[k], rec = name[:2], packs[name](idx)
-        jobs[k], c1s[k] = job_for(k, stages[k], rec, w)
-    # Short batches, each its own translator process: a crash loses one batch, and the memory of a run stays flat. On a tablet this stage takes the longest, so it reports as it goes
-    chunks = [keys[i:i + BATCH] for i in range(0, len(keys), BATCH)]
+        jobs[k], c1s[k] = job_for(k, stages[k], rec, w, k in write)
+        if not (i + 1) % 1000 or i + 1 == len(keys): print(f'prepared {i + 1} of {len(keys)}', flush=True)
     def xl(ch):
         jp = os.path.join(w, f'job_{ch[0]}.json')
         with open(jp, 'w') as f: json.dump([jobs[k] for k in ch], f)
-        r = subprocess.run([a.dotnet, XLATE_DLL, jp, w], capture_output=True, text=True, errors='replace')
+        for _ in range(2):   # a translator the system killed (a negative code) gets one more go; its other exit codes are the batch's answer
+            r = subprocess.run([a.dotnet, XLATE_DLL, jp, w], capture_output=True, text=True, errors='replace')
+            if r.returncode >= 0: open(mark(ch), 'w').close(); break
         os.remove(jp)
         return len(ch), r.stderr
-    print(f'translating {len(keys)} shaders in {len(chunks)} batches ...', flush=True)
-    errs, done = collections.Counter(), 0
+    done = len(keys) - len(write)
+    print(f'translating {len(keys)} shaders in {len(chunks)} batches ...' + (f' ({done} done before)' if done else ''), flush=True)
+    errs = collections.Counter()
     with cf.ThreadPoolExecutor(a.jobs) as ex:
-        for n, stderr in ex.map(xl, chunks):
+        for n, stderr in ex.map(xl, todo):
             done += n; print(f'translated {done} of {len(keys)}', flush=True)
             for ln in stderr.splitlines():
                 if ln.strip(): errs[ln.strip()[:120]] += 1
     # The bundle is written as it is read, with room left for its table: the SPIR-V of 131,000 shaders does not stay in memory, and the blobs need no order of their own
-    made = [k for k in keys if os.path.exists(os.path.join(w, k + '.spv'))]
+    def saved(name):
+        try:
+            with open(os.path.join(w, name)) as f: return json.load(f) if a.resume else None
+        except (OSError, ValueError): return None
+    def save(name, value):   # whole or not at all: a run stopped here leaves the last one
+        p = os.path.join(w, name)
+        with open(p + '.new', 'w') as f: json.dump(value, f)
+        os.replace(p + '.new', p)
+    made = saved('made.json')   # kept: the SPIR-V already in the bundle is gone from the folder
+    if made is None:
+        made = [k for k in keys if os.path.exists(os.path.join(w, k + '.spv'))]
+        if a.resume: save('made.json', made)
     fails = collections.Counter({'no output': len(keys) - len(made)} if len(made) < len(keys) else {})
     hdr = struct.pack('<4sII', b'DMSV', 1, len(made)); ent_sz = 32
-    off = len(hdr) + ent_sz * len(made); table = []
-    with open(a.out, 'wb') as f:
-        f.seek(off)
-        for k in made:
+    place = saved('bundle.json')
+    if place and (not os.path.isfile(a.out) or os.path.getsize(a.out) < place['off']): place = None
+    first, off, table = (place['n'], place['off'], [tuple(r) for r in place['table']]) if place else (0, len(hdr) + ent_sz * len(made), [])
+    gone = []
+    with open(a.out, 'r+b' if place else 'wb') as f:
+        f.seek(off); f.truncate()
+        for i in range(first, len(made)):
+            k = made[i]
             spv_p, res_p, code_p = os.path.join(w, k + '.spv'), os.path.join(w, k + '.res.json'), os.path.join(w, k + '.bin')
             with open(spv_p, 'rb') as g: spv = g.read()
             res = {}
@@ -322,8 +350,14 @@ def main():
             f.write(spv); f.write(refl)
             table.append((int(k, 16), STAGES.get(st, 0), off, len(spv), off + len(spv), len(refl)))
             off += len(spv) + len(refl)
-            for x in (spv_p, res_p, code_p):
-                if os.path.exists(x): os.remove(x)
+            gone += [spv_p, res_p, code_p]
+            if not a.resume or not (i + 1) % SAVE_EVERY:   # a shader's files stay until its place in the bundle is saved
+                if a.resume:
+                    f.flush(); os.fsync(f.fileno()); save('bundle.json', {'n': i + 1, 'off': off, 'table': table})
+                for x in gone:
+                    if os.path.exists(x): os.remove(x)
+                gone = []
+            if not (i + 1) % 500 or i + 1 == len(made): print(f'packed {i + 1} of {len(made)}', flush=True)
         table.sort()
         f.seek(0); f.write(hdr)
         for row in table: f.write(struct.pack('<QIIIIII', *row, 0))

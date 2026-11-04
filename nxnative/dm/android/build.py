@@ -92,11 +92,12 @@ def compile_one(s):
     r = subprocess.run([CC] + flags + ['-MMD', '-MF', str(d), '-c', str(src), '-o', str(o)], capture_output=True, text=True, errors='replace')
     return s, o, r.returncode, r.stderr
 
+SEEN = [0]
 def build(files):
     objs, failed = [], []
     with cf.ThreadPoolExecutor(a.jobs) as ex:
         for s, o, rc, err in ex.map(compile_one, files):
-            objs.append(o)
+            objs.append(o); SEEN[0] += 1; print(f'source {SEEN[0]} of {len(all_files) + len(VPX)}', flush=True)
             if rc: failed.append(s); print(f'--- {s.relative_to(DM)}\n{err.strip()}\n', file=sys.stderr)
             elif err.strip() and '--verbose' in sys.argv: print(err, file=sys.stderr)
     return objs, failed
@@ -109,6 +110,7 @@ print(f'compiled {len(all_files) + len(VPX)} sources, {len(failed)} failed' + ('
 if failed and not a.keep_going: sys.exit(1)
 if a.only_compile: sys.exit(1 if failed else 0)
 
+print('linking', flush=True)
 LIBS = ['-landroid', '-llog', '-lvulkan', '-laaudio', '-lnativewindow', '-lmediandk', '-lz', '-lm', '-ldl']   # -lz: the gamepad theme's PNGs (overlay_theme.c)
 LDFLAGS = [TARGET, '-fuse-ld=lld', '-Wl,--error-limit=0', '-Wl,-z,max-page-size=16384', '-Wl,--build-id', '-Wl,-z,nostart-stop-gc']
 if a.exe:

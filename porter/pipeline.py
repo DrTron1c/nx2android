@@ -197,7 +197,7 @@ class Port:
 
         try:
             self.inputs()
-            PROG.plan(1 + len(self.versions) + bool(self.fam['dlc']) + bool(o.fps60) + 6 + bool(o.install))   # nx_extract, the versions, the DLC, 60 fps, rewrite / split / Vulkan shaders / host / APK / data, install (unpack adds its own)
+            PROG.plan(1 + len(self.versions) + bool(self.fam['dlc']) + bool(o.fps60) + 6 + bool(o.install), self.stage_names())   # nx_extract, the versions, the DLC, 60 fps, rewrite / split / Vulkan shaders / host / APK / data, install (unpack adds its own)
             self.extract()
         finally: self.drop_unpacked()   # a failed run leaves no decompressed dumps behind either
         self.check_graphics()
@@ -217,6 +217,11 @@ class Port:
                              + (f'; {self.derived_mem}' if self.derived_mem else ''))
         for x in self.lost: say(f'[RED] {x}')
         return self.result
+
+    def stage_names(self):   # the steps a program showing the port lists ahead
+        o = self.o
+        first = ['unpack the game'] if self.s2 else ['build nx_extract'] + [f'extract {v}' for v in self.versions] + (['extract DLC'] if self.fam['dlc'] else [])
+        return first + (['60 fps'] if o.fps60 else []) + ['rewrite', 'shader split', 'Vulkan shaders', 'host', 'APK', 'data pack'] + (['install'] if o.install else [])
 
     # ---- inputs: the folder's games and versions, the profile, the version to pack ----
     def inputs(self):
@@ -562,17 +567,24 @@ class Port:
                               ('files', sorted(cap.glob('*.bin'))))
         if self.dmsv.is_file() and (note := nsp.reused(kf, key)) is not None:
             PROG.end(f'{note}, reused (inputs unchanged)'); return
-        tmp = self.dmsv.with_name('shaders.dmsv.partial'); nsp.rmtree(tmp); nsp.rmtree(kf)
+        tmp = self.dmsv.with_name('shaders.dmsv.partial'); nsp.rmtree(kf)
+        # This step takes about an hour on a tablet, so a stopped run keeps its place: the folder and the bundle begun in it count only for the same key
+        work = self.aw / 'shader_vk_work'; stamp = work / 'key'
+        if stamp.is_file() and stamp.read_text() == key: say('the Vulkan shaders go on from where the last run stopped')
+        else: nsp.rmtree(work); nsp.rmtree(tmp); work.mkdir(parents=True); stamp.write_text(key)
+        steps = {'prepared': ('preparing the shaders', 0, .03), 'translated': ('translating the shaders', .03, .85), 'packed': ('packing the shaders into one file', .85, 1)}   # shares of the step's time
         def line(s):
-            if m := re.match(r'translating (\d+) shaders', s): PROG.set(step=f'translating {int(m.group(1)):,} shaders')
-            elif m := re.match(r'translated (\d+) of (\d+)', s): PROG.set(done=int(m.group(1)), total=int(m.group(2)), unit='shaders')
-        nsp.run([PY, DM / 'android/tools/shader_vk.py', pkg, tmp, '--jobs', str(self.o.jobs), '--dotnet', self.tools['dotnet'], '--xlate', xlate, '--capture', cap],
+            if m := re.match(r'(prepared|translated|packed) (\d+) of (\d+)', s):
+                what, a, b = steps[m.group(1)]; n, of = int(m.group(2)), int(m.group(3))
+                PROG.set(step=what, done=round(1000 * (a + (b - a) * n / max(of, 1))), total=1000, unit='', note=f'{n:,} of {of:,} shaders')
+        nsp.run([PY, DM / 'android/tools/shader_vk.py', pkg, tmp, '--jobs', str(self.o.jobs), '--dotnet', self.tools['dotnet'], '--xlate', xlate, '--capture', cap, '--resume', work],
                 self.logs / 'android_shaders.log', env=self.env, on_line=line)
         m = re.search(r'^(\d+) of (\d+) shaders', (self.logs / 'android_shaders.log').read_text(errors='replace'), re.M)
         if not m or m.group(1) == '0': raise BuildError(f'no shader translated (see {self.logs / "android_shaders.log"})')
         note = f'{int(m.group(1)):,} of {int(m.group(2)):,} shaders, {tmp.stat().st_size / 2**20:,.0f} MB'
         nsp.swap_in(tmp, self.dmsv); kf.write_text(f'{key}\n{note}\n')
         PROG.end(note)
+        nsp.rmtree(work)
         for d in (self.work / 'tmp').glob('shvk_*'): nsp.rmtree(d)   # the translator's work folders
 
     def pull_captures(self):
@@ -607,8 +619,11 @@ class Port:
     def host(self):
         PROG.stage('host', step=f'NDK {self.tools["ndk"].name}')
         out = self.aw / ('host-debug' if self.o.debug else 'host')
+        def line(s):
+            if m := re.match(r'source (\d+) of (\d+)', s): PROG.set(step='compiling', done=int(m.group(1)), total=int(m.group(2)), unit='files')
+            elif s == 'linking': PROG.set(step='linking')
         nsp.run([PY, DM / 'android/build.py', '--game', self.g.id, '--ndk', self.tools['ndk'], '--out', out, '--lib', '--jobs', str(self.o.jobs)] + ([] if self.o.debug else ['--release'])
-                + (['--adrenotools'] if self.o.vulkan_driver else []), self.logs / 'android_host.log', env=self.env)
+                + (['--adrenotools'] if self.o.vulkan_driver else []), self.logs / 'android_host.log', env=self.env, on_line=line)
         self.so = out / 'libdmhost.so'
         if not self.so.is_file(): raise BuildError(f'build.py made no {self.so}')
         PROG.end(f'{self.so.stat().st_size / 2**20:.1f} MB')

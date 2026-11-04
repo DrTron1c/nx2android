@@ -15,7 +15,7 @@ CTL = bytes.fromhex('34127698')
 def stage(seed, st, size):   # an NVN2 stage: (control section, code area), the code starting with an SPH of that stage
     code = struct.pack('<I', {'vs': 1, 'ps': 5}[st] << 10 | 0x61) + hashlib.sha256(seed).digest()
     code += bytes(size - len(code))
-    ctl = bytearray(CTL + b'\xc9\0\0\0' + bytes(0xd0)); struct.pack_into('<I', ctl, 0x44, len(code))
+    ctl = bytearray(CTL + b'\xc9\0\0\0' + bytes(0xd0)); struct.pack_into('<I', ctl, 0x38, len(code)); struct.pack_into('<II', ctl, 0x40, len(code), len(code))
     return bytes(ctl), code
 
 

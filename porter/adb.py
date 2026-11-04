@@ -71,11 +71,33 @@ class Adb:
             if len(parts) >= 2: rows.append((parts[0], parts[1], ' '.join(p for p in parts[2:] if p.startswith(('model:', 'device:')))))
         return rows
 
-    def pick(self):   # the configured device, else the only one connected
+    def wireless_port(self):
+        """The port Wireless debugging listens on now, as it announces it on this device: None when it is off. The port changes every time it is turned on"""
+        try: out = subprocess.run([self.exe, 'mdns', 'services'], capture_output=True, text=True, errors='replace', timeout=15, env=self.env).stdout
+        except subprocess.TimeoutExpired: return None
+        m = re.search(r'_adb-tls-connect\S*\s+\S*?\d+\.\d+\.\d+\.\d+:(\d+)', out)
+        return m and m.group(1)
+
+    def attach(self):   # Wireless debugging on this device: connect again, at its new port if it has one → the devices ready
+        connect = lambda s: subprocess.run([self.exe, 'connect', s], capture_output=True, text=True, errors='replace', timeout=30, env=self.env)
+        connect(self.serial)
         ready = [s for s, st, _ in self.devices() if st == 'device']
-        if self.serial and self.serial not in ready and ':' in self.serial:   # Wireless debugging: the adb server may have ended since the app connected (a port takes hours)
-            subprocess.run([self.exe, 'connect', self.serial], capture_output=True, text=True, errors='replace', timeout=30, env=self.env)
+        if self.serial not in ready and self.serial.startswith('127.0.0.1:') and (port := self.wireless_port()):
+            connect(f'127.0.0.1:{port}')
             ready = [s for s, st, _ in self.devices() if st == 'device']
+            if f'127.0.0.1:{port}' in ready: self.log(f'Wireless debugging moved to port {port}'); self.serial = f'127.0.0.1:{port}'
+        return ready
+
+    def pick(self, wait=0, waiting=None):
+        """The configured device, else the only one connected. wait: seconds to keep trying a Wireless debugging device that is off (a port takes hours, and a device can
+        drop it meanwhile), with waiting() called once when that starts"""
+        ready = [s for s, st, _ in self.devices() if st == 'device']
+        end = time.monotonic() + wait
+        while self.serial and self.serial not in ready and ':' in self.serial:   # the adb server may have ended since the app connected, or Wireless debugging been turned off
+            ready = self.attach()
+            if self.serial in ready or time.monotonic() >= end: break
+            if waiting: waiting(); waiting = None
+            time.sleep(5)
         if self.serial:
             if self.serial not in ready: raise AdbError(f'device {self.serial} is not connected (connected: {", ".join(ready) or "none"})')
             return self.serial

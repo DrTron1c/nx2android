@@ -64,6 +64,13 @@ final class Env {
         return process(c.toArray(new String[0]));
     }
 
+    /** python -m porter ..., which first prints "@pid <its process ID>": pausing and stopping a port signal it and everything it started. */
+    ProcessBuilder porterWithPid(List<String> args) {
+        List<String> c = new ArrayList<>(Arrays.asList("/system/bin/sh", "-c", "echo \"@pid $$\"; exec \"$0\" \"$@\"", new File(usr, "bin/python3").getPath(), "-m", "porter"));
+        c.addAll(args);
+        return process(c.toArray(new String[0]));
+    }
+
     /** Runs a command to its end: its output, or the failure as text. */
     String run(ProcessBuilder b, int timeoutSeconds) {
         StringBuilder out = new StringBuilder();

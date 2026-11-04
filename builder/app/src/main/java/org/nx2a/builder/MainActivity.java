@@ -45,12 +45,13 @@ public final class MainActivity extends Activity implements PortService.Listener
     private final Handler ui = new Handler(Looper.getMainLooper());
     private Env env;
     private SharedPreferences prefs;
-    private TextView toolsState, gameState, keysState, adbState, stepText, logText;
-    private Button toolsButton, portButton, cancelButton;
-    private ProgressBar bar;
+    private TextView toolsState, gameState, keysState, adbState, overallText, stepText, logText;
+    private Button toolsButton, portButton, pauseButton, cancelButton;
+    private ProgressBar overallBar, bar;
+    private LinearLayout checklist;
     private ScrollView logScroll;
     private EditText pairPort, pairCode, connectPort;
-    private CheckBox touch, fps60, installAfter;
+    private CheckBox touch, fps60, installAfter, keepOn;
     private boolean isSwitch2;
 
     @Override protected void onCreate(Bundle b) {
@@ -65,7 +66,8 @@ public final class MainActivity extends Activity implements PortService.Listener
         super.onResume(); PortService.listener = this;
         String dev = prefs.getString("device", null);
         if (dev != null) { adbState.setText("Last connected: " + dev); connectPort.setText(prefs.getString("connect", "")); }
-        if (PortService.running) { logText.setText(PortService.recentLog()); stepText.setText(PortService.lastStep()); setBusy(true); }
+        if (PortService.running) { logText.setText(PortService.recentLog()); setBusy(true); }
+        onState();
     }
     @Override protected void onPause() { super.onPause(); PortService.listener = null; }
 
@@ -136,10 +138,16 @@ public final class MainActivity extends Activity implements PortService.Listener
         touch = new CheckBox(this); touch.setText("Touch game (hide the on-screen gamepad)"); touch.setTextColor(TEXT); add(c5, touch, 6);
         fps60 = new CheckBox(this); fps60.setText("60 fps when the game's build allows it"); fps60.setTextColor(TEXT); add(c5, fps60, 0);
         installAfter = new CheckBox(this); installAfter.setText("Install when done"); installAfter.setTextColor(TEXT); installAfter.setChecked(true); add(c5, installAfter, 0);
+        keepOn = new CheckBox(this); keepOn.setText("Keep the screen on while porting"); keepOn.setTextColor(TEXT); keepOn.setChecked(prefs.getBoolean("keepOn", true)); add(c5, keepOn, 0);
+        keepOn.setOnCheckedChangeListener((v, on) -> { prefs.edit().putBoolean("keepOn", on).apply(); screen(); });
+        overallText = text("", 16, TEXT, true); overallText.setVisibility(View.GONE); add(c5, overallText, 10);
+        overallBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); overallBar.setMax(1000); overallBar.setVisibility(View.GONE); add(c5, overallBar, 4);
         stepText = text("", 14, TEXT, false); add(c5, stepText, 8);
-        bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); bar.setVisibility(View.GONE); add(c5, bar, 6);
+        bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); bar.setVisibility(View.GONE); add(c5, bar, 4);
+        checklist = new LinearLayout(this); checklist.setOrientation(LinearLayout.VERTICAL); add(c5, checklist, 8);
         portButton = button("Port this game", true, v -> port()); add(c5, portButton, 10);
-        cancelButton = button("Cancel", false, v -> PortService.cancel()); cancelButton.setVisibility(View.GONE); add(c5, cancelButton, 8);
+        pauseButton = button("Pause", false, v -> PortService.command(this, PortService.state(this).paused ? PortService.RESUME : PortService.PAUSE)); pauseButton.setVisibility(View.GONE); add(c5, pauseButton, 8);
+        cancelButton = button("Cancel", false, v -> PortService.command(this, PortService.CANCEL)); cancelButton.setVisibility(View.GONE); add(c5, cancelButton, 8);
         add(root, c5, 12);
 
         LinearLayout c6 = card("Log");
@@ -295,19 +303,66 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (k == null && !isSwitch2) { stepText.setText("Choose your prod.keys first."); return; }
         boolean install = installAfter.isChecked();
         if (install && d == null) { stepText.setText("Connect Wireless debugging first, or untick Install when done."); return; }
+        askToRunInBackground();
         ArrayList<String> a = new ArrayList<>(Arrays.asList("port", f, "--work", env.work.getPath(), "--jobs", "4", "--progress", "json"));
         if (k != null) { a.add("-k"); a.add(k); }
         if (install) { a.add("--install"); a.add("--device"); a.add(d); }
         if (touch.isChecked()) a.add("--touch");
         if (fps60.isChecked()) a.add("--fps60");
-        logText.setText(""); setBusy(true); stepText.setText("Starting");
+        logText.setText(""); setBusy(true); stepText.setText("Starting"); stepText.setTextColor(TEXT);
         PortService.listener = this;
         PortService.start(this, a);
     }
+    /** The first time: Android's own question that lets a port go on with the screen off. HyperOS's own battery setting is under the button in the Log card. */
+    private void askToRunInBackground() {
+        if (getSystemService(android.os.PowerManager.class).isIgnoringBatteryOptimizations(getPackageName()) || prefs.getBoolean("askedBattery", false)) return;
+        prefs.edit().putBoolean("askedBattery", true).apply();
+        try { startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName()))); } catch (RuntimeException ignored) { }
+    }
+    private void screen() {
+        boolean on = PortService.running && !PortService.state(this).paused && keepOn.isChecked();
+        if (on) getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
     private void setBusy(boolean busy) {
         portButton.setEnabled(!busy); toolsButton.setEnabled(!busy);
-        cancelButton.setVisibility(PortService.running || busy && portButton != null && PortService.running ? View.VISIBLE : View.GONE);
+        cancelButton.setVisibility(PortService.running ? View.VISIBLE : View.GONE);
+        pauseButton.setVisibility(PortService.running ? View.VISIBLE : View.GONE);
         bar.setVisibility(busy ? View.VISIBLE : View.GONE); bar.setIndeterminate(true);
+        screen();
+    }
+
+    /** The port's figures, as saved: also after the app was closed, when the port has stopped or finished without it. */
+    @Override public void onState() {
+        PortState s = PortService.state(this);
+        boolean live = PortService.running, known = !s.stages.isEmpty();
+        overallText.setVisibility(known ? View.VISIBLE : View.GONE); overallBar.setVisibility(known ? View.VISIBLE : View.GONE);
+        if (!known) return;
+        overallText.setText(s.overallLine()); overallBar.setProgress((int) (s.overall() * 1000));
+        while (checklist.getChildCount() > s.stages.size()) checklist.removeViewAt(checklist.getChildCount() - 1);
+        while (checklist.getChildCount() < s.stages.size()) add(checklist, text("", 13, DIM, false), 3);
+        for (int i = 0; i < s.stages.size(); i++) {
+            PortState.Stage x = s.stages.get(i); TextView row = (TextView) checklist.getChildAt(i);
+            row.setText(s.row(x));
+            row.setTextColor(x.status == PortState.DONE ? GOOD : x.status == PortState.RUNNING ? TEXT : x.status == PortState.FAILED ? ACCENT : DIM);
+        }
+        if (live) {
+            String line = s.stepLine();
+            if (!line.isEmpty()) {
+                stepText.setText(line); stepText.setTextColor(TEXT); bar.setVisibility(View.VISIBLE);
+                bar.setIndeterminate(false); bar.setMax(1000); bar.setProgress((int) (s.stageFraction() * 1000));
+            }
+            pauseButton.setText(s.paused ? "Resume" : "Pause");
+            pauseButton.setVisibility(View.VISIBLE); cancelButton.setVisibility(View.VISIBLE);
+            portButton.setText("Port this game"); portButton.setEnabled(false);
+        } else {
+            bar.setVisibility(View.GONE);
+            pauseButton.setVisibility(View.GONE); cancelButton.setVisibility(View.GONE);
+            portButton.setEnabled(true);
+            if (s.canContinue()) { portButton.setText("Continue from " + s.nextStep()); stepText.setText("Everything finished so far is saved."); stepText.setTextColor(DIM); }
+            else portButton.setText("Port this game");
+        }
+        screen();
     }
 
     @Override public void onLine(String line) {
@@ -317,12 +372,14 @@ public final class MainActivity extends Activity implements PortService.Listener
     }
     @Override public void onStep(String step, long done, long total) {
         stepText.setText(step + (total > 0 ? "  " + (100 * done / total) + "%" : ""));
-        bar.setVisibility(View.VISIBLE); cancelButton.setVisibility(PortService.running ? View.VISIBLE : View.GONE);
+        bar.setVisibility(View.VISIBLE);
         if (total > 0) { bar.setIndeterminate(false); bar.setMax(1000); bar.setProgress((int) (1000 * done / total)); } else bar.setIndeterminate(true);
     }
     @Override public void onDone(boolean ok, String summary) {
-        setBusy(false); bar.setVisibility(View.GONE); cancelButton.setVisibility(View.GONE);
-        stepText.setText(ok ? "Done: " + summary : "The port stopped. The last lines of the log say why.");
-        stepText.setTextColor(ok ? GOOD : ACCENT);
+        setBusy(false); bar.setVisibility(View.GONE);
+        onState();
+        PortState s = PortService.state(this);
+        stepText.setText(ok ? "Done: " + summary : s.cancelled ? "Cancelled. Everything finished so far is saved." : "The port stopped. The last lines of the log say why. Everything finished so far is saved.");
+        stepText.setTextColor(ok ? GOOD : s.cancelled ? DIM : ACCENT);
     }
 }
