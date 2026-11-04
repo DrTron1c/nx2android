@@ -43,7 +43,7 @@ jobs:
         run: |
           dotnet build nxnative/dm/tools/nx_extract -c Release -o bundle/prebuilt/nx_extract -v q -nologo -p:UseAppHost=false
           dotnet build nxnative/dm/gfx/tools/dmsh_xlate -c Release -o bundle/prebuilt/dmsh_xlate -v q -nologo -p:UseAppHost=false
-          printf '#!/system/bin/sh\nexec "$PREFIX/bin/dotnet" "${0%%/*}/nx_extract.dll" "$@"\n' > bundle/prebuilt/nx_extract/nx_extract
+          printf '#!/system/bin/sh\nexec "$DOTNET_ROOT/dotnet" "${0%%/*}/nx_extract.dll" "$@"\n' > bundle/prebuilt/nx_extract/nx_extract
           chmod 755 bundle/prebuilt/nx_extract/nx_extract
       - name: Toolchain in Termux, and a host built with it under bionic
         id: termux
