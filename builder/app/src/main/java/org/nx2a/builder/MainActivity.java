@@ -63,6 +63,8 @@ public final class MainActivity extends Activity implements PortService.Listener
     }
     @Override protected void onResume() {
         super.onResume(); PortService.listener = this;
+        String dev = prefs.getString("device", null);
+        if (dev != null) { adbState.setText("Last connected: " + dev); connectPort.setText(prefs.getString("connect", "")); }
         if (PortService.running) { logText.setText(PortService.recentLog()); stepText.setText(PortService.lastStep()); setBusy(true); }
     }
     @Override protected void onPause() { super.onPause(); PortService.listener = null; }
@@ -121,7 +123,9 @@ public final class MainActivity extends Activity implements PortService.Listener
 
         LinearLayout c4 = card("4. Wireless debugging");
         adbState = text("", 14, DIM, false); add(c4, adbState, 6);
-        add(c4, text("Needed once per restart to install the game and copy its data. Pair once: put this app and Settings side by side, open Developer options → Wireless debugging → Pair device with pairing code, and type the port and code here.", 13, DIM, false), 6);
+        add(c4, text("Needed to install the game and copy its data. Tap the button, then in Settings open Developer options → Wireless debugging → Pair device with pairing code and leave that popup open. Pull down the notification from this app, tap Enter code and type the six-digit code.", 13, DIM, false), 6);
+        add(c4, button("Pair using a notification", true, v -> pairByNotification()), 10);
+        add(c4, text("Or type them here, with this app and Settings side by side:", 13, DIM, false), 12);
         LinearLayout row = new LinearLayout(this); pairPort = field("Pairing port", 110); pairCode = field("Pairing code", 110); grow(row, pairPort); grow(row, pairCode);
         row.addView(button("Pair", false, v -> pair())); add(c4, row, 8);
         LinearLayout row2 = new LinearLayout(this); connectPort = field("Connect port", 110); connectPort.setText(prefs.getString("connect", "")); grow(row2, connectPort);
@@ -242,6 +246,17 @@ public final class MainActivity extends Activity implements PortService.Listener
     }
 
     // ---- 4. wireless debugging: adb against this device ----
+    private void pairByNotification() {
+        if (!env.ready()) { adbState.setText("Download the tools first."); return; }
+        if (!getSystemService(android.app.NotificationManager.class).areNotificationsEnabled()) {
+            adbState.setText("Turn on notifications for this app, then tap the button again.");
+            startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
+            return;
+        }
+        startForegroundService(new Intent(this, PairService.class));
+        adbState.setText("Waiting for the pairing popup in Settings.");
+        try { startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)); } catch (RuntimeException ignored) { }
+    }
     private void pair() {
         String p = pairPort.getText().toString().trim(), c = pairCode.getText().toString().trim();
         if (p.isEmpty() || c.isEmpty()) { adbState.setText("Type the pairing port and code first."); return; }
