@@ -157,6 +157,7 @@ public final class MainActivity extends Activity implements PortService.Listener
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("nx2android log", logText.getText()));
             stepText.setText("Log copied. It is also saved in nx2android/last-port.log in your storage.");
         }), 8);
+        add(c6, button("Get game log", false, v -> gameLog()), 8);
         add(c6, button("Battery settings for this app", false, v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())))), 8);
         add(root, c6, 12);
 
@@ -292,6 +293,26 @@ public final class MainActivity extends Activity implements PortService.Listener
                 adbState.setText(ok ? "Connected to " + target : out);
                 if (ok) { prefs.edit().putString("device", target).putString("connect", p2).apply(); connectPort.setText(p2); }
             });
+        });
+    }
+
+    /** What the last ported game wrote, and why Android ended it. Only the shell can read another app's files, so this needs Wireless debugging. */
+    private void gameLog() {
+        String d = prefs.getString("device", null);
+        if (d == null) { stepText.setText("Connect Wireless debugging first."); return; }
+        stepText.setText("Getting the game log"); stepText.setTextColor(TEXT);
+        String typed = connectPort.getText().toString().trim();
+        bg(() -> {
+            String port = typed;
+            Matcher f = Pattern.compile("_adb-tls-connect\\S*\\s+\\S*?(\\d+\\.\\d+\\.\\d+\\.\\d+):(\\d+)").matcher(env.run(env.adb("mdns", "services"), 10));
+            if (f.find()) port = f.group(2);
+            String target = validPort(port) ? "127.0.0.1:" + port : d;
+            env.run(env.adb("connect", target), 15);
+            String out = env.run(env.adb("-s", target, "shell", "for f in /sdcard/Android/data/org.nx2a.t*/files/log*.txt; do echo \"== $f\"; tail -n 400 \"$f\"; done; echo == logcat; logcat -d -t 1500 | grep -iE 'nx2a|dmhost|DEBUG|tombstone|libc|lowmemory|vulkan|adreno|am_kill|AndroidRuntime' | tail -n 400"), 60);
+            String saved = "";
+            try (java.io.FileWriter w = new java.io.FileWriter(new File("/sdcard/nx2android/game-log.txt"))) { w.write(out); saved = "Saved as nx2android/game-log.txt in your storage."; } catch (java.io.IOException e) { saved = "Copy it with Copy log."; }
+            String s = saved;
+            post(() -> { logText.setText(out); stepText.setText(s); stepText.setTextColor(GOOD); });
         });
     }
 
