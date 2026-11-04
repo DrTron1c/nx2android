@@ -1,6 +1,6 @@
 # Installing a port on a device over adb: the APK, then the data pack into the app's files folder (porter/adb.py pushes it in resumable pieces).
 # The player's own files there are kept: the pause menu's settings.txt, the logs, the Vulkan pipeline caches; saves are in the app's internal storage, which an update keeps.
-import os, shlex
+import os, shlex, time
 from pathlib import Path
 
 from porter import datapack
@@ -9,6 +9,19 @@ from porter.upstream import BuildError, PROG, say
 
 
 WAIT = 6 * 3600   # seconds an app on the device waits for Wireless debugging: everything before the install is done by then, and a stop here would only ask the player to tap again
+
+
+def by_hand(adb, apk, package):
+    """HyperOS can refuse an install over adb whatever its settings say. The APK goes to shared storage for the player to open, and the install goes on once Android has it"""
+    stamp = lambda: adb.shell(f'dumpsys package {shlex.quote(package)} | grep -m1 lastUpdateTime; true', check=False).strip()
+    was, dst = stamp(), f'/sdcard/nx2android/{apk.name}'
+    adb.shell('mkdir -p /sdcard/nx2android'); adb.run('push', '-Z', apk, dst, timeout=300)
+    say(f'[RED] This device refused the install. Open Files, go to nx2android, tap {apk.name} and choose Install (allow installs from Files if it asks). The port goes on by itself after that')
+    PROG.set(step=f'waiting for you to install nx2android/{apk.name} from Files')
+    for _ in range(WAIT // 5):
+        time.sleep(5)
+        if stamp() != was: say('installed by hand'); return
+    raise AdbError(f'{apk.name} was not installed from Files')
 
 
 def install(apk, data, adb_exe, serial=None, replace_signer=False):
@@ -34,7 +47,10 @@ def install(apk, data, adb_exe, serial=None, replace_signer=False):
         need = man['bytes'] - sum(have.values())
         if free is not None and need > free: raise BuildError(f'the device has {free / 2**30:.1f} GB free; the game needs {need / 2**30:.1f} GB more')
         PROG.set(step=f'installing {apk.name}')
-        adb.install(apk, man['package'], replace_signer=replace_signer)
+        try: adb.install(apk, man['package'], replace_signer=replace_signer)
+        except AdbError as e:
+            if 'INSTALL_FAILED_USER_RESTRICTED' not in str(e) or not os.environ.get('NX2A_PREBUILT'): raise
+            by_hand(adb, apk, man['package'])
         PROG.set(step='letting the app create its files folder')
         if adb.prepare_app_files(man['package']): say('started the app once so Android made its files folder (it stops at once without its data)')
         PROG.set(step='pushing the game data', done=0, total=man['bytes'], unit='B'); pushing = True
