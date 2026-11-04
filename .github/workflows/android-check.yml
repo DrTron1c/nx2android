@@ -39,6 +39,13 @@ jobs:
         run: |
           dotnet build nxnative/dm/tools/nx_extract -c Release -o out/nx_extract -v q -nologo 2>&1 | tail -60 | tee ci/nx_extract.log
           dotnet build nxnative/dm/gfx/tools/dmsh_xlate -c Release -o out/xlate -v q -nologo 2>&1 | tail -60 | tee ci/xlate.log
+      - name: The engine's Python tools
+        continue-on-error: true
+        run: |
+          pip install pyflakes
+          python -m pyflakes nxnative/dm/tools/*.py nxnative/dm/gfx/tools/*.py nxnative/dm/games/*.py nxnative/dm/android/tools/*.py nxnative/scripts/*.py porter/*.py 2>&1 | grep -E 'undefined name|syntax|invalid|expected|unexpected|redefinition of unused .(pack|run|main|split|red)' | head -60 > ci/pyflakes.log || true
+          (cd nxnative && timeout 900 python -m unittest discover -s dm/tools/tests -p 'test_*.py' 2>&1 | tail -70) > ci/tool-tests.log || true
+          (cd nxnative && timeout 600 python -m unittest discover -s dm/gfx/tests -p 'test_*.py' 2>&1 | tail -50) > ci/gfx-tool-tests.log || true
       - name: Unit tests
         continue-on-error: true
         run: python -m unittest discover tests 2>&1 | tail -60 | tee ci/tests.log

@@ -214,14 +214,6 @@ PPtr<Shader>: int m_FileID; SInt64 m_PathID
 PPtr<Texture>: int m_FileID; SInt64 m_PathID
 Shader: string m_Name; SerializedShader m_ParsedForm; vector<data:unsigned int> platforms; vector<data:unsigned int> offsets; vector<data:unsigned int> compressedLengths; vector<data:unsigned int> decompressedLengths; vector<data:UInt8> compressedBlob; vector<data:PPtr<Shader>> m_Dependencies; map<data:pair(string,PPtr<Texture>)>~ m_NonModifiableTextures; bool! m_ShaderIsBaked
 '''
-# The Unity 2019.4 Shader (Unpacking, Unity 2019.4.34f1: no bundles, its shaders in Data/*.assets and Data/Resources), from 2019.4.34f1's type tree as AssetRipper's TypeTreeDumps records it
-# (2019.4.33f1's is the same), checked node for node with the flags: 2018.3's with global and local keyword indices per subprogram, a ray tracing program per pass and, as from 2019.3,
-# several segments per platform (offsets, compressedLengths and decompressedLengths are lists per platform)
-SHADER_2019_4 = (SHADER_2018_3.replace('vector<data:UInt16> m_KeywordIndices;', 'vector<data:UInt16> m_GlobalKeywordIndices; vector<data:UInt16> m_LocalKeywordIndices;')
-                 .replace('SerializedProgram progDomain; bool', 'SerializedProgram progDomain; SerializedProgram progRayTracing; bool')
-                 .replace('vector<data:unsigned int> offsets; vector<data:unsigned int> compressedLengths; vector<data:unsigned int> decompressedLengths;',
-                          'vector<data:vector<data:unsigned int>> offsets; vector<data:vector<data:unsigned int>> compressedLengths; vector<data:vector<data:unsigned int>> decompressedLengths;'))
-assert SHADER_2019_4.count('m_LocalKeywordIndices') == SHADER_2019_4.count('progRayTracing') == 1 and SHADER_2019_4.count('vector<data:vector<data:unsigned int>>') == 3
 # Unity 2017.4.28f1 (Return of the Obra Dinn): the same layout except for these two absent fields, checked against
 # AssetRipper's TypeTreeDumps StructsDump/release/2017.4.28f1.dump. The built-in resources strip their trees and no bundle
 # supplies this hash. The instancing flag itself takes the alignment formerly carried by the following flag.
@@ -247,16 +239,6 @@ ComputeShaderCB: string name; int byteSize; vector<data:ComputeShaderParam> para
 ComputeShaderPlatformVariant: int targetRenderer; int targetLevel; vector<data:ComputeShaderKernelParent> kernels; vector<data:ComputeShaderCB> constantBuffers; bool! resourcesResolved
 ComputeShader: string m_Name; vector<data:ComputeShaderPlatformVariant> variants
 '''
-# The Unity 6.3 ComputeShader (Viractal: Will You Trust Your Party?, Unity 6000.3.12f1: in Data/globalgamemanagers.assets and Data/Resources/unity default resources, which carry
-# no type trees), from 6000.3.12f1's type tree as AssetRipper's TypeTreeDumps records it: 2022.3's with one field more, ComputeShaderResource.resType, at its end
-COMPUTE_6000_3 = COMPUTE_2022_3.replace('ComputeShaderResource: string name; string generatedName; int bindPoint; int samplerBindPoint; int texDimension\n',
-                                        'ComputeShaderResource: string name; string generatedName; int bindPoint; int samplerBindPoint; int texDimension; int resType\n')
-assert COMPUTE_6000_3 != COMPUTE_2022_3
-# The Unity 2019.4 ComputeShader (Unpacking, Unity 2019.4.34f1: in Data/sharedassets1.assets and Data/Resources/unity default resources), from 2019.4.34f1's type tree as AssetRipper's
-# TypeTreeDumps records it: an older form, each platform variant's kernels are the variants themselves (no kernel parents, no keyword sets)
-COMPUTE_2019_4 = '''ComputeShaderResource: string name; string generatedName; int bindPoint; int samplerBindPoint; int texDimension
-ComputeShaderBuiltinSampler: unsigned int sampler; int bindPoint
-ComputeShaderKernel: string name; vector<data:ComputeShaderResource> cbs; vector<data:ComputeShaderResource> textures; vector<data:ComputeShaderBuiltinSampler> builtinSamplers; vector<data:ComputeShaderResource> inBuffers; vector<data:ComputeShaderResource> outBuffers; vector<data:UInt8> code; vector<data:unsigned int>~ threadGroupSize
 # Unity 2021.3.18f1 (Shin chan: Shiro and the Coal Town, PR #440): checked against all 144 nodes and alignment flags
 # of AssetRipper's StructsDump/release/2021.3.18f1.dump. Code is bytes in both layouts; 2021.3 stores keyword variants
 # in a map and uses a staticvector for threadGroupSize. Keep resourcesResolved aligned between platform variants.
@@ -326,7 +308,6 @@ KNOWN_TREES = {(CLASS_SHADER, bytes.fromhex('4496e93f2179252104401c8dda0a1751'))
                (CLASS_SHADER, bytes.fromhex('a30e3dcf6c6d25153d6f64e5e41caf4e')): ('Shader', SHADER_2020_3),
                (CLASS_SHADER, bytes.fromhex('ed2a06ce7fb8203f6efb5ab5e0ce20d5')): ('Shader', SHADER_2019_4),
                (CLASS_SHADER, bytes.fromhex('8db760073e1392061e4a36995f0735af')): ('Shader', SHADER_2018_3),
-               (CLASS_SHADER, bytes.fromhex('ed2a06ce7fb8203f6efb5ab5e0ce20d5')): ('Shader', SHADER_2019_4),
                (CLASS_SHADER, bytes.fromhex('266d53113fa30d2b858f2768f92eaa14')): ('Shader', SHADER_2017_4),
                (CLASS_COMPUTE_SHADER, bytes.fromhex('43a0948a3f403068c0b31bff90ba0c9a')): ('ComputeShader', COMPUTE_6000_3),
                (CLASS_COMPUTE_SHADER, bytes.fromhex('bfdf63ab0ce84d5a2c765ee560d90fe7')): ('ComputeShader', COMPUTE_2022_3),
