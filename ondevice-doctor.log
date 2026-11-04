@@ -1,0 +1,19 @@
+ok  Python          3.14.8 (/data/data/com.termux/files/usr/bin/python)
+ok  Python modules  lz4, capstone, zstd
+ok  Pillow          the app icon from the game's icon
+ok  pycryptodome    NSZ / XCZ dumps (porter.dumps)
+ok  fontTools       the button icons in game text
+ok  Android NDK     27.2.12479018 at /workdir/bundle/ndk
+ok  .NET SDK        prebuilt tools (/data/data/com.termux/files/usr/lib/dotnet/dotnet)
+ok  adb             /data/data/com.termux/files/usr/bin/adb
+!!  prod.keys       not set
+                   → dump prod.keys from your own Switch and set its path
+ok  Disk space      105 GB free on /
+0400380020056000  experimental Splatoon Raiders
+04003F40232DE000  experimental Hyrule Warriors: Age of Imprisonment
+040074A01BF12000  experimental Donkey Kong Bananza
+04007EF01F8AE000  experimental Fire Emblem Fortune's Weave
+0400A3A01EE4C000  experimental Pokemon Pokopia
+3019204648af74d0
+usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--app <title ID>] [--romfs-image|--manifest] [--allow-damaged]
+       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir or image> [<DLC title ID>] [--romfs-image]

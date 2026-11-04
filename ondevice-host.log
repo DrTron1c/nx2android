@@ -1,0 +1,4 @@
+compiled 190 sources, 0 failed
+linked /data/data/com.termux/files/usr/tmp/host/libdmhost.so
+stripped /data/data/com.termux/files/usr/tmp/host/libdmhost.so: 1850 KB
+-rwxr-xr-x 1 system system 1894800 Nov  4 00:06 /data/data/com.termux/files/usr/tmp/host/libdmhost.so

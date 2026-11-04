@@ -1,0 +1,53 @@
+--- python
+/data/data/com.termux/files/nx2a/usr android
+--- doctor
+ok  Python          3.14.8 (/data/data/com.termux/files/nx2a/usr/bin/python3)
+ok  Python modules  lz4, capstone, zstd
+ok  Pillow          the app icon from the game's icon
+ok  pycryptodome    NSZ / XCZ dumps (porter.dumps)
+ok  fontTools       the button icons in game text
+ok  Android NDK     27.2.12479018 at /data/data/com.termux/files/nx2a/ndk
+ok  .NET SDK        prebuilt tools (/data/data/com.termux/files/nx2a/usr/lib/dotnet/dotnet)
+ok  adb             /data/data/com.termux/files/nx2a/usr/bin/adb
+!!  prod.keys       not set
+                   → dump prod.keys from your own Switch and set its path
+ok  Disk space      105 GB free on /
+--- host
+compiled 190 sources, 0 failed
+linked /data/data/com.termux/files/nx2a/host/libdmhost.so
+stripped /data/data/com.termux/files/nx2a/host/libdmhost.so: 1851 KB
+-rwxr-xr-x 1 system system 1896352 Nov  4 00:08 /data/data/com.termux/files/nx2a/host/libdmhost.so
+--- translator
+3019204648af74d0
+--- extractor
+usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--app <title ID>] [--romfs-image|--manifest] [--allow-damaged]
+--- adb
+Android Debug Bridge version 1.0.41
+--- switch 2 folder
+{
+  "title_id": "0400A3A01EE4C000",
+  "base": "tmplcq_l1th",
+  "updates": [],
+  "dlc": [],
+  "profile": "0400A3A01EE4C000",
+  "android": {
+    "id": "0400A3A01EE4C000",
+    "name": "Pokemon Pokopia",
+    "android": true,
+    "status": "experimental",
+    "tested": "",
+    "package": "org.nx2a.t0400a3a01ee4c000"
+  },
+  "versions": [
+    "v0"
+  ],
+  "pack": "v0",
+  "supported": true,
+  "reason": "a 
+[00:08:14] packing /data/data/com.termux/files/nx2a/tmp/tmplcq_l1th/base/romfs → /data/data/com.termux/files/nx2a/tmp/tmpv5s_ktkq/extract/v0/RomFS.img
+[00:08:14]   2 entries, 0.00 GB
+(PosixPath('/data/data/com.termux/files/nx2a/tmp/tmpv5s_ktkq/extract/v0'), None)
+--- apk
+usage: mkapk.py [-h] [--package PACKAGE] [--label LABEL] [--lib LIB]
+                [--landscape] [--extra-so EXTRA_SO] [--icon ICON]
+ALL-RAN
