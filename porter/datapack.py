@@ -19,6 +19,10 @@ OWNED = ('mods', 'RomFS', 'aoc')            # folders the pack owns on the devic
 def link_or_copy(src, dst):
     dst.parent.mkdir(parents=True, exist_ok=True)
     try: os.link(src, dst)
+    except AttributeError:   # Python on Android has no os.link. A big file is linked by name, or the pack would take its size again (Pokopia's shaders are 28 GB); push_file reads through the link.
+        # A small one is copied: adb push would send a link as a link
+        if os.path.getsize(src) > 64 << 20: os.symlink(os.path.abspath(src), dst)
+        else: shutil.copy2(src, dst)
     except OSError: shutil.copy2(src, dst)
 
 

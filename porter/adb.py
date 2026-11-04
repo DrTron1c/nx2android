@@ -297,6 +297,6 @@ class Adb:
                     self.run('push', '-Z', tmp, f'{pdir}/{name}', timeout=max(self.timeout, 600))
                 if progress: progress(k * chunk + want, size, f'{local.name} piece {k + 1}/{n}')
         q, qp = shlex.quote(dst), shlex.quote(pdir)   # join the pieces in order, then check the size
-        self.shell(f'rm -f {q} && for x in $(ls {qp} | sort); do cat {qp}/$x >> {q} || exit 1; done && rm -rf {qp}', timeout=1200)
+        self.shell(f'rm -f {q} && for x in $(ls {qp} | sort); do cat {qp}/$x >> {q} && rm -f {qp}/$x || exit 1; done && rm -rf {qp}', timeout=3600)   # each piece goes as it is joined: a 28 GB file does not need 56 GB
         got = self.shell(f'stat -c %s {q}').strip()
         if got != str(size): raise AdbError(f'{local.name}: {got} bytes on the device, expected {size}')
