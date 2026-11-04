@@ -557,6 +557,7 @@ uint64_t mtl_samp_seq(void) { return __atomic_load_n(&g_sregs, __ATOMIC_ACQUIRE)
 static pthread_mutex_t g_rmu = PTHREAD_MUTEX_INITIALIZER;
 __attribute__((weak)) uint64_t nvn_jobs_queued(void) { return 0; }
 __attribute__((weak)) uint64_t nvn_replaying_job(void) { return 0; }
+void mtl_reg_image(int tid, const tex_t *t, const view_t *v);
 void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
     if (tid < 0) return;
     uint64_t seq = nvn_jobs_queued();
@@ -762,3 +763,6 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
     mtl_wait(mtl_sub_commit(), ~0ull);
     for (size_t z = 0; z < depth; z++) for (size_t y = 0; y < rows; y++) memcpy(dst + z * img + y * row, p + (z * rows + y) * pitch, pitch < row ? pitch : row);
 }
+
+// NVN's RegisterImage: the same table on Vulkan, where a descriptor's use is set at bind time
+void mtl_reg_image(int tid, const tex_t *t, const view_t *v) { mtl_reg_tex(tid, t, v); }

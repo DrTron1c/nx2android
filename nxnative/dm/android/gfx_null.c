@@ -114,6 +114,7 @@ void mtl_tex_init(const tex_t *t) { (void)t; }
 void mtl_tex_release(tex_t *t) { (void)t; }
 void mtl_tex_cpu_written(const tex_t *t) { (void)t; }
 void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) { (void)tid; (void)t; (void)v; }
+void mtl_reg_image(int tid, const tex_t *t, const view_t *v) { (void)tid; (void)t; (void)v; }
 void mtl_reg_samp(int sid, const samp_par *sp) { (void)sid; (void)sp; }
 void mtl_set_tex_pool_n(int n) { (void)n; }
 void mtl_prog_release(prog_t *p) { (void)p; }
