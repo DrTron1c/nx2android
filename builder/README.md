@@ -30,3 +30,4 @@ A port of a large game takes hours on a tablet, so the app assumes it will be in
 - **Wireless debugging:** it gets a new port each time it is turned on. `Adb.attach` finds the new one over mDNS, and on a device the install waits up to 6 hours for it to come back instead of failing.
 
 `shader_vk.py` is pinned in the Vulkan shaders' reuse key (`porter/upstream.py`), so a change to how it runs keeps earlier results. A change to what the bundle holds must change that value.
+
