@@ -562,6 +562,7 @@ class Port:
         tmp = self.dmsv.with_name('shaders.dmsv.partial'); nsp.rmtree(tmp); nsp.rmtree(kf)
         def line(s):
             if m := re.match(r'translating (\d+) shaders', s): PROG.set(step=f'translating {int(m.group(1)):,} shaders')
+            elif m := re.match(r'translated (\d+) of (\d+)', s): PROG.set(done=int(m.group(1)), total=int(m.group(2)), unit='shaders')
         nsp.run([PY, DM / 'android/tools/shader_vk.py', pkg, tmp, '--jobs', str(self.o.jobs), '--dotnet', self.tools['dotnet'], '--xlate', xlate, '--capture', cap],
                 self.logs / 'android_shaders.log', env=self.env, on_line=line)
         m = re.search(r'^(\d+) of (\d+) shaders', (self.logs / 'android_shaders.log').read_text(errors='replace'), re.M)

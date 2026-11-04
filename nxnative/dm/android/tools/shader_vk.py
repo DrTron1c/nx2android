@@ -8,7 +8,7 @@
 #   control section, code area), translated beside the package's; a file whose content does not hash to its name, or whose key the package has, is left out
 # Bundle (read by the Vulkan backend, dm/android/gfx_vk_shader.c): "DMSV" u32 version, u32 count, then count entries {u64 key, u32 stage, u32 spv_off, u32 spv_len,
 #   u32 refl_off, u32 refl_len, u32 pad} sorted by key, then the blobs. refl is compact JSON: bindings, c1, local size, notes.
-import argparse, collections, concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys, tempfile
+import argparse, collections, concurrent.futures as cf, hashlib, json, mmap, os, re, struct, subprocess, sys, tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -37,15 +37,18 @@ SB_ALIGN = 256
 # the translator emulates 32-lane warps inside it: lane id & 31, the ballot word of the lane's own 32, shuffles inside its 32, votes by ballot. Its 128 path picks the word by
 # lane id >> 5, so it holds for 64 too. At 32 the warp code read only the first 32 lanes' ballot (Tears of the Kingdom: 32 shaders vote, ballot or shuffle)
 SUBGROUP = 128
+BATCH = 1500   # shaders per translator process
 # Adreno rounds a gather coordinate that sits on a texel edge the other way from Maxwell, so a gather can pick the wrong 2x2 texels. Eden moves gather coordinates
 # 1/512 texel on Qualcomm and Turnip (#4565, TotK's large dark squares); Ryujinx's TexturePass does the same with 8 bits (Program.cs QueryHostGatherBiasPrecision).
 # Tears of the Kingdom on the Adreno 830 drew dark boxes of whole 16x16 tiles in its tiled lighting (607 shaders gather, 38 of them compute): in 2 of 12 camera
 # steps at the Great Sky Island pond and every frame at the Temple of Time's stone circle; with the bias, 0 in 24
 GATHER_BIAS = 8
 
-def records(d):
-    r = [m.start() for m in re.finditer(b'BTCDBTCD', d)]
-    return [d[x:(r[k + 1] if k + 1 < len(r) else len(d))] for k, x in enumerate(r)]
+def records(path):
+    """A package's records, read one at a time: Pokémon Pokopia's packages are 4.4 GB, which a tablet cannot keep in memory alongside everything else a port runs"""
+    f = open(path, 'rb'); d = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    r = [m.start() for m in re.finditer(b'BTCDBTCD', d)] + [len(d)]
+    return lambda i: d[r[i]:r[i + 1]]
 
 SPH_STAGE = {1: 'vs', 2: 'hs', 3: 'ds', 4: 'gs', 5: 'ps'}   # SPH word 0 bits 10..13 (shader_split.py sph_stage)
 def captured(d):
@@ -278,37 +281,53 @@ def main():
         if k in cap: stages[k], rec = cap[k]
         else:
             name, idx = loc[k]
-            if name not in packs: packs[name] = records(open(os.path.join(a.pkg, name), 'rb').read())
-            stages[k], rec = name[:2], packs[name][idx]
+            if name not in packs: packs[name] = records(os.path.join(a.pkg, name))
+            stages[k], rec = name[:2], packs[name](idx)
         jobs[k], c1s[k] = job_for(k, stages[k], rec, w)
-    chunks = [keys[i::a.jobs] for i in range(a.jobs) if keys[i::a.jobs]]
+    # Short batches, each its own translator process: a crash loses one batch, and the memory of a run stays flat. On a tablet this stage takes the longest, so it reports as it goes
+    chunks = [keys[i:i + BATCH] for i in range(0, len(keys), BATCH)]
     def xl(ch):
-        jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
-        return subprocess.run([a.dotnet, XLATE_DLL, jp, w], capture_output=True, text=True, errors='replace')
+        jp = os.path.join(w, f'job_{ch[0]}.json')
+        with open(jp, 'w') as f: json.dump([jobs[k] for k in ch], f)
+        r = subprocess.run([a.dotnet, XLATE_DLL, jp, w], capture_output=True, text=True, errors='replace')
+        os.remove(jp)
+        return len(ch), r.stderr
     print(f'translating {len(keys)} shaders in {len(chunks)} batches ...', flush=True)
-    with cf.ThreadPoolExecutor(len(chunks)) as ex: rs = list(ex.map(xl, chunks))
-    errs = collections.Counter()
-    for r in rs:
-        for ln in r.stderr.splitlines():
-            if ln.strip(): errs[ln.strip()[:120]] += 1
-    entries, fails = [], collections.Counter()
-    for k in keys:
-        spv_p, res_p = os.path.join(w, k + '.spv'), os.path.join(w, k + '.res.json')
-        if not os.path.exists(spv_p): fails['no output'] += 1; continue
-        spv = open(spv_p, 'rb').read(); res = json.load(open(res_p)) if os.path.exists(res_p) else {}
-        binds, local, io = spirv_bindings(spv)
-        st = stages[k]
-        cl = [classify(st, b, res) for b in binds]
-        for e in cl: kinds_all[e['kind']] += 1
-        # header words 2-4: a compute shader's local size; a vertex shader's input locations (all, signed int, unsigned int); a pixel shader's output locations
-        hdr3 = (local or jobs[k].get('local') or [1, 1, 1]) if st == 'cs' else io[1] if st == 'vs' else io[3] if st == 'ps' else [0, 0, 0]
-        entries.append((int(k, 16), STAGES.get(st, 0), spv, refl_bin(cl, c1s[k], hdr3)))
-    entries.sort(key=lambda e: e[0])
-    hdr = struct.pack('<4sII', b'DMSV', 1, len(entries)); ent_sz = 32
-    off = len(hdr) + ent_sz * len(entries); table, blobs = [], []
-    for key, st, spv, refl in entries:
-        table.append(struct.pack('<QIIIIII', key, st, off, len(spv), off + len(spv), len(refl), 0)); blobs += [spv, refl]; off += len(spv) + len(refl)
-    with open(a.out, 'wb') as f: f.write(hdr + b''.join(table) + b''.join(blobs))
+    errs, done = collections.Counter(), 0
+    with cf.ThreadPoolExecutor(a.jobs) as ex:
+        for n, stderr in ex.map(xl, chunks):
+            done += n; print(f'translated {done} of {len(keys)}', flush=True)
+            for ln in stderr.splitlines():
+                if ln.strip(): errs[ln.strip()[:120]] += 1
+    # The bundle is written as it is read, with room left for its table: the SPIR-V of 131,000 shaders does not stay in memory, and the blobs need no order of their own
+    made = [k for k in keys if os.path.exists(os.path.join(w, k + '.spv'))]
+    fails = collections.Counter({'no output': len(keys) - len(made)} if len(made) < len(keys) else {})
+    hdr = struct.pack('<4sII', b'DMSV', 1, len(made)); ent_sz = 32
+    off = len(hdr) + ent_sz * len(made); table = []
+    with open(a.out, 'wb') as f:
+        f.seek(off)
+        for k in made:
+            spv_p, res_p, code_p = os.path.join(w, k + '.spv'), os.path.join(w, k + '.res.json'), os.path.join(w, k + '.bin')
+            with open(spv_p, 'rb') as g: spv = g.read()
+            res = {}
+            if os.path.exists(res_p):
+                with open(res_p) as g: res = json.load(g)
+            binds, local, io = spirv_bindings(spv)
+            st = stages[k]
+            cl = [classify(st, b, res) for b in binds]
+            for e in cl: kinds_all[e['kind']] += 1
+            # header words 2-4: a compute shader's local size; a vertex shader's input locations (all, signed int, unsigned int); a pixel shader's output locations
+            hdr3 = (local or jobs[k].get('local') or [1, 1, 1]) if st == 'cs' else io[1] if st == 'vs' else io[3] if st == 'ps' else [0, 0, 0]
+            refl = refl_bin(cl, c1s[k], hdr3)
+            f.write(spv); f.write(refl)
+            table.append((int(k, 16), STAGES.get(st, 0), off, len(spv), off + len(spv), len(refl)))
+            off += len(spv) + len(refl)
+            for x in (spv_p, res_p, code_p):
+                if os.path.exists(x): os.remove(x)
+        table.sort()
+        f.seek(0); f.write(hdr)
+        for row in table: f.write(struct.pack('<QIIIIII', *row, 0))
+    entries = table
     print(f'{len(entries)} of {len(keys)} shaders → {a.out} ({off / 2**20:.1f} MB); failed: {dict(fails)}; binding kinds: {dict(kinds_all)}')
     for e, n in errs.most_common(8): print(f'  translator: {n:5d}  {e}')
 
