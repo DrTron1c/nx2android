@@ -308,7 +308,7 @@ public final class MainActivity extends Activity implements PortService.Listener
             if (f.find()) port = f.group(2);
             String target = validPort(port) ? "127.0.0.1:" + port : d;
             env.run(env.adb("connect", target), 15);
-            String out = env.run(env.adb("-s", target, "shell", "for f in /sdcard/Android/data/org.nx2a.t*/files/log*.txt; do echo \"== $f\"; tail -n 400 \"$f\"; done; echo == logcat; logcat -d -t 1500 | grep -iE 'nx2a|dmhost|DEBUG|tombstone|libc|lowmemory|vulkan|adreno|am_kill|AndroidRuntime' | tail -n 400"), 60);
+            String out = env.run(env.adb("-s", target, "shell", "for f in /sdcard/Android/data/org.nx2a.t*/files/log*.txt; do echo \"== $f\"; tail -n 400 \"$f\"; done; echo == logcat; logcat -d -b main -b system -b crash -t 6000 | grep -iE 'nx2a|dmhost|DEBUG|tombstone|F libc|lowmemory|lmkd|killing|has died|kgsl|adreno|am_kill|AndroidRuntime|oom' | tail -n 500"), 60);
             String saved = "";
             try (java.io.FileWriter w = new java.io.FileWriter(new File("/sdcard/nx2android/game-log.txt"))) { w.write(out); saved = "Saved as nx2android/game-log.txt in your storage."; } catch (java.io.IOException e) { saved = "Copy it with Copy log."; }
             String s = saved;
