@@ -2,3 +2,5 @@
 status	experimental
 orientation	landscape
 requires	bcn
+# a hardware buffer takes all its memory at once, and 5 GB of them left a 12 GB tablet none (gfx_vk_core.c)
+env	DM_VK_LAZY_POOLS=1

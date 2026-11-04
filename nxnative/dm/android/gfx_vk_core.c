@@ -13,6 +13,7 @@
 #include <android/hardware_buffer.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <sched.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -268,7 +269,17 @@ static const VkBufferUsageFlags POOL_USAGE0 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
     VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 #define POOL_USAGE (POOL_USAGE0 | (V.has_xfb ? VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT : 0))   // any pool range may be a transform feedback buffer
-// Zero copy: the pages of [mem, mem+size) become an AHardwareBuffer's, imported as a VkBuffer. 0 on success
+// DM_VK_LAZY_POOLS=1: a chunk gets its hardware buffer the first time the GPU needs it. A hardware buffer holds all its memory from the start and Android cannot swap it, and textures are
+// uploaded from pool memory into images of their own, so most of a pool may never need one: Pokémon Pokopia makes 5 GB of pools before its first frame, and Android killed it on a 12 GB tablet.
+// The swap: the chunk goes read-only, its contents are copied and the buffer is mapped over it. A guest write or a host write meanwhile waits here (a kernel write gets EFAULT, and
+// its caller prepares again, which waits: hle_fs.c ReadFile), and readers see the same bytes in either mapping
+static _Atomic uint64_t g_swap_lo, g_swap_hi;
+static int swap_has(uint64_t a) { return a >= atomic_load(&g_swap_lo) && a < atomic_load(&g_swap_hi); }
+static void swap_wait(void) { while (atomic_load(&g_swap_hi)) sched_yield(); }
+static int swap_fault(void *addr, int is_write, void *uc) { (void)uc; if (!is_write || !swap_has((uint64_t)(uintptr_t)addr)) return 0; swap_wait(); return 1; }
+static void swap_prep(void *addr, size_t len) { uint64_t a = (uint64_t)(uintptr_t)addr; if (atomic_load(&g_swap_hi) && a < atomic_load(&g_swap_hi) && a + len > atomic_load(&g_swap_lo)) swap_wait(); }
+static int pool_lazy_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_LAZY_POOLS"); on = e && atoi(e); if (on) { dm_fault_hook_register(swap_fault); dm_guest_write_prep_register(swap_prep); } } return on; }
+// Zero copy: the pages of [mem, mem+size) become an AHardwareBuffer's, imported as a VkBuffer. 0 on success. On a chunk already in use (p->lazy) the pages move last, once nothing can fail
 static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     AHardwareBuffer_Desc d = {(uint32_t)size, 1, 1, AHARDWAREBUFFER_FORMAT_BLOB,
         AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER, 0, 0, 0};
@@ -282,9 +293,9 @@ static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     // copy the pool's current contents into the buffer through a temporary mapping, then put the buffer's pages at the pool's address
     uint8_t *tmp = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0], 0);
     int ok = tmp != MAP_FAILED;
-    if (ok) { memcpy(tmp, mem, size); munmap(tmp, size); }
-    ok = ok && mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fds[0], 0) == mem;
-    for (int i = 0; i < nfd; i++) close(fds[i]);
+    if (ok && !p->lazy) { memcpy(tmp, mem, size); munmap(tmp, size); }
+    ok = ok && (p->lazy || mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fds[0], 0) == mem);
+    if (!p->lazy) for (int i = 0; i < nfd; i++) close(fds[i]);
     if (!ok) { AHardwareBuffer_release(ahb); return -1; }
     VkAndroidHardwareBufferPropertiesANDROID ap = {VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
     VkExternalMemoryBufferCreateInfo eb = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO, NULL, VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID};
@@ -294,6 +305,15 @@ static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     VkImportAndroidHardwareBufferInfoANDROID imp = {VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID, &ded, ahb};
     VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &imp, ap.allocationSize, vk_mem_type(ap.memoryTypeBits, 0, 0)};
     if (vkAllocateMemory(V.dev, &ai, NULL, &p->mem) || vkBindBufferMemory(V.dev, p->buf, p->mem, 0)) { vkDestroyBuffer(V.dev, p->buf, NULL); AHardwareBuffer_release(ahb); return -2; }
+    if (p->lazy) {
+        atomic_store(&g_swap_lo, (uint64_t)(uintptr_t)mem); atomic_store(&g_swap_hi, (uint64_t)(uintptr_t)mem + size);
+        if (mprotect(mem, size, PROT_READ)) die("[vk] memory pool %p: cannot hold its writes (errno %d)", mem, errno);
+        memcpy(tmp, mem, size); munmap(tmp, size);
+        if (mmap(mem, size, PROT_READ, MAP_SHARED | MAP_FIXED, fds[0], 0) != mem) die("[vk] memory pool %p: cannot map its hardware buffer (errno %d)", mem, errno);
+        nvn_dirty_reopen(mem, size);
+        atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
+        for (int i = 0; i < nfd; i++) close(fds[i]);
+    }
     p->ahb = ahb; p->zero_copy = 1;
     return 0;
 }
@@ -340,7 +360,7 @@ static void pool_add_one(const void *mem, uint64_t size, uint64_t base, uint64_t
     if (g_npool == MAXPOOL) { pthread_rwlock_unlock(&g_pool_mu); die("[vk] too many memory pools"); }
     vkpool_t *p = &g_pool[g_npool]; memset(p, 0, sizeof *p);
     p->lo = (uint64_t)(uintptr_t)mem; p->hi = p->lo + size; p->base = base; p->end = end; { static uint64_t ser; p->serial = ++ser; }
-    int zc = ((uintptr_t)mem & 0xfff) || (size & 0xfff) ? -3 : getenv("DM_VK_NO_ZEROCOPY") ? -4 : zc_over(end - base) ? -5 : pool_zero_copy(p, (uint8_t *)mem, size);
+    int zc = ((uintptr_t)mem & 0xfff) || (size & 0xfff) ? -3 : getenv("DM_VK_NO_ZEROCOPY") ? -4 : zc_over(end - base) ? -5 : (p->lazy = pool_lazy_on()) ? 0 : pool_zero_copy(p, (uint8_t *)mem, size);
     if (zc) {
         static int said; if (!said++) VKLOG("[RED] memory pool %p +%#llx could not be zero-copy (%d): a GPU copy is refreshed before each submission (slow)", mem, (unsigned long long)size, zc);
         VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
@@ -364,9 +384,22 @@ void mtl_pool_del(const void *mem) {
         vkpool_t p = g_pool[i]; g_pool[i] = g_pool[--g_npool]; pool_ord_make(); __atomic_fetch_add(&g_pool_gen, 1, __ATOMIC_RELEASE);
         pthread_rwlock_unlock(&g_pool_mu);
         if (p.zero_copy) pool_copy_back(&p);
-        vk_defer_free_buffer(p.buf, p.mem);   // the AHardwareBuffer goes with the imported memory's last reference
+        if (p.buf) vk_defer_free_buffer(p.buf, p.mem);   // the AHardwareBuffer goes with the imported memory's last reference
         if (p.ahb) AHardwareBuffer_release(p.ahb);
     }
+}
+// The hardware buffer of a lazy chunk, made at the first lookup that finds it (vk_pool_of). Under the write lock: nothing else is finding pools, and an entry cannot move
+static vkpool_t *pool_materialize(uint64_t lo) {
+    vkpool_t *r = NULL;
+    pthread_rwlock_wrlock(&g_pool_mu);
+    for (int i = 0; i < g_npool; i++) if (g_pool[i].lo == lo) { r = &g_pool[i]; break; }
+    if (r && !r->buf) {
+        int rc = pool_zero_copy(r, (uint8_t *)(uintptr_t)r->lo, r->hi - r->lo);
+        if (rc) die("[vk] memory pool %#llx +%#llx: no hardware buffer (%d), and the device has no memory left for it", (unsigned long long)r->lo, (unsigned long long)(r->hi - r->lo), rc);
+        static uint64_t mb; mb += (r->hi - r->lo) >> 20; static int n; if (n++ < 64 || !(n & 15)) VKLOG("memory pool chunk %#llx: hardware buffer made on first use (%llu MB in such buffers)", (unsigned long long)r->lo, (unsigned long long)mb);
+    }
+    pthread_rwlock_unlock(&g_pool_mu);
+    return r;
 }
 vkpool_t *vk_pool_of(uint64_t addr, uint64_t len) {
     // the last pools this thread found, while none was added or removed: the replay looks up every buffer binding of every draw, and the read lock alone was ~6% of it
@@ -381,7 +414,9 @@ vkpool_t *vk_pool_of(uint64_t addr, uint64_t len) {
     if (!r)   // not in that one: the scan as before (pools over the same memory, and the range across two chunks it reports)
         for (int i = 0; i < g_npool; i++) if (addr >= g_pool[i].lo && addr + len <= g_pool[i].hi) { r = &g_pool[i]; break; }
                                            else if (addr >= g_pool[i].lo && addr < g_pool[i].hi && addr + len <= g_pool[i].end) across = 1;
+    uint64_t lazy = r && r->lazy && !r->buf ? r->lo : 0;
     pthread_rwlock_unlock(&g_pool_mu);
+    if (lazy) r = pool_materialize(lazy);
     if (r) { if (c.gen != g) { memset(&c, 0, sizeof c); c.gen = g; } memmove(&c.p[1], &c.p[0], 3 * sizeof *c.p); c.p[0] = r; }
     if (!r && across) { static uint64_t n; uint64_t k = ++n; if (!(k & (k - 1))) LOG("[RED] [vk] %llu ranges across two chunks of a memory pool (ZC_CHUNK; this one %#llx +%#llx): no buffer for them", (unsigned long long)k, (unsigned long long)addr, (unsigned long long)len); }
     return r;

@@ -10,6 +10,7 @@ int nvn_dirty_tracked(const void *addr, size_t len);
 void nvn_dirty_protect(const void *addr, size_t len);              // Set the covered pages read-only
 void nvn_dirty_release(const void *addr, size_t len);              // Make the covered pages writable again and stamp them as written (a span no longer watched)
 uint64_t nvn_dirty_released(void);                                 // Cumulative: pages unprotected by nvn_dirty_release
+void nvn_dirty_reopen(const void *mem, size_t len);                // Make [mem, mem+len) writable, but for the pages kept read-only for tracking (the mapping was replaced read-only)
 int nvn_dirty_runs(void);                                          // Runs of protected pages now (each a mapping of the process)
 int nvn_dirty_defrag(int (*remap)(void *mem, size_t len));         // Map the most fragmented ranges again in one piece (remap: read-only, 0 = done); number of ranges done
 uint64_t nvn_dirty_now(void);                                      // Current generation: take the content's stamp before nvn_dirty_protect and before reading it

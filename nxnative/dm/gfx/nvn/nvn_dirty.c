@@ -196,6 +196,22 @@ int nvn_dirty_runs(void) {
     return runs;
 }
 
+// After a pool chunk's mapping was replaced by a read-only one (gfx_vk_core.c pool_materialize): every page writable again but those protected for tracking. Writers wait in the page-fault hook meanwhile
+void nvn_dirty_reopen(const void *mem, size_t len) {
+    uintptr_t a = (uintptr_t)mem, e = a + len, run = a, pg = g_pg ? g_pg : (uintptr_t)getpagesize(); int open = 0, n = atomic_load(&g_nr);
+    for (uintptr_t x = a; x <= e; x += pg) {
+        int keep = x == e;
+        for (int i = 0; !keep && i < n; i++) {
+            range_t *r = rg(i); if (!live_at(i) || x < r->base || x >= r->end || !g_pg) continue;
+            uintptr_t p = (x - r->base) >> g_shift; if (p >= r->cap) continue;
+            if (atomic_load(&r->state[p]) == PG_BUSY) busy_wait(r, p);
+            keep = atomic_load(&r->state[p]) == PG_PROT;
+        }
+        if (!keep && !open) { run = x; open = 1; }
+        else if (keep && open) { mprotect((void *)run, x - run, PROT_READ | PROT_WRITE); open = 0; }
+    }
+}
+
 void nvn_dirty_add_range(const void *mem, size_t size) {
     static int inited;
     if (!inited) { inited = 1; g_pg = (uintptr_t)getpagesize(); g_shift = __builtin_ctzl(g_pg); mach_timebase_info(&g_tb); dm_fault_hook_register(on_fault); dm_guest_write_prep_register(prep_write); }
