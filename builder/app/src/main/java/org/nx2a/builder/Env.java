@@ -50,6 +50,13 @@ final class Env {
         return b;
     }
 
+    /** adb by its full path: Java looks a bare name up in the app's own PATH, not in the one given to the child. */
+    ProcessBuilder adb(String... args) {
+        List<String> c = new ArrayList<>(Arrays.asList(new File(usr, "bin/adb").getPath()));
+        c.addAll(Arrays.asList(args));
+        return process(c.toArray(new String[0]));
+    }
+
     /** python -m porter ... */
     ProcessBuilder porter(String... args) {
         List<String> c = new ArrayList<>(Arrays.asList(new File(usr, "bin/python3").getPath(), "-m", "porter"));

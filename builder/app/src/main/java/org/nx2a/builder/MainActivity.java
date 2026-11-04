@@ -91,6 +91,14 @@ public final class MainActivity extends Activity implements PortService.Listener
         EditText e = new EditText(this); e.setHint(hint); e.setInputType(InputType.TYPE_CLASS_NUMBER); e.setTextColor(TEXT); e.setHintTextColor(DIM); e.setSingleLine(true); e.setWidth(dp(width)); return e;
     }
 
+    private void grow(LinearLayout row, View v) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f); p.rightMargin = dp(10); row.addView(v, p);
+    }
+    private static boolean validPort(String s) {
+        if (s.isEmpty() || s.length() > 5) return false;
+        int p = Integer.parseInt(s); return p > 0 && p <= 65535;
+    }
+
     private View build() {
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(16), dp(20), dp(16), dp(24));
         root.addView(text("nx2android Builder", 24, TEXT, true));
@@ -114,9 +122,9 @@ public final class MainActivity extends Activity implements PortService.Listener
         LinearLayout c4 = card("4. Wireless debugging");
         adbState = text("", 14, DIM, false); add(c4, adbState, 6);
         add(c4, text("Needed once per restart to install the game and copy its data. Pair once: put this app and Settings side by side, open Developer options → Wireless debugging → Pair device with pairing code, and type the port and code here.", 13, DIM, false), 6);
-        LinearLayout row = new LinearLayout(this); pairPort = field("Pairing port", 110); pairCode = field("Pairing code", 110); row.addView(pairPort); row.addView(pairCode);
-        Button pair = button("Pair", false, v -> pair()); row.addView(pair); add(c4, row, 8);
-        LinearLayout row2 = new LinearLayout(this); connectPort = field("Connect port", 110); connectPort.setText(prefs.getString("connect", "")); row2.addView(connectPort);
+        LinearLayout row = new LinearLayout(this); pairPort = field("Pairing port", 110); pairCode = field("Pairing code", 110); grow(row, pairPort); grow(row, pairCode);
+        row.addView(button("Pair", false, v -> pair())); add(c4, row, 8);
+        LinearLayout row2 = new LinearLayout(this); connectPort = field("Connect port", 110); connectPort.setText(prefs.getString("connect", "")); grow(row2, connectPort);
         row2.addView(button("Connect", false, v -> connect())); add(c4, row2, 8);
         add(root, c4, 12);
 
@@ -237,9 +245,10 @@ public final class MainActivity extends Activity implements PortService.Listener
     private void pair() {
         String p = pairPort.getText().toString().trim(), c = pairCode.getText().toString().trim();
         if (p.isEmpty() || c.isEmpty()) { adbState.setText("Type the pairing port and code first."); return; }
+        if (!validPort(p)) { adbState.setText("That pairing port is not valid. A port has at most 5 digits: use the number after the colon on the pairing popup."); return; }
         adbState.setText("Pairing…");
         bg(() -> {
-            String out = env.run(env.process("adb", "pair", "127.0.0.1:" + p, c), 30).trim();
+            String out = env.run(env.adb("pair", "127.0.0.1:" + p, c), 30).trim();
             post(() -> { adbState.setText(out); if (out.toLowerCase().contains("success")) connect(); });
         });
     }
@@ -248,12 +257,12 @@ public final class MainActivity extends Activity implements PortService.Listener
         String typed = connectPort.getText().toString().trim();
         bg(() -> {
             String port = typed;
-            String m = env.run(env.process("adb", "mdns", "services"), 10);
+            String m = env.run(env.adb("mdns", "services"), 10);
             Matcher f = Pattern.compile("_adb-tls-connect\\S*\\s+\\S*?(\\d+\\.\\d+\\.\\d+\\.\\d+):(\\d+)").matcher(m);
             if (f.find()) port = f.group(2);
-            if (port.isEmpty()) { post(() -> adbState.setText("Type the port shown on the Wireless debugging screen, under IP address & port.")); return; }
+            if (!validPort(port)) { post(() -> adbState.setText("Type the port from the Wireless debugging screen: the number after the colon under IP address & port, at most 5 digits.")); return; }
             String target = "127.0.0.1:" + port;
-            String out = env.run(env.process("adb", "connect", target), 15).trim();
+            String out = env.run(env.adb("connect", target), 15).trim();
             boolean ok = out.contains("connected to");
             String p2 = port;
             post(() -> {
