@@ -449,7 +449,7 @@ void vk_gmem_buffers(VkBuffer *map, VkDeviceSize *map_len, VkBuffer *log, VkDevi
         pthread_rwlock_unlock(&g_pool_mu);
         qsort(e, (size_t)n, sizeof *e, gmem_cmp);
         memcpy(m + GMEM_ENTRY, e, (size_t)n * GMEM_ENTRY);
-        vkUnmapMemory(V.dev, d);
+
         if (mb) vk_defer_free_buffer(mb, mm);
         mb = b; mm = d; gen = g;
         static int nl; if (nl++ < 8) VKLOG("raw global memory table: %d pool chunks", n);
@@ -459,7 +459,7 @@ void vk_gmem_buffers(VkBuffer *map, VkDeviceSize *map_len, VkBuffer *log, VkDevi
         VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &lb));
         VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, lb, &req);
         VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
-        VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &d)); VKCHK(vkBindBufferMemory(V.dev, lb, d, 0)); VKCHK(vkMapMemory(V.dev, d, 0, VK_WHOLE_SIZE, 0, (void **)&m)); memset(m, 0, GMEM_LOG_BYTES); vkUnmapMemory(V.dev, d);
+        VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &d)); VKCHK(vkBindBufferMemory(V.dev, lb, d, 0)); VKCHK(vkMapMemory(V.dev, d, 0, VK_WHOLE_SIZE, 0, (void **)&m)); memset(m, 0, GMEM_LOG_BYTES);
     }
     *map = mb; *map_len = GMEM_ENTRIES * GMEM_ENTRY; *log = lb; *log_len = GMEM_LOG_BYTES;
     pthread_mutex_unlock(&mu);
