@@ -115,4 +115,18 @@ class Death(unittest.TestCase):
         self.assertRegex(text, r'worker died: exit codes .*-9'); self.assertIn('a worker held up to', text)
 
 
+
+
+class SpillGrows(unittest.TestCase):
+    def test_a_later_job_in_the_same_file_reads_whole(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, 'spill.bin')
+            with open(p, 'wb') as f: f.write(b'a' * 100)
+            first = split.spill_read(('a', (p, {'k1': ('w', 'vs', (0, 40), (40, 60))}), set(), {}))
+            with open(p, 'ab') as f: f.write(b'b' * 100)
+            later = split.spill_read(('b', (p, {'k2': ('w', 'vs', (100, 40), (140, 60))}), set(), {}))
+            self.assertEqual(bytes(later[1]['k2'][2]), b'b' * 40); self.assertEqual(bytes(later[1]['k2'][3]), b'b' * 60)
+            self.assertEqual(bytes(first[1]['k1'][3]), b'a' * 60)
+
+
 if __name__ == '__main__': unittest.main()

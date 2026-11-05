@@ -2766,7 +2766,8 @@ def spill_read(r):
     rel, uniq, pr, extra = r
     if not isinstance(uniq, tuple): return r
     p, small = uniq
-    if p not in _MAPPED:
+    end = max((b + q for _, _, _, (b, q) in small.values()), default=0)
+    if p not in _MAPPED or len(_MAPPED[p]) < end:   # a worker's file grows with each job it takes, and a mapping keeps the length it was made with: a later job's shaders came back cut short, and a copy of one then "differed"
         with builtins.open(p, 'rb') as f: _MAPPED[p] = memoryview(host_mmap.mmap(f.fileno(), 0, access=host_mmap.ACCESS_READ))
     m = _MAPPED[p]
     return rel, {k: (w, st, m[a:a + n], m[b:b + q]) for k, (w, st, (a, n), (b, q)) in small.items()}, pr, extra
