@@ -102,7 +102,7 @@ class Resume(unittest.TestCase):
             for i in range(count):
                 key, stage, sa, sn, ra, rn, sh, rh = struct.unpack_from('<Q5I2H', head, 12 + 32 * i)
                 k2, s2, a2, n2, b2, m2, h1, h2 = struct.unpack_from('<Q5I2H', small, 12 + 32 * i)
-                self.assertEqual((key, stage, sn, rn, h1, h2), (k2, s2, n2, m2, 0, 0))
+                self.assertEqual((key, stage, sn, rn, h1, h2), (k2, s2, n2, m2, 0, 0)); self.assertTrue(stage & 0x80000000)
                 if (sh << 32 | sa) >= place['off']:   # those before it are at made-up offsets, in the sparse part
                     high += 1; f.seek(sh << 32 | sa); self.assertEqual(f.read(sn), small[a2:a2 + n2])
                     f.seek(rh << 32 | ra); self.assertEqual(f.read(rn), small[b2:b2 + m2])

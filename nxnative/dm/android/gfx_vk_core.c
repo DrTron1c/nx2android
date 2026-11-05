@@ -268,7 +268,9 @@ static int recv_fds(int sock, int *fds, int max) {
 static const VkBufferUsageFlags POOL_USAGE0 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
     VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-#define POOL_USAGE (POOL_USAGE0 | (V.has_xfb ? VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT : 0))   // any pool range may be a transform feedback buffer
+static int g_bda_on = -1;   // raw global memory: pools have device addresses (vk_gmem_buffers)
+static int bda_on(void) { if (g_bda_on < 0) g_bda_on = !getenv("DM_VK_NO_BDA") && vkGetDeviceProcAddr(V.dev, "vkGetBufferDeviceAddress") != NULL; return g_bda_on; }
+#define POOL_USAGE (POOL_USAGE0 | (V.has_xfb ? VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT : 0) | (bda_on() ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0))   // any pool range may be a transform feedback buffer
 // DM_VK_LAZY_POOLS=1: a chunk gets its hardware buffer the first time the GPU needs it. A hardware buffer holds all its memory from the start and Android cannot swap it, and textures are
 // uploaded from pool memory into images of their own, so most of a pool may never need one: Pokémon Pokopia makes 5 GB of pools before its first frame, and Android killed it on a 12 GB tablet.
 // The swap: the chunk goes read-only, its contents are copied and the buffer is mapped over it. A guest write or a host write meanwhile waits here (a kernel write gets EFAULT, and
@@ -301,10 +303,15 @@ static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     VkExternalMemoryBufferCreateInfo eb = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO, NULL, VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID};
     VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, &eb, 0, size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
     if (vkGetAndroidHardwareBufferPropertiesANDROID(V.dev, ahb, &ap) || vkCreateBuffer(V.dev, &bi, NULL, &p->buf)) { AHardwareBuffer_release(ahb); return -2; }
-    VkMemoryDedicatedAllocateInfo ded = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, NULL, VK_NULL_HANDLE, p->buf};   // the driver requires a dedicated allocation for an imported AHardwareBuffer
+    VkMemoryAllocateFlagsInfo dfl = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, NULL, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, 0};
+    VkMemoryDedicatedAllocateInfo ded = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, bda_on() ? &dfl : NULL, VK_NULL_HANDLE, p->buf};   // the driver requires a dedicated allocation for an imported AHardwareBuffer
     VkImportAndroidHardwareBufferInfoANDROID imp = {VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID, &ded, ahb};
     VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &imp, ap.allocationSize, vk_mem_type(ap.memoryTypeBits, 0, 0)};
     if (vkAllocateMemory(V.dev, &ai, NULL, &p->mem) || vkBindBufferMemory(V.dev, p->buf, p->mem, 0)) { vkDestroyBuffer(V.dev, p->buf, NULL); AHardwareBuffer_release(ahb); return -2; }
+    if (bda_on()) {
+        static PFN_vkGetBufferDeviceAddress gba; if (!gba) gba = (PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(V.dev, "vkGetBufferDeviceAddress");
+        VkBufferDeviceAddressInfo bai = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, NULL, p->buf}; p->bda = gba(V.dev, &bai);
+    }
     if (p->lazy) {
         atomic_store(&g_swap_lo, (uint64_t)(uintptr_t)mem); atomic_store(&g_swap_hi, (uint64_t)(uintptr_t)mem + size);
         if (mprotect(mem, size, PROT_READ)) die("[vk] memory pool %p: cannot hold its writes (errno %d)", mem, errno);
@@ -407,10 +414,55 @@ static vkpool_t *pool_materialize(uint64_t lo) {
     if (r && !r->buf) {
         int rc = pool_zero_copy(r, (uint8_t *)(uintptr_t)r->lo, r->hi - r->lo);
         if (rc) die("[vk] memory pool %#llx +%#llx: no hardware buffer (%d), and the device has no memory left for it", (unsigned long long)r->lo, (unsigned long long)(r->hi - r->lo), rc);
+        __atomic_fetch_add(&g_pool_gen, 1, __ATOMIC_RELEASE);   // the raw memory table has one more entry
         static uint64_t mb; mb += (r->hi - r->lo) >> 20; g_lazy_mb = mb; static int n; if (n++ < 64 || !(n & 15)) VKLOG("memory pool chunk %#llx: hardware buffer made on first use (%llu MB in such buffers)", (unsigned long long)r->lo, (unsigned long long)mb);
     }
     pthread_rwlock_unlock(&g_pool_mu);
     return r;
+}
+// What NVN hands the GPU as an address has its buffer from then on: a shader may reach it by a pointer alone, which no lookup here sees (Banana Native's mtl_pool_need)
+void mtl_pool_need(const void *mem, uint64_t size) {
+    uint64_t a = (uint64_t)(uintptr_t)mem, e = a + size;
+    while (a < e) { vkpool_t *p = vk_pool_of(a, 1); if (!p) { a = (a | 0xfff) + 1; continue; } a = p->hi; }
+}
+// Raw global memory (dmsh_abi.h DMSH_GMEM_MAP_*, GlobalToStorage.TryGenerateRawStorageOp): an address a shader loaded from memory goes through this table to a device address. Entry 0 empty,
+// then the pools with buffers by start, unused entries at ~0; made again when pools change, the old one freed once the GPU is past it. The write log is one zeroed buffer: Vulkan's images are
+// uploaded from memory and a GPU store through a pointer does not mark them, which the Mac's log does (open)
+#define GMEM_ENTRIES 4096
+#define GMEM_ENTRY 32
+#define GMEM_LOG_BYTES ((1 + (1u << 10)) * 4)
+static int gmem_cmp(const void *a, const void *b) { uint64_t x = ((const uint64_t *)a)[0], y = ((const uint64_t *)b)[0]; return x < y ? -1 : x > y; }
+void vk_gmem_buffers(VkBuffer *map, VkDeviceSize *map_len, VkBuffer *log, VkDeviceSize *log_len) {
+    static VkBuffer mb, lb; static VkDeviceMemory mm; static uint32_t gen; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    uint32_t g = __atomic_load_n(&g_pool_gen, __ATOMIC_ACQUIRE) + 1;
+    if (g != gen || !mb) {
+        uint8_t *m; VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, GMEM_ENTRIES * GMEM_ENTRY, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE};
+        VkBuffer b; VkDeviceMemory d; VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &b));
+        VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, b, &req);
+        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
+        VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &d)); VKCHK(vkBindBufferMemory(V.dev, b, d, 0)); VKCHK(vkMapMemory(V.dev, d, 0, VK_WHOLE_SIZE, 0, (void **)&m));
+        memset(m, 0xff, GMEM_ENTRIES * GMEM_ENTRY); memset(m, 0, GMEM_ENTRY);
+        static uint64_t e[GMEM_ENTRIES][4]; int n = 0;
+        pthread_rwlock_rdlock(&g_pool_mu);
+        for (int i = 0; i < g_npool && n < GMEM_ENTRIES - 1; i++) if (g_pool[i].bda) { e[n][0] = g_pool[i].lo; e[n][1] = g_pool[i].hi; e[n][2] = g_pool[i].bda - g_pool[i].lo; e[n][3] = 0; n++; }
+        pthread_rwlock_unlock(&g_pool_mu);
+        qsort(e, (size_t)n, sizeof *e, gmem_cmp);
+        memcpy(m + GMEM_ENTRY, e, (size_t)n * GMEM_ENTRY);
+        vkUnmapMemory(V.dev, d);
+        if (mb) vk_defer_free_buffer(mb, mm);
+        mb = b; mm = d; gen = g;
+        static int nl; if (nl++ < 8) VKLOG("raw global memory table: %d pool chunks", n);
+    }
+    if (!lb) {
+        uint8_t *m; VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, GMEM_LOG_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE}; VkDeviceMemory d;
+        VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &lb));
+        VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, lb, &req);
+        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
+        VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &d)); VKCHK(vkBindBufferMemory(V.dev, lb, d, 0)); VKCHK(vkMapMemory(V.dev, d, 0, VK_WHOLE_SIZE, 0, (void **)&m)); memset(m, 0, GMEM_LOG_BYTES); vkUnmapMemory(V.dev, d);
+    }
+    *map = mb; *map_len = GMEM_ENTRIES * GMEM_ENTRY; *log = lb; *log_len = GMEM_LOG_BYTES;
+    pthread_mutex_unlock(&mu);
 }
 vkpool_t *vk_pool_of(uint64_t addr, uint64_t len) {
     // the last pools this thread found, while none was added or removed: the replay looks up every buffer binding of every draw, and the read lock alone was ~6% of it

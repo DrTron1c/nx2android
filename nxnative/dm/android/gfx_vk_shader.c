@@ -10,9 +10,11 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <zlib.h>
 
 typedef struct __attribute__((packed)) { uint64_t key; uint32_t stage, spv_off, spv_len, refl_off, refl_len; uint16_t spv_high, refl_high; } bent;   // high: bits 32.. of the offsets (Pokémon Pokopia's bundle passes 4 GB)
 _Static_assert(sizeof(bent) == 32, "shader_vk.py writes 32-byte entries");
+#define BENT_ZLIB 0x80000000u   // stage bit: the SPIR-V is u32 its length, then zlib (Pokopia's bundle was 28 GB)
 static uint64_t bent_at(uint16_t high, uint32_t low) { return (uint64_t)high << 32 | low; }
 static const uint8_t *g_bundle; static uint32_t g_nent; static const bent *g_ent;
 void vk_shaders_open(const char *path) {
@@ -33,7 +35,7 @@ static void bundle_open_once(void) {
 static void bundle_auto(void) { static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, bundle_open_once); }
 int vk_shader_keys(uint32_t stage, uint64_t *out, int max) {   // the bundle's shaders of one stage (gfx_vk_exec.c compute_warm)
     bundle_auto(); int n = 0;
-    for (uint32_t i = 0; i < g_nent && n < max; i++) { uint32_t st; memcpy(&st, &g_ent[i].stage, 4); if (st == stage) memcpy(&out[n++], &g_ent[i].key, 8); }
+    for (uint32_t i = 0; i < g_nent && n < max; i++) { uint32_t st; memcpy(&st, &g_ent[i].stage, 4); if ((st & ~BENT_ZLIB) == stage) memcpy(&out[n++], &g_ent[i].key, 8); }
     return n;
 }
 static const bent *find(uint64_t key) {
@@ -42,7 +44,7 @@ static const bent *find(uint64_t key) {
     if (lo < g_nent) { uint64_t k; memcpy(&k, &g_ent[lo].key, 8); if (k == key) return &g_ent[lo]; }
     return NULL;
 }
-int vk_shader_stage(uint64_t key) { bundle_auto(); const bent *e = g_bundle ? find(key) : NULL; return e ? (int)e->stage : -1; }   // the NVN stage the bundle has this shader as
+int vk_shader_stage(uint64_t key) { bundle_auto(); const bent *e = g_bundle ? find(key) : NULL; return e ? (int)(e->stage & ~BENT_ZLIB) : -1; }   // the NVN stage the bundle has this shader as
 
 // Run-time capture: a shader a draw needs that the bundle does not have is saved as DM_ROOT/captured_shaders/<key>.bin ("DMSC", u32 control length, u32 code length, the control
 // section as its key hashed it, the code area), and the porter translates the folder into the bundle at the next port (porter/pipeline.py, shader_vk.py --capture).
@@ -217,7 +219,12 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
     s->nbind = (int)hdr[0]; s->c1_len = hdr[1]; memcpy(s->local, hdr + 2, 12);
     s->b = (const dmsv_bind *)(r + 20); s->c1 = r + 20 + 20 * s->nbind;
     // SPIR-V with the stage's set
-    uint32_t nw = e->spv_len / 4; uint32_t *w = malloc(e->spv_len); memcpy(w, g_bundle + bent_at(e->spv_high, e->spv_off), e->spv_len);
+    const uint8_t *sp = g_bundle + bent_at(e->spv_high, e->spv_off); uint32_t spv_bytes = e->spv_len; uint32_t *w;
+    if (e->stage & BENT_ZLIB) { uint32_t raw; memcpy(&raw, sp, 4); w = malloc(raw); uLongf rn = raw;
+        if (uncompress((Bytef *)w, &rn, sp + 4, e->spv_len - 4) != Z_OK || rn != raw) die("[vk] shader %016llx: damaged in the bundle", (unsigned long long)key);
+        spv_bytes = raw; }
+    else { w = malloc(e->spv_len); memcpy(w, sp, e->spv_len); }
+    uint32_t nw = spv_bytes / 4;
     int f64_used = 0; uint32_t xb = 4;
     for (uint32_t i = 5; i < nw;) { uint32_t n = w[i] >> 16, op = w[i] & 0xffff; if (!n) break; if (op == 71 && n >= 4 && w[i + 2] == 34) w[i + 3] = (uint32_t)s->set;   // OpDecorate DescriptorSet
         if (op == 22 && n == 3 && w[i + 2] == 64) f64_used = 1;   // OpTypeFloat 64

@@ -29,4 +29,4 @@ nsp = _load_nsp()
 BuildError, PROG, say = nsp.BuildError, nsp.PROG, nsp.say
 # shader_vk.py's first version that made today's bundle: it stands for the file in the Vulkan shaders' reuse key, so changes in how the tool runs (progress, going on after a stop) keep an hour's
 # work on a tablet. A change to what the bundle holds must give a new value here (any new text does: sha256 of it): else old bundles stay in use
-nsp.PINNED['shader_vk.py'] = 'e8db7df6a1fee94b44355b25b4090f58969a5c6dc62b28cfcb19c289e2426de0'
+nsp.PINNED['shader_vk.py'] = '061a67a41e51ba89914f6ec3307f2f2eb894f38f6e78bea13afc2afa1f3877b6'

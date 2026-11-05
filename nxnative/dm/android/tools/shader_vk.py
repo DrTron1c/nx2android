@@ -10,7 +10,7 @@
 #   control section, code area), translated beside the package's; a file whose content does not hash to its name, or whose key the package has, is left out
 # Bundle (read by the Vulkan backend, dm/android/gfx_vk_shader.c): "DMSV" u32 version, u32 count, then count entries {u64 key, u32 stage, u32 spv_off, u32 spv_len,
 #   u32 refl_off, u32 refl_len, u16 spv_off bits 32.., u16 refl_off bits 32..} sorted by key, then the blobs (Pokémon Pokopia's bundle passes 4 GB). refl is compact JSON: bindings, c1, local size, notes.
-import argparse, collections, concurrent.futures as cf, hashlib, json, mmap, os, re, struct, subprocess, sys, tempfile
+import argparse, collections, concurrent.futures as cf, hashlib, json, mmap, os, re, struct, subprocess, sys, tempfile, zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -125,7 +125,7 @@ def job_for(key, stage, rec, w, write=True):   # dmsh_build.py job_for; transfor
     cp = os.path.join(w, key + '.bin')
     if write: open(cp, 'wb').write(code)
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'subgroup': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {})}
-    j.update(extra); j['no_raw_gmem'] = True   # no guest-to-GPU address table on Vulkan yet: such an access is left out, as before the Switch 2 merge
+    j.update(extra)
     if key in FACTS: j.update(FACTS[key])
     else: j['no_facts'] = True
     return j, c1
@@ -207,6 +207,7 @@ def classify(stage, b, res):
     if m:
         idx = int(m.group(1)); sb = sorted(res.get('sbufs', []), key=lambda x: x['binding'])
         s = sb[idx] if idx < len(sb) else None; off = s['cb_offset'] * 4 if s and s['cb_slot'] == 0 else None; base = SSBO.get(stage)
+        if s and s['cb_slot'] == 0xff: e.update(kind='gmem_log' if s['cb_offset'] == 1 else 'gmem_map', rw=True, reg=None); return e   # dmsh_abi.h DMSH_GMEM_MAP_CB_SLOT: raw global memory
         e.update(kind='sbuf', rw=bool(s and s['flags'] & 2))
         if stage == 'cs' and off is not None and 0x210 <= off < 0x310 and (off - 0x210) % 16 == 0: e.update(kind='ubo_ptr', reg=(off - 0x210) // 16)
         elif s and s['cb_slot'] >= 3: e.update(kind='sbuf_ubo', reg=s['cb_slot'] - 3, off=s['cb_offset'] * 4)
@@ -250,7 +251,7 @@ def classify(stage, b, res):
 # binding: u8 kind, u8 desc (descriptor type), u8 dim (SPIR-V Dim, 0xff none), u8 flags (1 arrayed, 2 multisampled, 4 written), u16 binding, u16 count,
 #          i16 reg, u8 samp (sampler source), u8 fmt (SPIR-V image format), i32 off, i32 samp_arg
 KIND = {'support': 0, 'cbuf': 1, 'c1': 2, 'drvcb': 3, 'sbuf': 4, 'ubo_ptr': 5, 'sbuf_ubo': 6, 'tex': 7, 'tbuf': 8, 'img': 9, 'img_tbuf': 10, 'tex_c2a': 11,
-        'tex_ubo': 12, 'tbuf_ubo': 13, 'img_ubo': 14, '?': 255}
+        'tex_ubo': 12, 'tbuf_ubo': 13, 'img_ubo': 14, 'gmem_map': 15, 'gmem_log': 16, '?': 255}
 DESC = {'ubo': 0, 'ssbo': 1, 'sampled': 2, 'storage': 3, 'tbuf': 4, 'storage_tbuf': 5, 'image': 6, 'sampler': 7, '?': 255}
 SAMP_NONE, SAMP_TEX, SAMP_SLOT, SAMP_ID, SAMP_UBO = 0, 1, 2, 3, 4
 kinds_all = collections.Counter()
@@ -347,9 +348,10 @@ def main():
             # header words 2-4: a compute shader's local size; a vertex shader's input locations (all, signed int, unsigned int); a pixel shader's output locations
             hdr3 = (local or jobs[k].get('local') or [1, 1, 1]) if st == 'cs' else io[1] if st == 'vs' else io[3] if st == 'ps' else [0, 0, 0]
             refl = refl_bin(cl, c1s[k], hdr3)
-            f.write(spv); f.write(refl)
-            table.append((int(k, 16), STAGES.get(st, 0), off, len(spv), off + len(spv), len(refl)))
-            off += len(spv) + len(refl)
+            z = struct.pack('<I', len(spv)) + zlib.compress(spv, 6)   # SPIR-V is many times its compressed size: Pokémon Pokopia's bundle was 28 GB
+            f.write(z); f.write(refl)
+            table.append((int(k, 16), STAGES.get(st, 0) | 0x80000000, off, len(z), off + len(z), len(refl)))
+            off += len(z) + len(refl)
             gone += [spv_p, res_p, code_p]
             if not a.resume or not (i + 1) % SAVE_EVERY:   # a shader's files stay until its place in the bundle is saved
                 if a.resume:
