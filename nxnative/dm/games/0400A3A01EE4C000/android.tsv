@@ -8,3 +8,5 @@ env	DM_VK_LAZY_POOLS=1
 env	DM_NVN_DROP_CODE=1
 # a compute pipeline can take the driver over a minute: built beside the frame, not in it (gfx_vk_exec.c compute_async)
 env	DM_VK_ASYNC_COMPUTE=1
+# handheld: the game picks its lower resolution and settings. Docked it asked more of the tablet than its memory and GPU have: under 15 fps in its first area, and closed by Android after 6 minutes
+env	DM_OPMODE=0
