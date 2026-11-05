@@ -33,6 +33,7 @@ uint32_t vk_mem_type(uint32_t bits, VkMemoryPropertyFlags want, VkMemoryProperty
     return UINT32_MAX;
 }
 
+static int g_has_budget;
 static int has_ext(const VkExtensionProperties *e, uint32_t n, const char *name) { for (uint32_t i = 0; i < n; i++) if (!strcmp(e[i].extensionName, name)) return 1; return 0; }
 static int is_on(const char *const *on, uint32_t n, const char *name) { for (uint32_t i = 0; i < n; i++) if (!strcmp(on[i], name)) return 1; return 0; }
 // a feature struct as vk_init queries it (sType, pNext, then VkBool32s; the largest, descriptor indexing, has 20); featx: its VkBool32s, all off if it is not chained
@@ -130,6 +131,7 @@ void vk_init(void) {
                           "VK_GOOGLE_display_timing"};
     const char *on[64]; uint32_t non = 0;
     for (unsigned i = 0; i < sizeof want / sizeof *want; i++) if (has_ext(ex, ne, want[i])) on[non++] = want[i]; else VKLOG("device has no %s", want[i]);
+    if (has_ext(ex, ne, "VK_EXT_memory_budget") && non < 64) { on[non++] = "VK_EXT_memory_budget"; g_has_budget = 1; }   // vk_mem_report: what the driver holds for this process, which no process count shows
     // A Vulkan 1.1 or 1.2 device (Legion Y700 2023, Adreno 730: its stock driver reports 1.1) has what the replay uses from 1.2 / 1.3 as extensions: they are enabled
     // when present, so the features chained below and the functions loaded by their KHR names are valid there. A 1.3 device needs none of them
     int v12 = V.props.apiVersion >= VK_API_VERSION_1_2, v13 = V.props.apiVersion >= VK_API_VERSION_1_3; uint32_t npromo = 0;
@@ -402,7 +404,19 @@ void mtl_pool_del(const void *mem) {
 static uint64_t g_lazy_mb;
 // What the process holds and what the system has left, for the log: the kill comes with no message of its own
 uint64_t g_sh_loaded, g_sh_raw, g_sh_unknown; static int g_gmem_n;   // gfx_vk_shader.c counts them as it loads shaders
+static uint64_t g_gpu_img, g_gpu_scratch; static int g_ndpools;   // bytes of memory taken for images, for scratch blocks; descriptor pools made
+static void gpu_report(void) {
+    uint64_t used = 0;
+    if (g_has_budget) {
+        static PFN_vkGetPhysicalDeviceMemoryProperties2 gp; if (!gp) gp = (PFN_vkGetPhysicalDeviceMemoryProperties2)p_vkGetInstanceProcAddr(V.inst, "vkGetPhysicalDeviceMemoryProperties2");
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT b = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT}; VkPhysicalDeviceMemoryProperties2 m = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2, &b};
+        if (gp) { gp(V.pd, &m); for (uint32_t i = 0; i < m.memoryProperties.memoryHeapCount; i++) used += b.heapUsage[i]; }
+    }
+    int vk_pipeline_counts(int *gfx);  int gfx = 0, comp = vk_pipeline_counts(&gfx);
+    VKLOG("[gpu] the driver counts %llu MB for this process (0: it does not say); images %llu MB, scratch %llu MB, %d descriptor pools, %d graphics and %d compute pipelines", (unsigned long long)(used >> 20), (unsigned long long)(g_gpu_img >> 20), (unsigned long long)(g_gpu_scratch >> 20), g_ndpools, gfx, comp);
+}
 void vk_mem_report(void) {
+    gpu_report();
     char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
     FILE *f = fopen("/proc/self/status", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); for (int i = 0; i < 5; i++) { char *p = strstr(b, k[i]); if (p) v[i] = atol(p + strlen(k[i])); } }
@@ -723,6 +737,7 @@ void *vk_scratch(VkDeviceSize n, VkDeviceSize align, VkBuffer *buf, VkDeviceSize
     scratch_blk *b = &s->blk[s->nblk++]; memset(b, 0, sizeof *b);
     static VkDeviceSize blk = 0; if (!blk) { const char *e = getenv("DM_VK_SCRATCH_MB"); blk = e && atoi(e) > 0 ? (VkDeviceSize)atoi(e) << 20 : SCRATCH_BLOCK; }
     b->size = n > blk ? (n + 0xffff) & ~0xffffull : blk;
+    __atomic_fetch_add(&g_gpu_scratch, b->size, __ATOMIC_RELAXED);
     VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, b->size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
     VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &b->b));
     VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, b->b, &req);
@@ -759,6 +774,7 @@ VkDeviceMemory vk_image_memory(const VkMemoryRequirements *req, uint32_t type, V
     int c = 0; while (c < IMG_CLASSES && img_class_size(c) < req->size) c++;
     if (c == IMG_CLASSES || req->size > IMG_SLOT_MAX || req->alignment > 4096) {   // memory of its own
         VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req->size, type}; VkDeviceMemory m;
+        __atomic_fetch_add(&g_gpu_img, req->size, __ATOMIC_RELAXED);
         return vkAllocateMemory(V.dev, &ai, NULL, &m) ? VK_NULL_HANDLE : m;
     }
     pthread_mutex_lock(&g_imgblk_mu);
@@ -767,6 +783,7 @@ VkDeviceMemory vk_image_memory(const VkMemoryRequirements *req, uint32_t type, V
         b = calloc(1, sizeof *b); b->type = type; b->cls = (uint32_t)c; VkDeviceSize bs = img_class_size(c) * 64; if (bs < (2 << 20)) bs = 2 << 20; if (bs > IMG_BLOCK) bs = IMG_BLOCK; b->nslot = (uint32_t)(bs / img_class_size(c));   // 64 slots, 2 MB to 32 MB
         VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, (VkDeviceSize)b->nslot * img_class_size(c), type};
         if (vkAllocateMemory(V.dev, &ai, NULL, &b->m)) { pthread_mutex_unlock(&g_imgblk_mu); free(b); return VK_NULL_HANDLE; }
+        g_gpu_img += ai.allocationSize;
         for (uint32_t i = 0; i < b->nslot; i++) b->bits[i >> 6] |= 1ull << (i & 63);
         b->nfree = b->nslot; b->next = g_imgblk[c]; g_imgblk[c] = b;
     }
@@ -807,6 +824,7 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout l) {
             VkDescriptorPoolCreateInfo pi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, NULL, 0, DP_SETS, nz, sz};
             if (s->ndp == s->capdp) { s->capdp = s->capdp ? 2 * s->capdp : 4; s->dp = realloc(s->dp, s->capdp * sizeof *s->dp); }
             VKCHK(vkCreateDescriptorPool(V.dev, &pi, NULL, &s->dp[s->ndp++]));
+            g_ndpools++;
         }
         if (s->dp_cur != s->dp_counted) { memset(s->dp_used, 0, sizeof s->dp_used); s->dp_sets = 0; s->dp_counted = s->dp_cur; }
         int fits = s->dp_sets < DP_SETS;

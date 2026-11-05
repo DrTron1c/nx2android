@@ -1808,6 +1808,7 @@ static void *compute_warm(void *arg) {
     VKLOG("compute pipelines made ahead: %d of %d compute shaders in %.0f ms", made, n, (tick() - t0) / 1e6);
     return NULL;
 }
+int vk_pipeline_counts(int *gfx) { *gfx = (int)g_vkst.pipes_built; pthread_mutex_lock(&g_cpipe_mu); int n = (int)g_cpipes.n; pthread_mutex_unlock(&g_cpipe_mu); return n; }   // gfx_vk_core.c gpu_report
 static void compute_warm_start(void) {
     if (getenv("DM_VK_NOPREWARM")) return;
     pthread_t t; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED); pthread_create(&t, &a, compute_warm, NULL); pthread_attr_destroy(&a);
