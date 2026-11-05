@@ -1,7 +1,7 @@
 # Installing a port on the device the builder app runs on, with no adb. Android lets only the game write to the game's files folder, so the work splits in two:
 # the app hands the APK to Android's own installer (the player taps Install, as for any app), and the game, at its first start, fetches its data from here.
 # The server listens on the device's loopback, only while this waits, and answers only to the secret in the APK (assets/pack.txt). The other half is dm/android/pack_sync_core.h.
-import http.server, os, secrets, threading, time, urllib.parse, zlib
+import http.server, os, re, secrets, threading, time, urllib.parse, zlib
 from pathlib import Path
 
 from porter import datapack
@@ -53,8 +53,9 @@ def rows(data):
 class Pack(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, data, token, port=PORT):
+    def __init__(self, data, token, port=PORT, captures=None):
         self.token, self.listing, self.files = token, *rows(data)
+        self.captures, self.got = Path(captures) if captures else None, []
         self.seen = self.finished = False; self.failed = None
         self.need = None; self.sent = 0; self.note = ''; self.mu = threading.Lock()
         super().__init__(('127.0.0.1', port), Answer)
@@ -82,6 +83,20 @@ class Answer(http.server.BaseHTTPRequestHandler):
         if cmd != 'file' or arg not in s.files: return self.reply(404)
         self.send_file(s.files[arg], arg)
 
+    def do_PUT(self):   # a shader the game saved because the bundle lacks it (gfx_vk_shader.c): for the next port to translate, as porter/pipeline.py pull_captures does over adb
+        s = self.server
+        token, _, what = urllib.parse.unquote(self.path.lstrip('/')).partition('/')
+        cmd, _, name = what.partition('/')
+        size = int(self.headers.get('Content-Length', -1))
+        if not secrets.compare_digest(token.encode(), s.token.encode()): return self.reply(403)
+        if cmd != 'captured' or not s.captures or not re.fullmatch(r'[0-9a-f]{16}\.bin', name) or not 0 < size <= 1 << 26: return self.reply(400)
+        body = self.rfile.read(size)
+        if len(body) != size: return self.reply(400)
+        s.captures.mkdir(parents=True, exist_ok=True)
+        if not (s.captures / name).is_file():
+            (s.captures / (name + '.part')).write_bytes(body); (s.captures / (name + '.part')).replace(s.captures / name); s.got.append(name)
+        self.reply(200)
+
     def send_file(self, path, name):
         s = self.server
         size = path.stat().st_size
@@ -105,8 +120,8 @@ class Answer(http.server.BaseHTTPRequestHandler):
                 with s.mu: s.sent -= at
 
 
-def serve(data, token, port=PORT):
-    try: srv = Pack(data, token, port)
+def serve(data, token, port=PORT, captures=None):
+    try: srv = Pack(data, token, port, captures)
     except OSError as e: raise BuildError(f'could not serve the game data on port {port}: {e}') from e
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
@@ -116,7 +131,7 @@ def tell(ev, **fields):
     if PROG.mode == 'json': PROG._json({'ev': ev, **fields})
 
 
-def install(apk, data, token, port=PORT, wait=WAIT):
+def install(apk, data, token, port=PORT, wait=WAIT, captures=None):
     apk, data = Path(apk), Path(data)
     man = datapack.read_manifest(data)
     if not man: raise BuildError(f'not a data pack (no {datapack.MANIFEST}): {data}')
@@ -125,7 +140,7 @@ def install(apk, data, token, port=PORT, wait=WAIT):
     pkg, name = man['package'], man['name']
     PROG.stage('install', step='getting the game data ready to copy')
     flag = data.parent / '.install-failed'; flag.unlink(missing_ok=True)
-    srv = serve(data, token, port)
+    srv = serve(data, token, port, captures)
     try:
         try: os.remove('/sdcard/nx2android/frame-dump.tgz')   # an older frame capture: half a GB
         except OSError: pass
@@ -151,6 +166,7 @@ def install(apk, data, token, port=PORT, wait=WAIT):
         time.sleep(1.5)   # the game's last request gets its answer
         srv.shutdown(); srv.server_close()
     say(f'{name} has all its data ({(srv.need or 0) / 2**30:.1f} GB copied)')
+    if srv.got: say(f'{len(srv.got)} shader(s) the game saved came back: the next port translates them')
     tell('open_game', package=pkg, label=name)
     PROG.end(f'{name} on this device')
     say(f'installed: open "{name}"')

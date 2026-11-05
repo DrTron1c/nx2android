@@ -35,7 +35,7 @@ class Waits(unittest.TestCase):
             t = Path(t); data = t / 'data'; data.mkdir(); apk = t / 'g.apk'; apk.write_bytes(b'PK')
             (data / 'env.txt').write_text('A=1\n'); (data / datapack.MANIFEST).write_text(json.dumps({'name': 'G', 'package': 'p.q'}))
             seen, real, tell, stage, end, say_, mode = [], direct.serve, direct.tell, direct.PROG.stage, direct.PROG.end, direct.say, direct.PROG.mode
-            def serve(d, tok, port): srv = real(d, tok, 0); threading.Thread(target=play, args=(srv, data), daemon=True).start(); return srv
+            def serve(d, tok, port, cap=None): srv = real(d, tok, 0, cap); threading.Thread(target=play, args=(srv, data), daemon=True).start(); return srv
             direct.serve, direct.tell = serve, lambda ev, **f: seen.append((ev, f))
             direct.PROG.stage, direct.PROG.end, direct.say, direct.PROG.mode = (lambda *a, **k: None), (lambda *a, **k: None), (lambda *a: None), 'json'
             set_ = direct.PROG.set; direct.PROG.set = lambda **k: None
@@ -80,7 +80,7 @@ class GameCopies(unittest.TestCase):
     def tearDown(self): self.d.cleanup()
 
     def sync(self, token='tok'):
-        srv = direct.serve(self.pack, 'tok', 0)
+        srv = direct.serve(self.pack, 'tok', 0, Path(self.d.name) / 'captured')
         try:
             r = subprocess.run([self.exe, str(srv.server_address[1]), token, self.game], capture_output=True, text=True, timeout=60)
             return r, srv
@@ -108,6 +108,12 @@ class GameCopies(unittest.TestCase):
         self.assertEqual(self.sync()[0].returncode, 0)
         self.assertFalse((self.game / 'mods/old').exists()); self.assertFalse((self.game / 'pass_1.bin').exists())
         self.assertEqual((self.game / 'settings.txt').read_text(), 'mine=1\n'); self.assertTrue((self.game / 'log.txt').exists())
+
+    def test_saved_shaders_come_back(self):
+        (self.game / 'captured_shaders').mkdir(); (self.game / 'captured_shaders/0123456789abcdef.bin').write_bytes(b'DMSC' * 100); (self.game / 'captured_shaders/notes.txt').write_text('x')
+        r, srv = self.sync()
+        self.assertEqual(r.returncode, 0, r.stdout); self.assertEqual(srv.got, ['0123456789abcdef.bin'])
+        self.assertEqual((Path(self.d.name) / 'captured/0123456789abcdef.bin').read_bytes(), b'DMSC' * 100)
 
     def test_cut_off_copy_goes_on(self):
         (self.game / 'mods').mkdir(); (self.game / 'mods/main.part').write_bytes(b'code' * 400)

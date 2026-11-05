@@ -3,7 +3,7 @@
 # the rewrite for DM_TARGET=android, the Vulkan shader bundle, the host built with the player's NDK, the APK, the data pack and the install.
 # Work files go where upstream's NSP script puts them, <game folder>/<title ID>_build/ (extract/, aoc/, shader/, logs/ are shared with an iOS build of the same folder),
 # with the Android ones in its android/ folder.
-import importlib.util, os, re, shutil, sys
+import importlib.util, json, os, re, shutil, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -564,9 +564,18 @@ class Port:
         PROG.stage('Vulkan shaders', step='building the translator')
         xlate, xkey = self.translator()
         PROG.set(step='checking the inputs')
-        key = nsp.fingerprint(nsp.package_key(pkg), ('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE)), ('files', nsp.profile_files(self.g)), xkey, ('files', []))
+        pkey = nsp.package_key(pkg)
+        key = nsp.fingerprint(pkey, ('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE)), ('files', nsp.profile_files(self.g)), xkey, ('files', []))
+        parts = {'the shader package': pkey, 'the translator': xkey, 'the tools': nsp.fingerprint(('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE))), 'the game profile': nsp.fingerprint(('files', nsp.profile_files(self.g)))}
+        pf = kf.with_name('shaders.dmsv.parts')
         if self.dmsv.is_file() and (note := nsp.reused(kf, key)) is not None:
+            pf.write_text(json.dumps(parts), encoding='utf-8')
             self.extra_shaders(pkg, xlate); PROG.end(f'{note}, reused (inputs unchanged)'); return
+        if self.dmsv.is_file():   # an hour's work starts here: the log says why
+            try: was = json.loads(pf.read_text(encoding='utf-8'))
+            except (OSError, ValueError): was = {}
+            why = [n for n, v in parts.items() if was.get(n) != v] if was else []
+            say(f'[RED] the Vulkan shaders are being made again: {", ".join(why) if why else "their last key does not match"} changed')
         tmp = self.dmsv.with_name('shaders.dmsv.partial'); nsp.rmtree(kf)
         # This step takes about an hour on a tablet, so a stopped run keeps its place: the folder and the bundle begun in it count only for the same key
         work = self.aw / 'shader_vk_work'; stamp = work / 'key'
@@ -582,7 +591,7 @@ class Port:
         m = re.search(r'^(\d+) of (\d+) shaders', (self.logs / 'android_shaders.log').read_text(errors='replace'), re.M)
         if not m or m.group(1) == '0': raise BuildError(f'no shader translated (see {self.logs / "android_shaders.log"})')
         note = f'{int(m.group(1)):,} of {int(m.group(2)):,} shaders, {tmp.stat().st_size / 2**20:,.0f} MB'
-        nsp.swap_in(tmp, self.dmsv); kf.write_text(f'{key}\n{note}\n')
+        nsp.swap_in(tmp, self.dmsv); kf.write_text(f'{key}\n{note}\n'); pf.write_text(json.dumps(parts), encoding='utf-8')
         PROG.end(note)
         nsp.rmtree(work)
         for d in (self.work / 'tmp').glob('shvk_*'): nsp.rmtree(d)   # the translator's work folders
@@ -715,7 +724,7 @@ class Port:
 
     # ---- install (optional) ----
     def install(self):
-        if self.o.direct: return direct.install(self.apk_path, self.data_path, direct.secret(self.aw / 'pack-secret.txt'))
+        if self.o.direct: return direct.install(self.apk_path, self.data_path, direct.secret(self.aw / 'pack-secret.txt'), captures=self.aw / 'captured_shaders')
         install.install(self.apk_path, self.data_path, self.tools['adb'], self.o.device or self.cfg.get('device'), replace_signer=self.o.replace_signer, symbols=self.so.with_name('libdmhost.sym.so'))
 
 

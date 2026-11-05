@@ -77,6 +77,31 @@ static char *ps_text(const ps_t *p, const char *what) {
     return b;
 }
 
+// a shader the game saved (gfx_vk_shader.c), back to the build folder for the next port to translate
+static void ps_put(const ps_t *p, const char *dir, const char *name) {
+    char path[PATH_MAX]; snprintf(path, sizeof path, "%s/%s", dir, name);
+    int fd = open(path, O_RDONLY | O_CLOEXEC); struct stat st; if (fd < 0 || fstat(fd, &st) || st.st_size <= 0 || st.st_size > 1 << 26) { if (fd >= 0) close(fd); return; }
+    uint8_t *b = malloc((size_t)st.st_size); ssize_t got = b ? read(fd, b, (size_t)st.st_size) : -1; close(fd);
+    int s = got == st.st_size ? socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0) : -1;
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)p->port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    struct timeval tv = {10, 0}; if (s >= 0) { setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); }
+    if (s >= 0 && !connect(s, (struct sockaddr *)&a, sizeof a)) {
+        char q[300]; int o = snprintf(q, sizeof q, "PUT /%s/captured/%s HTTP/1.0\r\nContent-Length: %lld\r\n\r\n", p->token, name, (long long)st.st_size);
+        if (send(s, q, (size_t)o, MSG_NOSIGNAL) == o) {
+            ssize_t off = 0; while (off < got) { ssize_t k = send(s, b + off, (size_t)(got - off), MSG_NOSIGNAL); if (k <= 0) break; off += k; }
+            char ans[64]; (void)!recv(s, ans, sizeof ans, 0);
+        }
+    }
+    if (s >= 0) close(s);
+    free(b);
+}
+static void ps_captures(const ps_t *p) {
+    char dir[PATH_MAX]; snprintf(dir, sizeof dir, "%s/captured_shaders", p->root);
+    DIR *d = opendir(dir); if (!d) return;
+    for (struct dirent *e; (e = readdir(d)); ) { size_t l = strlen(e->d_name); if (l == 20 && !strcmp(e->d_name + 16, ".bin")) ps_put(p, dir, e->d_name); }
+    closedir(d);
+}
+
 // ---- files ----
 typedef struct { long long size; uint32_t crc; int keep, need; const char *name; } ps_file;
 static int ps_name_cmp(const void *a, const void *b) { return strcmp(((const ps_file *)a)->name, ((const ps_file *)b)->name); }
@@ -182,6 +207,7 @@ static int ps_run(ps_t *p) {
       for (size_t i = 0; i < no; i++) { char d[PATH_MAX]; snprintf(d, sizeof d, "%s/%s", p->root, owned[i]); ps_stale(d, owned[i], sorted, nf); }
       free(sorted); }
     ps_old_captures(p->root);
+    ps_captures(p);
     rc = 0;
 out:
     free(f); free(list);
