@@ -6,3 +6,5 @@ requires	bcn
 env	DM_VK_LAZY_POOLS=1
 # the shaders are translated, so their code in memory pools goes back to the system (hle_nvn.c code_drop)
 env	DM_NVN_DROP_CODE=1
+# a compute pipeline can take the driver over a minute: built beside the frame, not in it (gfx_vk_exec.c compute_async)
+env	DM_VK_ASYNC_COMPUTE=1

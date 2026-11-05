@@ -1759,6 +1759,36 @@ static VkPipeline compute_build(vkshader_t *cs, uint64_t um, uint64_t im) {   //
     if (r) { LOG("[RED] [vk] compute pipeline failed: %016llx", (unsigned long long)cs->key); p = (VkPipeline)1; }
     return p;
 }
+// DM_VK_ASYNC_COMPUTE=1: a compute pipeline met for the first time is built on a thread of its own and its dispatches are left out until it is there, after waiting 300 ms for the usual quick one.
+// Adreno's compiler took over a minute on one of Pokémon Pokopia's compute shaders (19391de31e77a42b), on the thread that replays the frame: the picture froze with the sound still playing.
+// The pipeline cache keeps the result, so the next run has it at once. An entry of (VkPipeline)2 in g_cpipes is one being built
+#define CPIPE_BUILDING ((VkPipeline)2)
+enum { CQ = 256 };
+typedef struct { vkshader_t *cs; uint64_t um, im; } cq_item;
+static cq_item g_cq[CQ]; static unsigned g_cq_h, g_cq_t; static pthread_cond_t g_cq_cv = PTHREAD_COND_INITIALIZER, g_cq_done = PTHREAD_COND_INITIALIZER;
+static VkPipeline compute_build(vkshader_t *cs, uint64_t um, uint64_t im);
+static void *compute_worker(void *arg) {
+    (void)arg; pthread_setname_np(pthread_self(), "vk compute"); setpriority(PRIO_PROCESS, 0, 10);
+    for (;;) {
+        pthread_mutex_lock(&g_cpipe_mu); while (g_cq_h == g_cq_t) pthread_cond_wait(&g_cq_cv, &g_cpipe_mu);
+        cq_item it = g_cq[g_cq_h++ % CQ]; pthread_mutex_unlock(&g_cpipe_mu);
+        uint64_t t0 = tick(); VkPipeline p = compute_build(it.cs, it.um, it.im); double s = (tick() - t0) / 1e9;
+        uint64_t k[3] = {it.cs->key, it.um, it.im};
+        pthread_mutex_lock(&g_cpipe_mu); nvn_hm_put(&g_cpipes, k, p); pthread_cond_broadcast(&g_cq_done); pthread_mutex_unlock(&g_cpipe_mu);
+        if (s > 1) VKLOG("compute pipeline %016llx (integer-texel views %#llx/%#llx) took the driver %.1f s", (unsigned long long)it.cs->key, (unsigned long long)it.um, (unsigned long long)it.im, s);
+    }
+    return NULL;
+}
+// The pipeline, or CPIPE_BUILDING when this dispatch goes without it. Called with g_cpipe_mu held, and p the table's entry for ck, NULL or CPIPE_BUILDING
+static VkPipeline compute_async(vkshader_t *cs, const uint64_t ck[3], VkPipeline p) {
+    if (p) return p;
+    static int started; if (!started) { started = 1; for (int i = 0; i < 2; i++) { pthread_t t; if (!pthread_create(&t, NULL, compute_worker, NULL)) pthread_detach(t); } }
+    if (g_cq_t - g_cq_h >= CQ) return CPIPE_BUILDING;
+    nvn_hm_put(&g_cpipes, ck, CPIPE_BUILDING); g_cq[g_cq_t++ % CQ] = (cq_item){cs, ck[1], ck[2]}; pthread_cond_signal(&g_cq_cv);
+    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_nsec += 300000000; if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+    while ((p = nvn_hm_get(&g_cpipes, ck)) == CPIPE_BUILDING) if (pthread_cond_timedwait(&g_cq_done, &g_cpipe_mu, &ts)) break;
+    return nvn_hm_get(&g_cpipes, ck);
+}
 // Compute pipelines made ahead. One depends only on its shader (and integer-texel variants, rare), and building one costs Adreno 45-105 ms: Super Mario Odyssey's
 // particle emitters run on compute shaders (EffectPtcl), and the first cap throw at a breakable object built one on the replay thread (a 65 ms frame), the first scenes
 // several. A game has few (Odyssey 41), so at the first submission a background thread builds every compute shader in the bundle with no integer-texel variant
@@ -1791,7 +1821,9 @@ static void dispatch(const p_dispatch *d) {
     VkDescriptorSetLayout dsl[5] = {cs->dsl}; VkPipelineLayout layout = vk_pipeline_layout(dsl, 1);
     uint32_t dofs[96]; VkDescriptorSet set = stage_set(5, cs, dofs);
     uint64_t ck[3] = {cs->key, g_num_um, g_num_im};
-    pthread_mutex_lock(&g_cpipe_mu); VkPipeline p = nvn_hm_get(&g_cpipes, ck); pthread_mutex_unlock(&g_cpipe_mu);
+    static int async = -1; if (async < 0) { const char *e = getenv("DM_VK_ASYNC_COMPUTE"); async = e && atoi(e); }
+    pthread_mutex_lock(&g_cpipe_mu); VkPipeline p = nvn_hm_get(&g_cpipes, ck); if (async) p = compute_async(cs, ck, p); pthread_mutex_unlock(&g_cpipe_mu);
+    if (p == CPIPE_BUILDING) { static uint64_t n; if (!(n++ & 1023)) VKLOG("dispatches left out while their compute pipeline is built: %llu (this one %016llx)", (unsigned long long)n, (unsigned long long)cs->key); return; }
     if (!p) {
         uint64_t tb = g_prof_on ? tick() : 0; p = compute_build(cs, ck[1], ck[2]); if (g_prof_on) g_prof_ns[7] += tick() - tb;
         pthread_mutex_lock(&g_cpipe_mu); VkPipeline had = nvn_hm_get(&g_cpipes, ck);
