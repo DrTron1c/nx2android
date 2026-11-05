@@ -309,6 +309,26 @@ static void evict_overlaps(uint64_t pool, int64_t off, int64_t size) {
 static vkimg_t *vk_tex_(const tex_t *t);
 vkimg_t *vk_tex(const tex_t *t) { extern int g_prof_on; extern uint64_t g_prof_ns[8]; struct timespec a, b; if (g_prof_on) clock_gettime(CLOCK_MONOTONIC, &a);
     vkimg_t *im = vk_tex_(t); if (g_prof_on) { clock_gettime(CLOCK_MONOTONIC, &b); g_prof_ns[1] += (uint64_t)((b.tv_sec - a.tv_sec) * 1000000000ll + (b.tv_nsec - a.tv_nsec)); } return im; }
+// A texture whose content the game put in its storage from the CPU, as nvn_mtl.m tex_cpu_content and tex_init_fill: nothing in NVN says so, and read as a GPU texture it holds zeros. In Pokémon
+// Pokopia that was every material and the colour grade: the G-buffer's base colour and the final picture were black, while targets, the sky and text drawn from WriteTexels showed.
+// CPU-written (uploaded, and again when its pages change): a block-compressed texture, which no GPU can render into, or a 3D one, in a pool the CPU can write, holding data at its first use
+int nvn_flushed(const void *p, uint64_t n);   // hle_nvn.c
+static int mem_any(const uint8_t *p, uint64_t n) { uint64_t i = 0, v; for (; i + 8 <= n; i += 8) { memcpy(&v, p + i, 8); if (v) return 1; } for (; i < n; i++) if (p[i]) return 1; return 0; }
+static int tex_cpu_content(const tex_t *t, const vkfmt_t *f) {
+    if (!t->mem || !t->pool || t->has_layout || !(f->compressed || t->d.target == NVN_TEXTURE_TARGET_3D) || t->d.samples > 1 || t->d.target == NVN_TEXTURE_TARGET_BUFFER) return 0;
+    if (t->pool->flags & (NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS | NVN_MEMORY_POOL_FLAGS_VIRTUAL)) return 0;
+    if ((t->d.flags & (NVN_TEXTURE_FLAGS_COMPRESSIBLE | NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET | NVN_TEXTURE_FLAGS_SPARSE)) || ((t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && !f->compressed)) return 0;
+    return mem_any(t->mem, t->L.size);
+}
+// Filled once, and still a GPU texture: the storage holds data, in a pool the CPU cannot write afterwards, or one it writes uncached, or a range it flushed. Not depth, multisample or compressible targets
+static int tex_init_fill(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {
+    if (!t->mem || !t->pool || (t->pool->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL) || t->has_layout || t->d.samples > 1 || (t->d.flags & NVN_TEXTURE_FLAGS_COMPRESSIBLE) || f->depth || f->stencil) return 0;
+    if (!(t->pool->flags & (NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS | NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED)) && !nvn_flushed(t->mem, t->L.size)) return 0;
+    if (!mem_any(t->mem, t->L.size)) return 0;
+    pkg_upload(im, t, f); nvn_dirty_release(t->mem, t->L.size); im->packaged = 0; im->pkg_mem = NULL;
+    static uint64_t n; if (n++ < 6 || !(n & 1023)) VKLOG("initial content: %ux%ux%u format %#x filled from its storage, pool flags %#x (%llu so far)", t->d.width, t->d.height, t->d.depth, t->d.format, t->pool->flags, (unsigned long long)n);
+    return 1;
+}
 static vkimg_t *vk_tex_(const tex_t *t) {
     if (!t || !t->serial || t->magic != MAGIC('T', 'E', 'X', 0)) return NULL;
     const vkfmt_t *f = vk_fmt(t->d.format);
@@ -337,6 +357,8 @@ static vkimg_t *vk_tex_(const tex_t *t) {
     // a texture's first use: written by the CPU since it was registered (profile tex_dirty_upload), it is CPU-written from now on, as at nvn_mtl.m's first resolution;
     // otherwise only a later nvn_ft_poll pass finds it, and its first draws read zeros
     int nvn_ft_written(const tex_t *);
+    int cpu = t->mem && !packaged_tex(t) && ((fresh && tex_cpu_content(t, f)) || (!fresh && im->packaged));   // (a new texture object over a CPU-written image's storage is CPU-written too)
+    if (cpu) { mtl_tex_cpu_written(t); static uint64_t n; if (n++ < 6 || !(n & 1023)) VKLOG("texture written by the CPU before its first use: %ux%ux%u format %#x flags %#x, pool flags %#x (%llu so far)", t->d.width, t->d.height, t->d.depth, t->d.format, t->d.flags, t->pool ? t->pool->flags : 0, (unsigned long long)n); }
     if (t->mem && lin_copy(im, t, f)) {}
     else if (t->mem && (packaged_tex(t) || (fresh && nvn_ft_written(t)))) {
         im->pkg_used = g_tex_frame;
@@ -346,7 +368,7 @@ static vkimg_t *vk_tex_(const tex_t *t) {
             if (now != im->pkg_seen && nvn_dirty_since_span(im->pkg_span, t->mem, t->L.size, im->pkg_stamp)) pkg_upload(im, t, f);   // pages written since the upload
             im->pkg_seen = now;
         }
-    } else if (fresh) vk_tex_prepare(vk_upload_cmd(), im);
+    } else if (fresh && !tex_init_fill(im, t, f)) vk_tex_prepare(vk_upload_cmd(), im);
     return im;
 }
 // Packaged textures give up their write protection (nvn_dirty_release; drawn again, they are uploaded and protected again) when not drawn for PKG_IDLE presents, and the
