@@ -45,9 +45,11 @@ public final class Installer {
         PackageInstaller.SessionParams sp = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         sp.setAppPackageName(pkg); sp.setSize(apk.length());
         int id = pi.createSession(sp);
-        try (PackageInstaller.Session s = pi.openSession(id); InputStream in = new FileInputStream(apk); OutputStream out = s.openWrite("app.apk", 0, apk.length())) {
-            byte[] b = new byte[1 << 16]; for (int n; (n = in.read(b)) > 0; ) out.write(b, 0, n);
-            s.fsync(out); out.close();
+        try (PackageInstaller.Session s = pi.openSession(id)) {
+            try (InputStream in = new FileInputStream(apk); OutputStream out = s.openWrite("app.apk", 0, apk.length())) {   // closed once, and before the commit: a second close of this stream fails
+                byte[] b = new byte[1 << 16]; for (int n; (n = in.read(b)) > 0; ) out.write(b, 0, n);
+                s.fsync(out);
+            }
             Intent done = new Intent(c, Result.class).putExtra("pkg", pkg).putExtra("flag", flag);
             s.commit(PendingIntent.getBroadcast(c, id, done, PendingIntent.FLAG_UPDATE_CURRENT).getIntentSender());   // the system fills the answer in: not immutable
         }
