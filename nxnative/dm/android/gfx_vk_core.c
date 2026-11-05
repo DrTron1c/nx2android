@@ -351,7 +351,8 @@ static int zc_over(uint64_t size) { static uint64_t m = 1; if (m == 1) { const c
 void mtl_pool_add(const void *mem, uint64_t size) {
     vk_init();
     if (!size) return;
-    uint64_t a = (uint64_t)(uintptr_t)mem, c = ((a | size) & 0xfff) || zc_over(size) ? size : ZC_CHUNK;
+    // Lazy pools go in smaller chunks, so a buffer deep in a big pool does not bring 256 MB with it (Banana Native places big pools 16 MB at a time, for the same reason: Pokopia's first buffer lies 38 MB into 3.4 GB)
+    uint64_t a = (uint64_t)(uintptr_t)mem, c = ((a | size) & 0xfff) || zc_over(size) ? size : pool_lazy_on() ? ZC_CHUNK / 4 : ZC_CHUNK;
     for (uint64_t o = 0; o < size; o += c) pool_add_one((const uint8_t *)mem + o, size - o < c ? size - o : c, a, a + size);
     if (size > c) VKLOG("memory pool %p +%#llx: %llu chunks of at most %#llx", mem, (unsigned long long)size, (unsigned long long)((size + c - 1) / c), c);
 }
