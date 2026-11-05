@@ -361,7 +361,8 @@ void mtl_pool_add(const void *mem, uint64_t size) {
     vk_init();
     if (!size) return;
     // Lazy pools go in smaller chunks, so a buffer deep in a big pool does not bring 256 MB with it (Banana Native places big pools 16 MB at a time, for the same reason: Pokopia's first buffer lies 38 MB into 3.4 GB)
-    uint64_t a = (uint64_t)(uintptr_t)mem, c = ((a | size) & 0xfff) || zc_over(size) ? size : pool_lazy_on() ? ZC_CHUNK / 4 : ZC_CHUNK;
+    // A pool of at most a chunk stays whole: Pokopia's 256 MB pool was all made anyway, and two ranges across its 64 MB chunks had no buffer
+    uint64_t a = (uint64_t)(uintptr_t)mem, c = ((a | size) & 0xfff) || zc_over(size) ? size : pool_lazy_on() && size > ZC_CHUNK ? ZC_CHUNK / 4 : ZC_CHUNK;
     for (uint64_t o = 0; o < size; o += c) pool_add_one((const uint8_t *)mem + o, size - o < c ? size - o : c, a, a + size);
     if (size > c) VKLOG("memory pool %p +%#llx: %llu chunks of at most %#llx", mem, (unsigned long long)size, (unsigned long long)((size + c - 1) / c), c);
 }
@@ -400,12 +401,14 @@ void mtl_pool_del(const void *mem) {
 }
 static uint64_t g_lazy_mb;
 // What the process holds and what the system has left, for the log: the kill comes with no message of its own
+uint64_t g_sh_loaded, g_sh_raw, g_sh_unknown; static int g_gmem_n;   // gfx_vk_shader.c counts them as it loads shaders
 void vk_mem_report(void) {
     char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
     FILE *f = fopen("/proc/self/status", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); for (int i = 0; i < 5; i++) { char *p = strstr(b, k[i]); if (p) v[i] = atol(p + strlen(k[i])); } }
     long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }
+    VKLOG("shaders loaded %llu, reading raw memory %llu, with bindings not understood %llu; raw memory table %d chunks of %d", (unsigned long long)g_sh_loaded, (unsigned long long)g_sh_raw, (unsigned long long)g_sh_unknown, g_gmem_n, g_npool);
     VKLOG("[mem] process %ld MB (anon %ld, file %ld, shared %ld, swapped %ld); hardware buffers made on first use %llu MB; system available %ld MB, swap free %ld MB", v[0] >> 10, v[1] >> 10, v[2] >> 10, v[3] >> 10, v[4] >> 10, (unsigned long long)g_lazy_mb, avail >> 10, swapf >> 10);
 }
 // The hardware buffer of a lazy chunk, made at the first lookup that finds it (vk_pool_of). Under the write lock: nothing else is finding pools, and an entry cannot move
@@ -449,7 +452,7 @@ void vk_gmem_buffers(VkBuffer *map, VkDeviceSize *map_len, VkBuffer *log, VkDevi
         pthread_rwlock_rdlock(&g_pool_mu);
         for (int i = 0; i < g_npool && n < GMEM_ENTRIES - 1; i++) if (g_pool[i].bda) { e[n][0] = g_pool[i].lo; e[n][1] = g_pool[i].hi; e[n][2] = g_pool[i].bda - g_pool[i].lo; e[n][3] = 0; n++; }
         pthread_rwlock_unlock(&g_pool_mu);
-        qsort(e, (size_t)n, sizeof *e, gmem_cmp);
+        qsort(e, (size_t)n, sizeof *e, gmem_cmp); g_gmem_n = n;
         memcpy(m + GMEM_ENTRY, e, (size_t)n * GMEM_ENTRY);
 
         if (mb) vk_defer_free_buffer(mb, mm);

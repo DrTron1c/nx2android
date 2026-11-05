@@ -1135,9 +1135,48 @@ static int set_memo_get(int st, vkshader_t *s, uint32_t *dofs) {
     memcpy(dofs, m->dofs, sizeof *dofs * (size_t)s->ndyn); g_num_um = m->um; g_num_im = m->im;
     return 1;
 }
+// While a pass dump runs (DM_VK_PASSDUMP): pass_report.txt beside the dumps, what the first draws of each pass were given, and each shader's SPIR-V as pass_spv_<key>.spv (at most 96 shaders).
+// The dumps show which target stays black; this shows which binding it read: a zero handle, a texture that is not there, a uniform buffer of zeros
+static void pd_report(int st, vkshader_t *s) {
+    static FILE *f; static int lines, last = -1, n[6], nseen; static uint64_t seen[96];
+    if (g_pd_state != 1 || lines > 12000) return;
+    const char *root = getenv("DM_ROOT"); char path[1024];
+    if (!f) { snprintf(path, sizeof path, "%s/pass_report.txt", root ? root : "."); if (!(f = fopen(path, "w"))) { lines = 1 << 30; return; } }
+    if (g_sub_pass != last) { last = g_sub_pass; memset(n, 0, sizeof n); fprintf(f, "== pass %d: %ux%u colour formats %d %d depth %d, %d targets\n", g_sub_pass - 1, S.pass_w, S.pass_h, S.cfmt[0], S.cfmt[1], S.dfmt, S.ncol); lines++; }
+    if (n[st]++ >= 3) return;
+    fprintf(f, "stage %d shader %016llx: %d bindings\n", st, (unsigned long long)s->key, s->nbind); lines++;
+    int fresh = 1; for (int i = 0; i < nseen; i++) if (seen[i] == s->key) fresh = 0;
+    if (fresh && nseen < 96) { seen[nseen++] = s->key; void vk_shader_save_spv(uint64_t key, const char *path); snprintf(path, sizeof path, "%s/pass_spv_%016llx.spv", root ? root : ".", (unsigned long long)s->key); vk_shader_save_spv(s->key, path); }
+    for (int i = 0; i < s->nbind; i++) {
+        const dmsv_bind *b = &s->b[i]; lines++;
+        fprintf(f, "  #%d kind %d desc %d binding %u reg %d off %d count %u", i, b->kind, b->desc, b->binding, b->reg, b->off, b->count);
+        if (b->kind == RK_CBUF || b->kind == RK_UBO_PTR) {
+            const p_bind_buf *u = b->reg >= 0 && b->reg < 16 ? &S.ubo[st][b->reg] : NULL; uint64_t a = u ? u->addr : 0;
+            fprintf(f, " buffer %#llx +%#llx%s", (unsigned long long)a, (unsigned long long)(u ? u->size : 0), a && !vk_pool_of(a, 1) ? " NOT IN A POOL" : "");
+            if (a && vk_pool_of(a, 1)) { uint32_t w[12]; memcpy(w, (const void *)(uintptr_t)a, sizeof w); fprintf(f, " :"); for (int k = 0; k < 12; k++) fprintf(f, " %08x", w[k]); }
+        } else if (b->kind == RK_SBUF || b->kind == RK_SBUF_UBO) {
+            uint64_t a = 0, z = 0;
+            if (b->kind == RK_SBUF && b->reg >= 0 && b->reg < 16) { a = S.ssbo[st][b->reg].addr; z = S.ssbo[st][b->reg].size; }
+            else if (b->kind == RK_SBUF_UBO) a = (uint64_t)ubo_word(st, b->reg, b->off) | (uint64_t)ubo_word(st, b->reg, b->off + 4) << 32;
+            fprintf(f, " storage %#llx +%#llx%s", (unsigned long long)a, (unsigned long long)z, a && !vk_pool_of(a, 1) ? " NOT IN A POOL" : "");
+        } else if (b->kind == RK_TEX || b->kind == RK_TEX_UBO || b->kind == RK_TEX_C2A || b->kind == RK_IMG || b->kind == RK_IMG_UBO || b->kind == RK_TBUF || b->kind == RK_TBUF_UBO) {
+            int cnt = b->count ? b->count : 1; if (cnt > 4) cnt = 4;
+            for (int k = 0; k < cnt; k++) {
+                uint64_t h = b->kind == RK_TEX || b->kind == RK_TBUF ? (b->reg >= 0 && b->reg < 256 ? S.tex[st][b->reg] : 0) : b->kind == RK_IMG ? (b->reg >= 0 && b->reg < 32 ? S.img[st][b->reg] : 0) :
+                             b->kind == RK_TEX_C2A ? (b->off >= 0 ? c2_handle(st, b->off + 8 * k) : 0) : ubo_word(st, b->reg, b->off + 8 * k);
+                const view_t *v = NULL; const tex_t *t = NULL; int tid = (int)(h & 0xfffff);
+                if (tid && vk_tex_by_id(tid, &v, &t) && t) fprintf(f, " [handle %#llx: %ux%u nvn format %#x target %d, pool %p+%#llx]", (unsigned long long)h, t->d.width, t->d.height, t->d.format, t->d.target, (const void *)t->pool, (unsigned long long)t->off);
+                else fprintf(f, " [handle %#llx: NO TEXTURE]", (unsigned long long)h);
+            }
+        }
+        fputc('\n', f);
+    }
+    fflush(f);
+}
 // dofs (at least s->ndyn entries): the dynamic offsets of the set's dynamic uniform buffers, in binding order as vkCmdBindDescriptorSets takes them
 static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
-    int memo = st < 3 && !g_x_nosetmemo && !g_tracing && !g_var_now && !g_x_nosetc && !g_x_nodrvc && !g_ubolog_key && g_td_off < 0 && set_memo_ok(s), verify = 0;
+    if (g_pd_state == 1) pd_report(st, s);
+    int memo = st < 3 && !g_pd_state && !g_x_nosetmemo && !g_tracing && !g_var_now && !g_x_nosetc && !g_x_nodrvc && !g_ubolog_key && g_td_off < 0 && set_memo_ok(s), verify = 0;
     uint32_t vd[96]; uint64_t vum = 0, vim = 0;   // verify: what the memo gave
     if (memo && set_memo_get(st, s, dofs)) { static unsigned nv; if (!g_x_setverify || ++nv % 64) { g_set_memo++; return g_smemo[st].set; }
         verify = 1; memcpy(vd, dofs, sizeof *dofs * (size_t)s->ndyn); vum = g_num_um; vim = g_num_im; }

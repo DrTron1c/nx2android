@@ -224,6 +224,14 @@ static VkDescriptorSetLayout shader_layout(const VkDescriptorSetLayoutBinding *b
     }
     return layout;
 }
+void vk_shader_save_spv(uint64_t key, const char *path) {   // gfx_vk_exec.c pd_report
+    bundle_auto(); const bent *e = g_bundle ? find(key) : NULL; if (!e) return;
+    const uint8_t *sp = bent_base(e) + bent_at(e->spv_high, e->spv_off); uint32_t raw = e->spv_len; uint8_t *w;
+    if (e->stage & BENT_ZLIB) { memcpy(&raw, sp, 4); w = malloc(raw); uLongf rn = raw; if (!w || uncompress(w, &rn, sp + 4, e->spv_len - 4) != Z_OK) { free(w); return; } }
+    else { w = malloc(raw); if (!w) return; memcpy(w, sp, raw); }
+    FILE *f = fopen(path, "wb"); if (f) { fwrite(w, 1, raw, f); fclose(f); }
+    free(w);
+}
 vkshader_t *vk_shader(uint64_t key, int stage) {
     bundle_auto();
     struct { uint64_t key; uint64_t stage; } hk = {key, (uint64_t)stage};
@@ -238,6 +246,7 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
     const uint8_t *r = bent_base(e) + bent_at(e->refl_high, e->refl_off); uint32_t hdr[5]; memcpy(hdr, r, 20);
     s->nbind = (int)hdr[0]; s->c1_len = hdr[1]; memcpy(s->local, hdr + 2, 12);
     s->b = (const dmsv_bind *)(r + 20); s->c1 = r + 20 + 20 * s->nbind;
+    { extern uint64_t g_sh_loaded, g_sh_raw, g_sh_unknown; int raw = 0, unk = 0; for (int i = 0; i < s->nbind; i++) { raw |= s->b[i].kind == RK_GMEM_MAP; unk |= s->b[i].kind == RK_UNKNOWN; } g_sh_loaded++; g_sh_raw += raw; g_sh_unknown += unk; }
     // SPIR-V with the stage's set
     const uint8_t *sp = bent_base(e) + bent_at(e->spv_high, e->spv_off); uint32_t spv_bytes = e->spv_len; uint32_t *w;
     if (e->stage & BENT_ZLIB) { uint32_t raw; memcpy(&raw, sp, 4); w = malloc(raw); uLongf rn = raw;
