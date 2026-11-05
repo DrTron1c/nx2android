@@ -1294,6 +1294,14 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
 // a new command buffer (g_cmd_gen, gfx_vk_core.c) starts empty. Xenoblade Chronicles 3 docked: ~1,900 draws a frame, each with 10 dynamic-state calls and
 // its binds, most the same as the draw before; the driver's time grows with what is recorded (vkEndCommandBuffer too). DM_VK_X_NOBC=1: everything every draw
 extern uint64_t g_cmd_gen;
+// DM_VK_SHADOW_BIAS=<slope>,<units>: more depth bias for a depth-only D16 pass (the sun's shadow map). A stopgap, cause open: the lit side of everything in Pokopia's first area shows the moire of
+// a surface shadowing itself, in bands at the cascades, on Android and not on the Mac, with the same bias sent. The game's own values are logged ([shadow]). Its 25 taps reach 2 texels
+// each way, so a slope of about 3 covers them; a clamp keeps steep casters from lifting their shadows off the ground
+static float g_sb_slope = -1, g_sb_units;
+static int shadow_pass(void) {
+    if (g_sb_slope < 0) { const char *e = getenv("DM_VK_SHADOW_BIAS"); g_sb_slope = 0; if (e) sscanf(e, "%f,%f", &g_sb_slope, &g_sb_units); }
+    return g_sb_slope > 0 && S.dfmt == VK_FORMAT_D16_UNORM && S.ncol == 0;
+}
 static struct { uint64_t gen; VkViewport vp; VkRect2D sc; float bc[4]; int sm[2], sw[2], sr[2], line; p_poly_offset po; VkPipelineLayout lay; uint32_t nsets, ndofs;
                 VkDescriptorSet sets[5]; uint32_t dofs[3 * 96]; VkBuffer vb[17]; VkDeviceSize vo[17]; VkBuffer ib; VkDeviceSize io; VkIndexType it; } g_bc;
 
@@ -1326,7 +1334,8 @@ static void set_dynamic(VkCommandBuffer cb) {
     if (!BC_SAME(sm, S.smask)) { vkCmdSetStencilCompareMask(cb, VK_STENCIL_FACE_FRONT_BIT, (uint32_t)S.smask[0]); vkCmdSetStencilCompareMask(cb, VK_STENCIL_FACE_BACK_BIT, (uint32_t)S.smask[1]); memcpy(g_bc.sm, S.smask, sizeof g_bc.sm); }
     if (!BC_SAME(sw, S.swmask)) { vkCmdSetStencilWriteMask(cb, VK_STENCIL_FACE_FRONT_BIT, (uint32_t)S.swmask[0]); vkCmdSetStencilWriteMask(cb, VK_STENCIL_FACE_BACK_BIT, (uint32_t)S.swmask[1]); memcpy(g_bc.sw, S.swmask, sizeof g_bc.sw); }
     if (!BC_SAME(sr, S.sref)) { vkCmdSetStencilReference(cb, VK_STENCIL_FACE_FRONT_BIT, (uint32_t)S.sref[0]); vkCmdSetStencilReference(cb, VK_STENCIL_FACE_BACK_BIT, (uint32_t)S.sref[1]); memcpy(g_bc.sr, S.sref, sizeof g_bc.sr); }
-    if (!BC_SAME(po, S.pofs)) { vkCmdSetDepthBias(cb, S.pofs.units, S.pofs.clamp, S.pofs.factor); g_bc.po = S.pofs; }
+    p_poly_offset pv = S.pofs; if (shadow_pass()) { pv.factor += g_sb_slope; pv.units += g_sb_units; if (pv.clamp == 0) pv.clamp = 0.002f; }
+    if (!BC_SAME(po, pv)) { vkCmdSetDepthBias(cb, pv.units, pv.clamp, pv.factor); g_bc.po = pv; }
     if (fresh || !g_bc.line) { vkCmdSetLineWidth(cb, 1.0f); g_bc.line = 1; }
 }
 static int g_no_cull = -1;
@@ -1402,6 +1411,10 @@ static int prepare_draw(int prim, int indexed) {
     // lower-left origin mode flips the viewport again, so CCW when (front == CCW) == lower left. Taken as given, upper-left games (NEO) culled their ground and walls
     k.front = ((S.poly.front == NVN_FRONT_FACE_CCW) == (g_lower_left != 0)) != (g_flipy != 0); k.mode = S.poly.mode; k.depth_clamp = S.depth_clamp;
     k.bias_en = (S.poly.offset_en & (S.poly.mode == 0 ? 1 : S.poly.mode == 1 ? 2 : 4)) != 0;
+    if (S.dfmt == VK_FORMAT_D16_UNORM && S.ncol == 0) {
+        static p_poly_offset was; static int wen = -1, n; if (n < 24 && (k.bias_en != wen || memcmp(&was, &S.pofs, sizeof was))) { n++; was = S.pofs; wen = k.bias_en; VKLOG("[shadow] the game's bias in a %ux%u D16 pass: on %d, slope %g, units %g, clamp %g; depth clamp %d", S.pass_w, S.pass_h, k.bias_en, S.pofs.factor, S.pofs.units, S.pofs.clamp, S.depth_clamp); }
+        if (shadow_pass()) k.bias_en = 1;
+    }
     if (var == 2) k.bias_en = 0;
     if (var == 8) k.raster_discard = 1;   // no fragment shader in the pipeline
     int has_depth = (S.daspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0, has_stencil = (S.daspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;

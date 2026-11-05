@@ -356,6 +356,10 @@ static void pool_copy_back(vkpool_t *p) {   // the pages go back to anonymous me
 // and the whole Android UI restarts with it; 400 MB ones work (13 Sentinels: Aegis Rim's 0x32c00000-byte pool). A range across two chunks has no buffer (vk_pool_of)
 #define ZC_CHUNK 0x10000000ull
 static void pool_add_one(const void *mem, uint64_t size, uint64_t base, uint64_t end);
+// DM_VK_POOL_CHUNK_MB=<n>: the chunks of a lazy pool (default 64). Small ones let a pool that mixes textures and buffers leave the textures in memory Android can swap: textures are copied to
+// images of their own, so a hardware buffer over them holds that memory twice, and only the buffers need one (pool_join puts a buffer across two chunks in one). Each chunk made also stops
+// the game for its copy, which first brings the chunk back from swap: 64 MB at a time was seconds on the tablet
+static uint64_t lazy_chunk(void) { static uint64_t c; if (!c) { const char *e = getenv("DM_VK_POOL_CHUNK_MB"); c = e && atoi(e) > 0 ? (uint64_t)atoi(e) << 20 : ZC_CHUNK / 4; } return c; }
 // DM_VK_ZEROCOPY_MAX_MB=<n>: pools bigger than n MB are copied, not zero-copy, and kept whole (a copied pool takes no hardware buffer, so no chunks). The Legion Y700
 // 2023's gralloc aborts the process (no error returned) allocating a hardware buffer for Unicorn Overlord's 860 MB pool, while its pools up to 250 MB are fine
 static int zc_over(uint64_t size) { static uint64_t m = 1; if (m == 1) { const char *e = getenv("DM_VK_ZEROCOPY_MAX_MB"); m = e && atoi(e) > 0 ? (uint64_t)atoi(e) << 20 : 0; } return m && size > m; }
@@ -364,15 +368,16 @@ void mtl_pool_add(const void *mem, uint64_t size) {
     if (!size) return;
     // Lazy pools go in smaller chunks, so a buffer deep in a big pool does not bring 256 MB with it (Banana Native places big pools 16 MB at a time, for the same reason: Pokopia's first buffer lies 38 MB into 3.4 GB)
     // A pool of at most a chunk stays whole: Pokopia's 256 MB pool was all made anyway, and two ranges across its 64 MB chunks had no buffer
-    uint64_t a = (uint64_t)(uintptr_t)mem, c = ((a | size) & 0xfff) || zc_over(size) ? size : pool_lazy_on() && size > ZC_CHUNK ? ZC_CHUNK / 4 : ZC_CHUNK;
+    uint64_t a = (uint64_t)(uintptr_t)mem, c = ((a | size) & 0xfff) || zc_over(size) ? size : pool_lazy_on() && (size > ZC_CHUNK || lazy_chunk() < ZC_CHUNK / 4) ? lazy_chunk() : ZC_CHUNK;
     for (uint64_t o = 0; o < size; o += c) pool_add_one((const uint8_t *)mem + o, size - o < c ? size - o : c, a, a + size);
     if (size > c) VKLOG("memory pool %p +%#llx: %llu chunks of at most %#llx", mem, (unsigned long long)size, (unsigned long long)((size + c - 1) / c), c);
 }
+static uint64_t g_pool_ser;
 static void pool_add_one(const void *mem, uint64_t size, uint64_t base, uint64_t end) {
     pthread_rwlock_wrlock(&g_pool_mu);
     if (g_npool == MAXPOOL) { pthread_rwlock_unlock(&g_pool_mu); die("[vk] too many memory pools"); }
     vkpool_t *p = &g_pool[g_npool]; memset(p, 0, sizeof *p);
-    p->lo = (uint64_t)(uintptr_t)mem; p->hi = p->lo + size; p->base = base; p->end = end; { static uint64_t ser; p->serial = ++ser; }
+    p->lo = (uint64_t)(uintptr_t)mem; p->hi = p->lo + size; p->base = base; p->end = end; p->serial = ++g_pool_ser;
     int zc = ((uintptr_t)mem & 0xfff) || (size & 0xfff) ? -3 : getenv("DM_VK_NO_ZEROCOPY") ? -4 : zc_over(end - base) ? -5 : (p->lazy = pool_lazy_on()) ? 0 : pool_zero_copy(p, (uint8_t *)mem, size);
     if (zc) {
         static int said; if (!said++) VKLOG("[RED] memory pool %p +%#llx could not be zero-copy (%d): a GPU copy is refreshed before each submission (slow)", mem, (unsigned long long)size, zc);
@@ -434,14 +439,54 @@ static vkpool_t *pool_materialize(uint64_t lo) {
         int rc = pool_zero_copy(r, (uint8_t *)(uintptr_t)r->lo, r->hi - r->lo);
         if (rc) die("[vk] memory pool %#llx +%#llx: no hardware buffer (%d), and the device has no memory left for it", (unsigned long long)r->lo, (unsigned long long)(r->hi - r->lo), rc);
         __atomic_fetch_add(&g_pool_gen, 1, __ATOMIC_RELEASE);   // the raw memory table has one more entry
-        static uint64_t mb; mb += (r->hi - r->lo) >> 20; g_lazy_mb = mb; static int n; if (n++ < 64 || !(n & 15)) VKLOG("memory pool chunk %#llx: hardware buffer made on first use (%llu MB in such buffers)", (unsigned long long)r->lo, (unsigned long long)mb);
+        g_lazy_mb += (r->hi - r->lo) >> 20; static int n; if (n++ < 64 || !(n & 15)) VKLOG("memory pool chunk %#llx: hardware buffer made on first use (%llu MB in such buffers)", (unsigned long long)r->lo, (unsigned long long)g_lazy_mb);
     }
     pthread_rwlock_unlock(&g_pool_mu);
+    return r;
+}
+// A range across chunks of a lazy pool: the chunks become one, with one hardware buffer, since a VkBuffer is one allocation. NULL when that is impossible (not lazy, or over ZC_CHUNK).
+// Chunks that already have buffers give them up: their contents are copied as a new chunk's are, and the old VkBuffers stay valid until the GPU is past them, as a finalized pool's do, so
+// work already recorded reads what it read. A joined entry goes in the first chunk's place and the others stay empty in the table, because another thread may hold a pointer to one.
+// Packed buffers cross every boundary, which would copy a growing chunk again and again: a join over a chunk with a buffer doubles it with the free chunks after it
+static vkpool_t *pool_join(uint64_t a, uint64_t e) {
+    vkpool_t *r = NULL;
+    pthread_rwlock_wrlock(&g_pool_mu);
+    int n = 0, last = -1, had = 0, *at = malloc(sizeof(int) * (size_t)(g_npool + 1));
+    for (int i = 0; i < g_npool; i++) { vkpool_t *p = &g_pool[g_pool_ord[i]]; if (p->hi > a && p->lo < e) { at[n++] = g_pool_ord[i]; last = i; had += p->buf != VK_NULL_HANDLE; } }
+    uint64_t lo = n ? g_pool[at[0]].lo : 0, hi = n ? g_pool[at[n - 1]].hi : 0, base = n ? g_pool[at[0]].base : 0;
+    int ok = n >= 1 && lo <= a && hi >= e && hi - lo <= ZC_CHUNK;
+    for (int i = 0; i < n && ok; i++) { vkpool_t *p = &g_pool[at[i]]; ok = p->lazy && p->base == base && (!i || p->lo == g_pool[at[i - 1]].hi); }
+    if (!ok) { pthread_rwlock_unlock(&g_pool_mu); free(at); return NULL; }
+    if (n == 1) {   // another thread joined them first
+        r = &g_pool[at[0]]; int need = !r->buf; pthread_rwlock_unlock(&g_pool_mu); free(at);
+        return need ? pool_materialize(lo) : r;
+    }
+    if (had) {
+        uint64_t want = (hi - lo) * 2; if (want > ZC_CHUNK) want = ZC_CHUNK;
+        for (int j = last + 1; j < g_npool; j++) { vkpool_t *p = &g_pool[g_pool_ord[j]]; if (p->lo != hi || !p->lazy || p->base != base || p->buf || p->hi - lo > want) break; at[n++] = g_pool_ord[j]; hi = p->hi; }
+    }
+    vkpool_t t = g_pool[at[0]]; t.hi = hi; t.buf = VK_NULL_HANDLE; t.mem = VK_NULL_HANDLE; t.ahb = NULL; t.zero_copy = 0; t.bda = 0; t.serial = ++g_pool_ser;
+    int rc = pool_zero_copy(&t, (uint8_t *)(uintptr_t)lo, hi - lo);
+    if (rc) die("[vk] memory pool %#llx +%#llx: no hardware buffer (%d), and the device has no memory left for it", (unsigned long long)lo, (unsigned long long)(hi - lo), rc);
+    struct { VkBuffer b; VkDeviceMemory m; void *ahb; } *dead = calloc((size_t)n, sizeof *dead); int nd = 0;
+    for (int i = 0; i < n; i++) {
+        vkpool_t *p = &g_pool[at[i]];
+        if (p->buf) { dead[nd].b = p->buf; dead[nd].m = p->mem; dead[nd++].ahb = p->ahb; g_lazy_mb -= (p->hi - p->lo) >> 20; }
+        if (i) { p->lo = p->hi = p->base = p->end = 0; p->lazy = p->zero_copy = 0; p->bda = 0; p->ahb = NULL; p->mem = VK_NULL_HANDLE; }   // (buf stays: a reader that holds this entry gets a buffer still alive)
+    }
+    g_pool[at[0]] = t; r = &g_pool[at[0]]; g_lazy_mb += (hi - lo) >> 20;
+    pool_ord_make(); __atomic_fetch_add(&g_pool_gen, 1, __ATOMIC_RELEASE);
+    pthread_rwlock_unlock(&g_pool_mu);
+    for (int i = 0; i < nd; i++) { vk_defer_free_buffer(dead[i].b, dead[i].m); if (dead[i].ahb) AHardwareBuffer_release(dead[i].ahb); }
+    static unsigned nj, nb; nj++; nb += nd != 0;
+    if (nj <= 16 || !(nj & 63)) VKLOG("memory pool chunks %#llx +%#llx joined (%d chunks, %d with buffers; %u joins, %u over chunks in use; %llu MB in such buffers)", (unsigned long long)lo, (unsigned long long)(hi - lo), n, nd, nj, nb, (unsigned long long)g_lazy_mb);
+    free(dead); free(at);
     return r;
 }
 // What NVN hands the GPU as an address has its buffer from then on: a shader may reach it by a pointer alone, which no lookup here sees (Banana Native's mtl_pool_need)
 void mtl_pool_need(const void *mem, uint64_t size) {
     uint64_t a = (uint64_t)(uintptr_t)mem, e = a + size;
+    if (size > 1 && size <= ZC_CHUNK && pool_lazy_on() && vk_pool_of(a, size)) return;   // all of it in one buffer: its users look it up by its first byte
     while (a < e) { vkpool_t *p = vk_pool_of(a, 1); if (!p) { a = (a | 0xfff) + 1; continue; } a = p->hi; }
 }
 // Raw global memory (dmsh_abi.h DMSH_GMEM_MAP_*, GlobalToStorage.TryGenerateRawStorageOp): an address a shader loaded from memory goes through this table to a device address. Entry 0 empty,
@@ -500,6 +545,7 @@ vkpool_t *vk_pool_of(uint64_t addr, uint64_t len) {
     pthread_rwlock_unlock(&g_pool_mu);
     if (lazy) r = pool_materialize(lazy);
     if (r) { if (c.gen != g) { memset(&c, 0, sizeof c); c.gen = g; } memmove(&c.p[1], &c.p[0], 3 * sizeof *c.p); c.p[0] = r; }
+    if (!r && across && pool_lazy_on() && (r = pool_join(addr, addr + len))) return r;
     if (!r && across) { static uint64_t n; uint64_t k = ++n; if (!(k & (k - 1))) LOG("[RED] [vk] %llu ranges across two chunks of a memory pool (ZC_CHUNK; this one %#llx +%#llx): no buffer for them", (unsigned long long)k, (unsigned long long)addr, (unsigned long long)len); }
     return r;
 }

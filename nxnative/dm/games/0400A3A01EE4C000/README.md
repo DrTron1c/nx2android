@@ -33,6 +33,8 @@ The first boot shows the language list: `A`, `LUp`, `A` picks English. The chara
 
 ## Open
 
+- Android, open: the lit side of Ditto and of blocks in the first area shows the moire of a surface shadowing itself, in bands at the cascades. The sun's map is 2048x2048 D16 and the lighting takes 25 hardware-compared taps. The cause is not known: the same bias goes to Metal, where it does not show. `DM_VK_SHADOW_BIAS` in `android.tsv` is a stopgap, and the `[shadow]` log lines give the game's own values to compare.
+- Android, open: on the 12 GB tablet the system had about 500 MB available throughout, with 2.3 GB of hardware buffers, and frames stopped for up to 17 s with no new pipelines or uploads. The 3.5 GB pool mixes textures and buffers, so `DM_VK_POOL_CHUNK_MB=8` keeps the textures out of hardware buffers. Whether that clears the stalls has not been measured.
 - The picture has not been compared with a Switch 2. The user's playtest found it fine. Sunlit ground matches published iPhone shots of the game. Shaded ground and walls are lavender. The player carries fine contour lines, already present in colour target 5435, which may be the material. In some moving shots far blocks showed through near ones; this has not been rechecked since the fixes below.
 - Only the first area has been played on this build. A new save written through the game has not been checked: the 31-minute playtest wrote none.
 - An IPA has not been built. A full iOS shader build would be needed first.
