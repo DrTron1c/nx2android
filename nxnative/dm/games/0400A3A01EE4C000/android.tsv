@@ -4,7 +4,5 @@ orientation	landscape
 requires	bcn
 # a hardware buffer takes all its memory at once, and 5 GB of them left a 12 GB tablet none (gfx_vk_core.c)
 env	DM_VK_LAZY_POOLS=1
-# one frame's passes, for the black picture: remove with it
-env	DM_VK_PASSDUMP=3300
 # the shaders are translated, so their code in memory pools goes back to the system (hle_nvn.c code_drop)
 env	DM_NVN_DROP_CODE=1

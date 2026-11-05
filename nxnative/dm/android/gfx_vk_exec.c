@@ -927,6 +927,7 @@ static void build_dump(void) {   // (the crash handler: no locks, no allocation)
                 g_build[i].phase == 1 ? "making its shader modules" : "in the driver's pipeline compile", g_build[i].what); }
     if (!n) fprintf(stderr, "[dm] [vk] no pipeline was being built\n");
 }
+void vk_build_dump(void) { build_dump(); }   // gfx_vk_present.c hang_watch
 static VkPipeline build_pipeline(const pkey *k, VkPipelineLayout layout, vkshader_t *const stg[3]) {
     VkPipeline p;
     int bs = build_begin();

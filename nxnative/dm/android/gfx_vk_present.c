@@ -3,6 +3,38 @@
 // presented with FIFO (vsync) pacing. Headless (dmhost from adb shell): frames are counted, and DM_VK_SHOT=n1,n2,... writes those presented frames as PPM files to
 // DM_VK_SHOT_DIR (default DM_ROOT), which is how a run without a screen is checked.
 #include "gfx_vk.h"
+#include <dirent.h>
+// The picture stops but the sound goes on: nothing is logged and nothing crashes, so what each thread was doing is lost. After 12 s with no frame the log gets the guest threads, any pipeline
+// in the driver's compile, and every host thread's name, state and CPU time; three times at most, 15 s apart, so a thread still using CPU can be told from one that sleeps
+static _Atomic uint64_t g_hang_last;
+static uint64_t hang_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec; }
+static void hang_tasks(void) {
+    DIR *d = opendir("/proc/self/task"); if (!d) return; struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char p[80], b[512]; snprintf(p, sizeof p, "/proc/self/task/%s/stat", e->d_name); FILE *f = fopen(p, "r"); if (!f) continue;
+        size_t n = fread(b, 1, sizeof b - 1, f); fclose(f); b[n] = 0;
+        char *l = strchr(b, '('), *r = strrchr(b, ')'); if (!l || !r) continue;
+        char st = 0; unsigned long ut = 0, sy = 0; sscanf(r + 2, "%c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &st, &ut, &sy); *r = 0;
+        if (ut + sy >= 100 || st == 'R' || st == 'D') fprintf(stderr, "[dm] [hang] thread %s '%s' state %c, CPU %.1f s\n", e->d_name, l + 1, st, (ut + sy) / 100.0);
+    }
+    closedir(d);
+}
+static void *hang_watch(void *arg) {
+    (void)arg; int dumps = 0; uint64_t said = 0;
+    for (;;) {
+        sleep(3); uint64_t last = atomic_load(&g_hang_last), now = hang_now();
+        if (now - last < 12) { dumps = 0; continue; }
+        if (dumps >= 3 || now - said < 15) continue;
+        dumps++; said = now; fprintf(stderr, "[dm] [hang] no frame for %llu s\n", (unsigned long long)(now - last));
+        void vk_build_dump(void); vk_build_dump(); hang_tasks(); crash_dump_now("no frame for 12 s");
+    }
+    return NULL;
+}
+static void hang_watch_tick(void) {
+    static int on; if (!on) { on = 1; pthread_t t; if (!pthread_create(&t, NULL, hang_watch, NULL)) pthread_detach(t); }
+    atomic_store(&g_hang_last, hang_now());
+}
 #include <android/native_window.h>
 #include <string.h>
 #include <math.h>
@@ -885,7 +917,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     }
     if (!im) { no_img++; return present_enqueue(NULL, NULL, n, period); }
     if (im->layout != VK_IMAGE_LAYOUT_GENERAL) { undrawn++; return present_enqueue(NULL, NULL, n, period); }   // never drawn into: nothing to show yet
-    shown++; atomic_fetch_add(&g_fps_frames, 1);
+    shown++; atomic_fetch_add(&g_fps_frames, 1); hang_watch_tick();
     if (shot_wanted(n)) shot(im, n);
     { void vk_pass_dump_poll(uint64_t done); uint64_t vk_fence_done(void); vk_pass_dump_poll(vk_fence_done()); void vk_pass_frame(void); vk_pass_frame(); void vk_tex_sweep(void); vk_tex_sweep(); }
     if (n % 1800 == 0) {   // every ~30 s: the pipeline cache to disk on a thread of its own (an Android app can be killed without any exit path)

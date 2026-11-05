@@ -51,6 +51,7 @@ def install(apk, data, adb_exe, serial=None, replace_signer=False, symbols=None)
         except AdbError as e:
             if 'INSTALL_FAILED_USER_RESTRICTED' not in str(e) or not os.environ.get('NX2A_PREBUILT'): raise
             by_hand(adb, apk, man['package'])
+        if os.environ.get('NX2A_PREBUILT'): adb.shell(f'rm -f {shlex.quote(files)}/pass_* /sdcard/nx2android/frame-dump.tgz; true', check=False)   # an older frame capture: half a GB
         PROG.set(step='letting the app create its files folder')
         if adb.prepare_app_files(man['package']): say('started the app once so Android made its files folder (it stops at once without its data)')
         PROG.set(step='pushing the game data', done=0, total=man['bytes'], unit='B'); pushing = True
