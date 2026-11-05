@@ -673,6 +673,8 @@ class Port:
         return [a for f in files for a in ('--asset', f'overlay/{f.name}={f}')]
 
     def icon(self):   # the game's icon (nx_extract saves the control data's English one as icon.jpg) as a 256 px PNG; None without Pillow or an icon
+        own = DM / 'games' / self.g.id / 'icon.png'   # the profile's own, ready to pack: a Switch 2 dump gives none
+        if own.is_file(): return own
         src = next((d / 'icon.jpg' for d in (self.game, self.base) if (d / 'icon.jpg').exists()), None)
         if not src: say('[RED] no game icon in the extraction: the app gets the system\'s default icon'); return None
         try: from PIL import Image
