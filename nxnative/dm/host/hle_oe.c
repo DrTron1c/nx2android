@@ -166,7 +166,11 @@ HLE_FORCE("_ZN2nn2gs3sdk26SetGraphicsFrameLengthModeENS1_23GraphicsFrameLengthMo
     static int last = -1; if (mode != last) { LOG("gs: graphics frame length mode %d (0 auto, 1 30 fps, 2 60 fps, 3 120 fps)", mode); last = mode; }
 }
 HLE_FORCE("_ZN2nn2oe27GetDefaultDisplayResolutionEPiS1_", "default display resolution: 1920x1080 docked, 1280x720 handheld", void, h_oe_DefRes, int *w, int *h) {
-    int con = opmode() == 1; if (w) *w = con ? 1920 : 1280; if (h) *h = con ? 1080 : 720;
+    int con = opmode() == 1, ww = con ? 1920 : 1280, hh = con ? 1080 : 720;
+    const char *e = getenv("DM_DISPLAY_SCALE"); int pct = e ? atoi(e) : 100;   // the pause menu's Render size (Android): a game that sizes its picture by this draws fewer pixels, and the present scales them back
+    if (pct >= 30 && pct < 100) { ww = (ww * pct / 100 + 1) & ~1; hh = (hh * pct / 100 + 1) & ~1; }
+    static int said; if (!said++) LOG("oe: default display resolution %dx%d (%s)", ww, hh, con ? "docked" : "handheld");
+    if (w) *w = ww; if (h) *h = hh;
 }
 HLE_FORCE("_ZN2nn2oe38GetDefaultDisplayResolutionChangeEventEPNS_2os11SystemEventE", "default display resolution change event: bound, never signaled (the operation mode notification carries the change)",
           void, h_oe_DefResEv, void *ev) { hle_bind_system_event(ev, 0); }

@@ -18,6 +18,12 @@ env	DM_OPMODE=0
 env	DM_SETTINGS_EPOCH=2
 # the sticks float: hidden, and under the finger on its half of the window (front_android.c touch_event)
 env	DM_OV_FLOAT=1
+# the game goes on while the frame is replayed, on the fastest cores: a frame took the two one after the other
+env	DM_NVN_ASYNC=1
+env	DM_PIN_REPLAY=prime
+# which passes the GPU's time goes to, for the next round of cuts: remove with them
+env	DM_VK_PASS_TIMES=1
+env	DM_VK_PASS_SPIKE=60
 # the frame's Vulkan calls on a thread of their own (gfx_vk_dq.c): replaying takes 14 to 19 ms of a 40 ms frame
 env	DM_VK_MT_REPLAY=1
 # one frame's passes in play, for the stripes on Ditto: remove with them

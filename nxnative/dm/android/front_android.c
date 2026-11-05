@@ -76,6 +76,8 @@ static void settings_load(void) {
         else if (sscanf(line, "opacity=%d", &v) == 1) atomic_store(&g_set_opacity, v < OV_OPACITY_MIN ? OV_OPACITY_MIN : v > OV_OPACITY_MAX ? OV_OPACITY_MAX : v);
         else if (sscanf(line, "grid=%d", &v) == 1) atomic_store(&g_set_grid, v != 0);
         else if (sscanf(line, "aspect=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_ASPECT], v);
+        else if (sscanf(line, "scale=%d", &v) == 1 && v >= 0 && v < 4) {   // read once, when the game sizes its picture: the menu's change counts from the next start
+            atomic_store(&g_disp[DISP_SCALE], v); static const char *const pct[4] = {"100", "85", "75", "60"}; setenv("DM_DISPLAY_SCALE", pct[v], 1); }
         else if (sscanf(line, "fsr=%d", &v) == 1) atomic_store(&g_disp[DISP_FSR], v != 0);
         else if (sscanf(line, "sharp=%d", &v) == 1 && v >= 0 && v < 4) atomic_store(&g_disp[DISP_SHARP], v);
         else if (sscanf(line, "framegen=%d", &v) == 1) atomic_store(&g_disp[DISP_FG], v != 0);
@@ -98,7 +100,7 @@ static void settings_save(void) {
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\nopacity=%d\ngrid=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps),
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
     { const char *ep = getenv("DM_SETTINGS_EPOCH"); if (ep) fprintf(f, "epoch=%s\n", ep); }
-    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT));
+    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE));
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);
         if ((x && y) || z) fprintf(f, "ui=%s,%s,%d,%d,%d\n", LAYOUT_NAMES[l], OV_LAYOUTS[0][i].name, x && y ? x - 1 : -1, x && y ? y - 1 : -1, z ? z : 1000);
@@ -337,8 +339,8 @@ static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
-    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP) {
-        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : DISP_SHARP, n = item == OVM_ASPECT ? 5 : item == OVM_SHARP ? 4 : 2;
+    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE) {
+        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : DISP_SHARP, n = item == OVM_ASPECT ? 5 : item == OVM_SHARP || item == OVM_SCALE ? 4 : 2;
         atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); atomic_fetch_add(&g_disp_ver, 1); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
     else if (item == OVM_TAB) { menu_tab(atomic_load(&g_menu_tab) + 1); return; }
