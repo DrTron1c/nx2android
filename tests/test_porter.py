@@ -42,9 +42,9 @@ class AndroidProfiles(unittest.TestCase):
         self.assertEqual(android_profile.load(d.name).settings, {'fps': '1'})
         with self.assertRaises(android_profile.ProfileError): android_profile.load(profile_dir([('status', 'boots'), ('setting', 'fps=2')]).name)
 
-    def test_opacity_setting(self):   # the gamepad's opacity, 20..80 percent by 5 (the menu's slider, overlay_layout.h OV_OPACITY_MIN..MAX)
+    def test_opacity_setting(self):   # the gamepad's opacity, 20..100 percent by 5 (the menu's slider, overlay_layout.h OV_OPACITY_MIN..MAX)
         self.assertEqual(android_profile.load(profile_dir([('status', 'boots'), ('setting', 'opacity=45')]).name).settings, {'opacity': '45'})
-        for v in ('10', '85', '42'):
+        for v in ('10', '105', '42'):
             with self.assertRaises(android_profile.ProfileError, msg=v): android_profile.load(profile_dir([('status', 'boots'), ('setting', f'opacity={v}')]).name)
 
     def test_default_package(self):
