@@ -63,3 +63,7 @@ jobs:
           git config user.name ci; git config user.email ci@users.noreply.github.com
           git add -A; git commit -qm "logs of ${GITHUB_SHA}"
           git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}" ci-logs
+      - name: The host must have compiled
+        run: |
+          ls out/s2/*.so
+          ! grep -q ' failed: ' ci/host-switch2.log ci/host-switch1.log
