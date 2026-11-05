@@ -563,10 +563,9 @@ class Port:
         PROG.stage('Vulkan shaders', step='building the translator')
         xlate, xkey = self.translator()
         PROG.set(step='checking the inputs')
-        key = nsp.fingerprint(nsp.package_key(pkg), ('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE)), ('files', nsp.profile_files(self.g)), xkey,
-                              ('files', sorted(cap.glob('*.bin'))))
+        key = nsp.fingerprint(nsp.package_key(pkg), ('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE)), ('files', nsp.profile_files(self.g)), xkey, ('files', []))
         if self.dmsv.is_file() and (note := nsp.reused(kf, key)) is not None:
-            PROG.end(f'{note}, reused (inputs unchanged)'); return
+            self.extra_shaders(pkg, xlate); PROG.end(f'{note}, reused (inputs unchanged)'); return
         tmp = self.dmsv.with_name('shaders.dmsv.partial'); nsp.rmtree(kf)
         # This step takes about an hour on a tablet, so a stopped run keeps its place: the folder and the bundle begun in it count only for the same key
         work = self.aw / 'shader_vk_work'; stamp = work / 'key'
@@ -586,6 +585,23 @@ class Port:
         PROG.end(note)
         nsp.rmtree(work)
         for d in (self.work / 'tmp').glob('shvk_*'): nsp.rmtree(d)   # the translator's work folders
+        self.extra_shaders(pkg, xlate)
+
+    def extra_shaders(self, pkg, xlate):
+        """The shaders the game makes while it runs, in a small bundle of their own (shaders_extra.dmsv, gfx_vk_shader.c): the app saves each one it lacks, and a new one must not cost the
+        hour the whole bundle takes. Pokopia's title screen is black apart from its text until it has them"""
+        cap = self.aw / 'captured_shaders'; out = self.aw / 'shaders_extra.dmsv'; kf = self.aw / 'shaders_extra.key'
+        self.extra = None
+        keys = sorted(p.stem for p in cap.glob('*.bin'))
+        if not keys: return
+        key = nsp.fingerprint(('files', sorted(cap.glob('*.bin'))), ('files', [DM / 'android/tools/shader_vk.py']))
+        if out.is_file() and nsp.reused(kf, key) is not None: self.extra = out; return
+        PROG.set(step=f'translating the {len(keys)} shaders saved while the game ran')
+        tmp = out.with_name(out.name + '.partial'); nsp.rmtree(tmp)
+        nsp.run([PY, DM / 'android/tools/shader_vk.py', pkg, tmp, '--jobs', str(self.o.jobs), '--dotnet', self.tools['dotnet'], '--xlate', xlate, '--capture', cap, '--keys', ','.join(keys)],
+                self.logs / 'android_extra_shaders.log', env=self.env)
+        nsp.swap_in(tmp, out); kf.write_text(f'{key}\n'); self.extra = out
+        say(f'{len(keys)} shaders the game made while it ran are in the build')
 
     def pull_captures(self):
         """Shaders whose code no game file holds: the app saves each one the bundle lacks on the device (gfx_vk_shader.c vk_shader_missing), and they are
@@ -671,7 +687,7 @@ class Port:
         man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.romfs(self.game), shaders=self.dmsv,
                              aoc=self.aoc, language=self.lang, package=self.package, env=self.fps_env + font_env + (['DM_VK_MT_REPLAY=1'] if self.o.mt_replay else [])
                              + ([f'DM_VK_DRIVER={self.o.vulkan_driver.name}'] if self.o.vulkan_driver else []), settings=TOUCH_SETTINGS if self.o.touch else None,
-                             files={**self.fps_files, **font_files},
+                             files={**self.fps_files, **font_files, **({'shaders_extra.dmsv': self.extra} if getattr(self, 'extra', None) else {})},
                              progress=lambda what: PROG.set(step=f'linking {what}'))
         self.data_path = dst; self.result['data'] = str(dst)
         PROG.end(f'{man["files"]:,} files, {man["bytes"] / 2**30:.1f} GB')

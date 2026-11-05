@@ -17,6 +17,10 @@ _Static_assert(sizeof(bent) == 32, "shader_vk.py writes 32-byte entries");
 #define BENT_ZLIB 0x80000000u   // stage bit: the SPIR-V is u32 its length, then zlib (Pokopia's bundle was 28 GB)
 static uint64_t bent_at(uint16_t high, uint32_t low) { return (uint64_t)high << 32 | low; }
 static const uint8_t *g_bundle; static uint32_t g_nent; static const bent *g_ent;
+// shaders_extra.dmsv: the shaders the game makes while it runs, saved here on an earlier run (vk_shader_missing) and translated by the next port beside the bundle. Pokopia's title
+// screen needs about 20 of them, and without its pixel shaders a draw writes depth only: all that shows is the text (pokopia-native found this, and lists 154)
+static const uint8_t *g_extra; static uint32_t g_nextra; static const bent *g_eent;
+static const uint8_t *bent_base(const bent *e) { return g_eent && e >= g_eent && e < g_eent + g_nextra ? g_extra : g_bundle; }
 void vk_shaders_open(const char *path) {
     int fd = open(path, O_RDONLY | O_CLOEXEC); struct stat st;
     if (fd < 0 || fstat(fd, &st)) { VKLOG("[RED] no shader bundle at %s: nothing will be drawn", path); if (fd >= 0) close(fd); return; }
@@ -29,6 +33,13 @@ static void bundle_open_once(void) {
     const char *p = getenv("DM_VK_SHADERS"); char buf[1024];
     if (!p) { const char *r = getenv("DM_ROOT"); snprintf(buf, sizeof buf, "%s/shaders.dmsv", r ? r : "."); p = buf; }
     vk_shaders_open(p);
+    const char *r = getenv("DM_ROOT"); snprintf(buf, sizeof buf, "%s/shaders_extra.dmsv", r ? r : ".");
+    int fd = open(buf, O_RDONLY | O_CLOEXEC); struct stat st;
+    if (fd >= 0 && !fstat(fd, &st) && st.st_size >= 12) {
+        const uint8_t *m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+        if (m != MAP_FAILED && !memcmp(m, "DMSV", 4)) { memcpy(&g_nextra, m + 8, 4); g_extra = m; g_eent = (const bent *)(m + 12); VKLOG("shaders made at run time: %u from earlier runs", g_nextra); }
+    }
+    if (fd >= 0) close(fd);
 }
 // once, and every caller waits until it is open: the replay and the prewarm threads both look shaders up at start, and a lookup that ran before the bundle
 // was open cached its shader as missing for good (every draw skipped as "no program" in some runs)
@@ -42,6 +53,9 @@ static const bent *find(uint64_t key) {
     uint32_t lo = 0, hi = g_nent;
     while (lo < hi) { uint32_t m = (lo + hi) / 2; uint64_t k; memcpy(&k, &g_ent[m].key, 8); if (k < key) lo = m + 1; else hi = m; }
     if (lo < g_nent) { uint64_t k; memcpy(&k, &g_ent[lo].key, 8); if (k == key) return &g_ent[lo]; }
+    lo = 0; hi = g_nextra;
+    while (lo < hi) { uint32_t m = (lo + hi) / 2; uint64_t k; memcpy(&k, &g_eent[m].key, 8); if (k < key) lo = m + 1; else hi = m; }
+    if (lo < g_nextra) { uint64_t k; memcpy(&k, &g_eent[lo].key, 8); if (k == key) return &g_eent[lo]; }
     return NULL;
 }
 int vk_shader_stage(uint64_t key) { bundle_auto(); const bent *e = g_bundle ? find(key) : NULL; return e ? (int)(e->stage & ~BENT_ZLIB) : -1; }   // the NVN stage the bundle has this shader as
@@ -58,7 +72,8 @@ static pend_t g_pend[NPEND]; static unsigned g_npend; static pthread_mutex_t g_p
 static void shader_set(const uint8_t k[8], const void *control, uint64_t data, uint32_t ncode) {
     uint64_t key = 0; for (int i = 0; i < 8; i++) key = key << 8 | k[i];
     if (!key || !control || !data || !ncode || ncode >= (1u << 24) || vk_shader_stage(key) >= 0) return;
-    uint32_t nctl = 0x880, own; memcpy(&own, (const uint8_t *)control + 0x20, 4); if (own >= 0x760 && own < 0x880) nctl = own;   // as hle_nvn.c keys_hash
+    uint32_t nctl = 0x880, own, ver; memcpy(&own, (const uint8_t *)control + 0x20, 4); if (own >= 0x760 && own < 0x880) nctl = own;   // as hle_nvn.c keys_hash
+    memcpy(&ver, (const uint8_t *)control + 4, 4); if (ver == 0xc9) { memcpy(&own, (const uint8_t *)control + 0x30, 4); nctl = own >= 0x48 && own <= 0x1000 ? own : 0xd8; }   // NVN2: +0x30 its length, 0xd8 in most
     uint8_t *c = malloc(nctl); if (!c) return; memcpy(c, control, nctl);
     pthread_mutex_lock(&g_pend_mu);
     pend_t *p = &g_pend[g_npend++ % NPEND]; free(p->ctl); *p = (pend_t){key, data, nctl, ncode, c};   // the oldest goes: a draw needs a program soon after it is set
@@ -71,7 +86,11 @@ void vk_shader_missing(uint64_t key) {
     for (unsigned i = 0; i < NPEND && i < g_npend; i++) if (g_pend[i].key == key && g_pend[i].ctl) { p = g_pend[i]; p.ctl = malloc(p.nctl); if (p.ctl) memcpy(p.ctl, g_pend[i].ctl, p.nctl); break; }
     pthread_mutex_unlock(&g_pend_mu);
     if (!p.ctl) { VKLOG("[RED] shader %016llx is not in the bundle (and was not set while the capture could see it)", (unsigned long long)key); return; }
-    uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX hc; CC_SHA256_Init(&hc); CC_SHA256_Update(&hc, p.ctl, p.nctl); CC_SHA256_Update(&hc, (const void *)(uintptr_t)p.data, p.ncode); CC_SHA256_Final(md, &hc);
+    uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX hc; CC_SHA256_Init(&hc);
+    uint32_t ver; memcpy(&ver, p.ctl + 4, 4);
+    if (ver == 0xc9) { uint8_t c[0x48]; memcpy(c, p.ctl, 0x48); memset(c + 0x30, 0, 4); CC_SHA256_Update(&hc, c, 0x48); }   // NVN2's key (hle_nvn.c keys_hash)
+    else CC_SHA256_Update(&hc, p.ctl, p.nctl);
+    CC_SHA256_Update(&hc, (const void *)(uintptr_t)p.data, p.ncode); CC_SHA256_Final(md, &hc);
     uint64_t now = 0; for (int i = 0; i < 8; i++) now = now << 8 | md[i];
     if (now != key) { VKLOG("[RED] shader %016llx is not in the bundle; its code area changed since SetShaders, not saved", (unsigned long long)key); free(p.ctl); return; }
     const char *r = getenv("DM_ROOT"); char dir[1024], path[1100], tmp[1110]; snprintf(dir, sizeof dir, "%s/captured_shaders", r ? r : "."); mkdir(dir, 0755);
@@ -215,11 +234,11 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
               static int n; if (n++ < 16) VKLOG("[RED] shader %016llx (stage %d) is not in the bundle", (unsigned long long)key, stage); return NULL; }
     s = calloc(1, sizeof *s); s->key = key; s->stage = stage; s->set = set_of(stage);
     // reflection
-    const uint8_t *r = g_bundle + bent_at(e->refl_high, e->refl_off); uint32_t hdr[5]; memcpy(hdr, r, 20);
+    const uint8_t *r = bent_base(e) + bent_at(e->refl_high, e->refl_off); uint32_t hdr[5]; memcpy(hdr, r, 20);
     s->nbind = (int)hdr[0]; s->c1_len = hdr[1]; memcpy(s->local, hdr + 2, 12);
     s->b = (const dmsv_bind *)(r + 20); s->c1 = r + 20 + 20 * s->nbind;
     // SPIR-V with the stage's set
-    const uint8_t *sp = g_bundle + bent_at(e->spv_high, e->spv_off); uint32_t spv_bytes = e->spv_len; uint32_t *w;
+    const uint8_t *sp = bent_base(e) + bent_at(e->spv_high, e->spv_off); uint32_t spv_bytes = e->spv_len; uint32_t *w;
     if (e->stage & BENT_ZLIB) { uint32_t raw; memcpy(&raw, sp, 4); w = malloc(raw); uLongf rn = raw;
         if (uncompress((Bytef *)w, &rn, sp + 4, e->spv_len - 4) != Z_OK || rn != raw) die("[vk] shader %016llx: damaged in the bundle", (unsigned long long)key);
         spv_bytes = raw; }
