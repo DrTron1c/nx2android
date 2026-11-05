@@ -1725,6 +1725,9 @@ static VkPipeline compute_build(vkshader_t *cs, uint64_t um, uint64_t im) {   //
 static void *compute_warm(void *arg) {
     (void)arg; pthread_setname_np(pthread_self(), "vk compute warm"); setpriority(PRIO_PROCESS, 0, 10);
     int vk_shader_keys(uint32_t stage, uint64_t *out, int max); static uint64_t keys[4096]; int n = vk_shader_keys(5, keys, 4096), made = 0; uint64_t t0 = tick();
+    // Every compute pipeline holds GPU memory that shows in no process (Adreno's private memory). Pokémon Pokopia's bundle has thousands: its share of the tablet went from 0.7 GB to 6 GB in
+    // four seconds once the pipeline cache held them, and Android then pushed the game itself into swap and killed it. So many are built when they are first used
+    if (n > 256) { VKLOG("compute pipelines not made ahead: %s%d compute shaders in the bundle", n == 4096 ? "at least " : "", n); return NULL; }
     for (int i = 0; i < n; i++) {
         uint64_t ck[3] = {keys[i], 0, 0};
         pthread_mutex_lock(&g_cpipe_mu); int have = nvn_hm_get(&g_cpipes, ck) != NULL; pthread_mutex_unlock(&g_cpipe_mu);

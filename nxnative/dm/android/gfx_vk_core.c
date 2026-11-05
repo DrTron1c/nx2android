@@ -222,7 +222,9 @@ void vk_init(void) {
     VkPipelineCacheCreateInfo pci = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     char path[1024]; const char *root = getenv("DM_ROOT"); void *data = NULL; size_t dn = 0;
     if (root && !getenv("DM_VK_NOPCACHE")) { snprintf(path, sizeof path, "%s/vk_pipeline_cache.bin", root); FILE *f = fopen(path, "rb");   // DM_VK_NOPCACHE=1: start empty
-        if (f) { fseek(f, 0, SEEK_END); dn = (size_t)ftell(f); fseek(f, 0, SEEK_SET); data = malloc(dn); if (fread(data, 1, dn, f) != dn) dn = 0; fclose(f); } }
+        if (f) { fseek(f, 0, SEEK_END); dn = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
+            if (dn > 64 << 20) { VKLOG("pipeline cache of %zu MB dropped: too big to load (it starts again empty)", dn >> 20); dn = 0; fclose(f); remove(path); f = NULL; }   // the driver holds all of it from here on
+            else { VKLOG("pipeline cache: %zu MB", dn >> 20); data = malloc(dn); if (fread(data, 1, dn, f) != dn) dn = 0; fclose(f); } } }
     pci.initialDataSize = dn; pci.pInitialData = data;
     if (vkCreatePipelineCache(V.dev, &pci, NULL, &V.pcache)) { pci.initialDataSize = 0; pci.pInitialData = NULL; VKCHK(vkCreatePipelineCache(V.dev, &pci, NULL, &V.pcache)); }
     free(data); free(ex);
