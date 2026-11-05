@@ -79,7 +79,8 @@ static void shader_set(const uint8_t k[8], const void *control, uint64_t data, u
     pend_t *p = &g_pend[g_npend++ % NPEND]; free(p->ctl); *p = (pend_t){key, data, nctl, ncode, c};   // the oldest goes: a draw needs a program soon after it is set
     pthread_mutex_unlock(&g_pend_mu);
 }
-__attribute__((constructor)) static void shader_set_on(void) { extern void (*g_nvn_on_shader)(const uint8_t *, const void *, uint64_t, uint32_t); g_nvn_on_shader = shader_set; }
+static int shader_known(const uint8_t k[8]) { uint64_t key = 0; for (int i = 0; i < 8; i++) key = key << 8 | k[i]; return key && vk_shader_stage(key) >= 0; }
+__attribute__((constructor)) static void shader_set_on(void) { extern void (*g_nvn_on_shader)(const uint8_t *, const void *, uint64_t, uint32_t); extern int (*g_nvn_shader_known)(const uint8_t *); g_nvn_on_shader = shader_set; g_nvn_shader_known = shader_known; }
 void vk_shader_missing(uint64_t key) {
     pend_t p = {0};
     pthread_mutex_lock(&g_pend_mu);

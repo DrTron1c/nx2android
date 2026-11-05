@@ -680,6 +680,7 @@ static void pk_drop(const void *p) {
 // Set by a backend whose shaders are translated before the game runs (Android's Vulkan bundle, gfx_vk_shader.c): called at SetShaders for each stage whose key is known then, while the
 // control section is still the game's to read, so a shader whose code no game file holds can be saved and translated by the next port (Xenoblade Chronicles 3 sets hundreds)
 void (*g_nvn_on_shader)(const uint8_t key[8], const void *control, uint64_t data, uint32_t ncode);
+int (*g_nvn_shader_known)(const uint8_t key[8]);   // the same backend: the shader is translated, so nothing here reads its code again
 // mapped = 1: computed only when the code area is in a registered memory pool (at SetShaders: Mario sets some programs with an unmapped address first and fills it in before the first draw)
 // The control section's bytes in the key and the code area's length. NVN: +0x704 is the code area's length; +0x20 holds the section's own length: sections of at least
 // 0x880 bytes (all of Mario's, Engage's, Dread's and 13 Sentinels') use the first 0x880; SDK 10's 3D World has 0x850-byte ones followed by other data, so only their own
@@ -694,12 +695,54 @@ void nvn_ctl_lens(const void *control, uint32_t *nctl, uint32_t *ncode) {
     memcpy(&own, c + 0x20, 4);
     *nctl = own >= 0x760 && own < 0x880 ? own : 0x880;
 }
+// DM_NVN_DROP_CODE=1 (Android): a Switch 2 shader's code in a memory pool goes back to the system once its key is known and the bundle has it. The GPU here runs the bundle's SPIR-V, so the
+// game's copy is never read again, and Pokémon Pokopia sets 7,670 programs in its first frame on a tablet that Android kills it on for memory. A program set again over the same code would hash
+// zeros, so the key is kept under the control section's first bytes, which hold the shader's own hash and the code lengths
+#if defined(DM_ANDROID)
+#include <sys/mman.h>
+#include <unistd.h>
+enum { CODE_MEMO = 1 << 18 };
+static struct { uint64_t id; uint8_t key[8]; } *g_code_memo; static pthread_mutex_t g_code_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t code_id(const uint8_t *c) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (int i = 0; i < NVN2_KEY_CTL; i++) { h ^= i >= 0x30 && i < 0x34 ? 0 : c[i]; h *= 0x100000001b3ull; }
+    return h ? h : 1;
+}
+static int code_memo(const uint8_t *c, uint8_t out[8]) {
+    if (!g_code_memo) return 0;
+    uint64_t id = code_id(c); int hit = 0;
+    pthread_mutex_lock(&g_code_mu);
+    for (uint32_t i = (uint32_t)id & (CODE_MEMO - 1); g_code_memo[i].id; i = (i + 1) & (CODE_MEMO - 1)) if (g_code_memo[i].id == id) { memcpy(out, g_code_memo[i].key, 8); hit = 1; break; }
+    pthread_mutex_unlock(&g_code_mu);
+    return hit;
+}
+static void code_drop(const void *control, const uint8_t key[8], uint64_t data, uint32_t ncode) {
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_DROP_CODE"); on = e && atoi(e); if (on) g_code_memo = calloc(CODE_MEMO, sizeof *g_code_memo); if (!g_code_memo) on = 0; }
+    if (!on || !nvn2_ctl(control) || !g_nvn_shader_known || !g_nvn_shader_known(key)) return;
+    uint64_t id = code_id(control), pg = (uint64_t)sysconf(_SC_PAGESIZE), lo = (data + pg - 1) & ~(pg - 1), hi = (data + ncode) & ~(pg - 1);
+    static uint64_t n, set, back; static uint32_t used;
+    pthread_mutex_lock(&g_code_mu);
+    uint32_t i = (uint32_t)id & (CODE_MEMO - 1); int fresh = 1;
+    for (; g_code_memo[i].id; i = (i + 1) & (CODE_MEMO - 1)) if (g_code_memo[i].id == id) { fresh = 0; break; }
+    if (fresh && used >= CODE_MEMO / 2) { pthread_mutex_unlock(&g_code_mu); return; }   // the code stays: without a key kept it could not be hashed again
+    if (fresh) { g_code_memo[i].id = id; memcpy(g_code_memo[i].key, key, 8); used++; }
+    n++; set += ncode; if (fresh && hi > lo) back += hi - lo;
+    uint64_t show = !(n & 4095) ? n : 0, ms = set, mb = back;
+    pthread_mutex_unlock(&g_code_mu);
+    if (fresh && hi > lo) madvise((void *)(uintptr_t)lo, hi - lo, MADV_DONTNEED);
+    if (show) LOG("[nvn] shader code: %llu stages set, %llu MB, %llu MB given back to the system", (unsigned long long)show, (unsigned long long)(ms >> 20), (unsigned long long)(mb >> 20));
+}
+#else
+static int code_memo(const uint8_t *c, uint8_t out[8]) { (void)c; (void)out; return 0; }
+static void code_drop(const void *control, const uint8_t key[8], uint64_t data, uint32_t ncode) { (void)control; (void)key; (void)data; (void)ncode; }
+#endif
 static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
     uint32_t ncode = 0, nctl; void *mb; uint64_t mo;
     if (!sd->control) return 0;
     nvn_ctl_lens(sd->control, &nctl, &ncode);
     int code = sd->data && ncode && ncode < (1u << 24);
     if (mapped && !(code && mtl_addr(sd->data, ncode, &mb, &mo))) return 0;
+    if (nvn2_ctl(sd->control) && code_memo(sd->control, out)) return 1;
     uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX hc; CC_SHA256_Init(&hc);
     // Profile key shader_key_skip: bytes of the control section hashed as zeros (shader_split.py key_ctl). Batman: Arkham Knight's engine shares one control section among shaders whose
     // sections differ only in GLSLC's compile information (+0x778..+0x791, +0x7d0..+0x7e7): it hands a program the section of an earlier shader with the same rest, so the bytes there name another shader
@@ -733,7 +776,7 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     k->ok = 0;
     for (int i = 0; i < n; i++) {
         if (keys_hash(&sd[i], 1, k->key[i])) k->ok |= (uint8_t)(1u << i);
-        if (g_nvn_on_shader && (k->ok >> i & 1)) { uint32_t ncode; memcpy(&ncode, (const uint8_t *)sd[i].control + 0x704, 4); g_nvn_on_shader(k->key[i], sd[i].control, sd[i].data, ncode); }
+        if (g_nvn_on_shader && (k->ok >> i & 1)) { uint32_t ncode, nctl; nvn_ctl_lens(sd[i].control, &nctl, &ncode); g_nvn_on_shader(k->key[i], sd[i].control, sd[i].data, ncode); code_drop(sd[i].control, k->key[i], sd[i].data, ncode); }
         // Diagnostic: trace the loader of selected shader keys (comma-separated hex).
         if (trace && (k->ok & (1u << i))) {
             char key[17]; for (int j = 0; j < 8; j++) snprintf(key + j * 2, 3, "%02x", k->key[i][j]);
