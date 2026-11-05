@@ -67,9 +67,12 @@ static void settings_load(void) {
     { const char *e = getenv("DM_OV_FLOAT"); if (e) atomic_store(&g_disp[DISP_FLOAT], atoi(e) != 0); }   // the profile's default; the player's setting below wins
     char p[600]; snprintf(p, sizeof p, "%s/settings.txt", g_root); FILE *f = fopen(p, "r"); char line[128];
     if (!f) return;
+    // DM_SETTINGS_EPOCH: a profile changed its mind about the mode, and settings saved before that do not choose it (Pokopia's Docked, chosen when Handheld did not exist yet, kept it docked)
+    const char *ep = getenv("DM_SETTINGS_EPOCH"); int mode_ok = !ep;
+    if (ep) { int v; while (fgets(line, sizeof line, f)) if (sscanf(line, "epoch=%d", &v) == 1 && v == atoi(ep)) mode_ok = 1; rewind(f); }
     while (fgets(line, sizeof line, f)) { int v; if (sscanf(line, "overlay=%d", &v) == 1) atomic_store(&g_set_overlay, v != 0); else if (sscanf(line, "rumble=%d", &v) == 1) atomic_store(&g_set_rumble, v != 0);
         else if (sscanf(line, "fps=%d", &v) == 1) atomic_store(&g_set_fps, v != 0);
-        else if (sscanf(line, "docked=%d", &v) == 1) setenv("DM_OPMODE", v ? "1" : "0", 1);   // over env.txt's: the host reads it once, at its first query
+        else if (sscanf(line, "docked=%d", &v) == 1) { if (mode_ok) setenv("DM_OPMODE", v ? "1" : "0", 1); }   // over env.txt's: the host reads it once, at its first query
         else if (sscanf(line, "opacity=%d", &v) == 1) atomic_store(&g_set_opacity, v < OV_OPACITY_MIN ? OV_OPACITY_MIN : v > OV_OPACITY_MAX ? OV_OPACITY_MAX : v);
         else if (sscanf(line, "grid=%d", &v) == 1) atomic_store(&g_set_grid, v != 0);
         else if (sscanf(line, "aspect=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_ASPECT], v);
@@ -94,6 +97,7 @@ static void settings_save(void) {
     FILE *f = fopen(tmp, "w"); if (!f) { LOG("[RED] cannot write %s", tmp); return; }
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\nopacity=%d\ngrid=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps),
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
+    { const char *ep = getenv("DM_SETTINGS_EPOCH"); if (ep) fprintf(f, "epoch=%s\n", ep); }
     fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT));
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);

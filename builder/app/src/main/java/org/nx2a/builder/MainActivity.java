@@ -51,7 +51,9 @@ public final class MainActivity extends Activity implements PortService.Listener
     private LinearLayout checklist;
     private ScrollView logScroll;
     private EditText pairPort, pairCode, connectPort;
-    private CheckBox touch, fps60, installAfter, overAdb, keepOn;
+    private CheckBox touch, fps60, boost, installAfter, overAdb, keepOn;
+    private TextView driverState;
+    private String pickInto = "keys";
     private boolean isSwitch2;
 
     @Override protected void onCreate(Bundle b) {
@@ -126,7 +128,7 @@ public final class MainActivity extends Activity implements PortService.Listener
 
         LinearLayout c3 = card("3. prod.keys");
         keysState = text("", 14, DIM, false); add(c3, keysState, 6);
-        add(c3, button("Choose prod.keys", false, v -> pick(Environment.getExternalStorageDirectory(), false)), 10);
+        add(c3, button("Choose prod.keys", false, v -> { pickInto = "keys"; pick(Environment.getExternalStorageDirectory(), false); }), 10);
         add(root, c3, 12);
 
         LinearLayout c4 = card("4. Wireless debugging (optional)");
@@ -143,12 +145,20 @@ public final class MainActivity extends Activity implements PortService.Listener
         LinearLayout c5 = card("5. Port");
         touch = new CheckBox(this); touch.setText("Touch game (hide the on-screen gamepad)"); touch.setTextColor(TEXT);  add(c5, touch, 6);
         fps60 = new CheckBox(this); fps60.setText("60 fps when the game's build allows it"); fps60.setTextColor(TEXT);  add(c5, fps60, 0);
+        boost = new CheckBox(this); boost.setText("Hold the GPU at full speed (steadier, but hotter)"); boost.setTextColor(TEXT); boost.setChecked(prefs.getBoolean("boost", true)); add(c5, boost, 0);
+        boost.setOnCheckedChangeListener((v, on) -> prefs.edit().putBoolean("boost", on).apply());
         installAfter = new CheckBox(this); installAfter.setText("Install when done"); installAfter.setTextColor(TEXT);  installAfter.setChecked(true); add(c5, installAfter, 0);
         overAdb = new CheckBox(this); overAdb.setText("Install over Wireless debugging instead"); overAdb.setTextColor(TEXT); overAdb.setChecked(prefs.getBoolean("overAdb", false)); add(c5, overAdb, 0);
         overAdb.setOnCheckedChangeListener((v, on) -> prefs.edit().putBoolean("overAdb", on).apply());
         keepOn = new CheckBox(this); keepOn.setText("Keep the screen on while porting"); keepOn.setTextColor(TEXT);  keepOn.setChecked(prefs.getBoolean("keepOn", true)); add(c5, keepOn, 0);
         keepOn.setOnCheckedChangeListener((v, on) -> { prefs.edit().putBoolean("keepOn", on).apply(); screen(); });
-        for (CheckBox b : new CheckBox[]{touch, fps60, installAfter, overAdb, keepOn}) b.setButtonTintList(android.content.res.ColorStateList.valueOf(LILAC));
+        for (CheckBox b : new CheckBox[]{touch, fps60, boost, installAfter, overAdb, keepOn}) b.setButtonTintList(android.content.res.ColorStateList.valueOf(LILAC));
+        add(c5, text("GPU driver", 14, TEXT, true), 10);
+        driverState = text("", 14, DIM, false); add(c5, driverState, 4);
+        LinearLayout driverRow = new LinearLayout(this);
+        driverRow.addView(button("Choose driver", false, v -> { pickInto = "driver"; String was = prefs.getString("driver", null); pick(was != null ? new File(was) : new File(Environment.getExternalStorageDirectory(), "Download"), false); }));
+        driverRow.addView(button("Use the system's", false, v -> { prefs.edit().remove("driver").apply(); refresh(); }));
+        add(c5, driverRow, 6);
         overallText = text("", 16, TEXT, true); overallText.setVisibility(View.GONE); add(c5, overallText, 10);
         overallBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); overallBar.setMax(1000); overallBar.setVisibility(View.GONE); add(c5, overallBar, 4);
         stepText = text("", 14, TEXT, false); add(c5, stepText, 8);
@@ -185,6 +195,8 @@ public final class MainActivity extends Activity implements PortService.Listener
         keysState.setText(k != null ? k : "Needed for Switch games. Switch 2 dumps need none.");
         if (f == null) gameState.setText("A folder with your game: NSP, XCI, NSZ, XCZ, a .nup file or a Switch 2 dump folder.");
         else if (ready) inspect(f); else gameState.setText(f);
+        String dr = prefs.getString("driver", null);
+        driverState.setText(dr != null ? new File(dr).getName() + "\nUsed at the next port. If the game then fails to open, tap Use the system's and port again." : "The tablet's own driver. A custom one (a .zip or .so, such as Turnip) goes in the game at the next port.");
         String c = prefs.getString("device", null);
         adbState.setText(c != null ? "Last connected: " + c : "Not connected yet.");
     }
@@ -274,7 +286,7 @@ public final class MainActivity extends Activity implements PortService.Listener
             if (i < off) { pick(here.getParentFile(), folder); return; }
             File f = entries.get(i - off);
             if (f.isDirectory()) pick(f, folder);
-            else { prefs.edit().putString("keys", f.getPath()).apply(); refresh(); }
+            else { prefs.edit().putString(pickInto, f.getPath()).apply(); refresh(); }
         }).setNegativeButton("Close", null);
         if (folder) d.setPositiveButton("Use this folder", (x, i) -> { prefs.edit().putString("folder", here.getPath()).apply(); refresh(); });
         d.show();
@@ -398,6 +410,9 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (install) { a.add("--install"); if (wireless) { a.add("--device"); a.add(d); } else a.add("--direct"); }
         if (touch.isChecked()) a.add("--touch");
         if (fps60.isChecked()) a.add("--fps60");
+        if (boost.isChecked()) a.add("--gpu-boost");
+        String dr = prefs.getString("driver", null);
+        if (dr != null) { a.add("--vulkan-driver"); a.add(dr); }
         logText.setText(""); setBusy(true); stepText.setText("Starting"); stepText.setTextColor(TEXT);
         PortService.listener = this;
         PortService.start(this, a);

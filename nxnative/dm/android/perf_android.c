@@ -275,10 +275,11 @@ void dm_perf_frame(double period) {
     if (p != g_hint_target && H.update) { H.update(g_hint, p); g_hint_target = p; }
 }
 
-// The window's frame rate: the game's rate, so the display can pick a mode it divides (60 / 120 Hz rather than 144 Hz for a 60 fps game).
+// The window's frame rate: a multiple of the game's rate, so the display picks a mode it divides (120 Hz rather than 144 Hz for a 60 fps game), and fast enough that a late frame waits a
+// few milliseconds. The game's own rate would do while it is met, but the display then really runs at 30 Hz: Pokopia's frames of 38 ms each waited for the next 33 ms step (285 of 300 late)
 void dm_perf_window(ANativeWindow *w, double fps) {
     if (!w || fps <= 0) return;
-    { int dm_disp(int what); if (dm_disp(3) && fps < 60) fps = 60; }   // frame generation (overlay_layout.h DISP_FG): a window slowed to the game's rate could not show the frames between
+    while (fps < 90) fps *= 2;   // (frame generation needs the room too: the frames between have to land between)
     int r = ANativeWindow_setFrameRate(w, (float)fps, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
     LOG("[perf] window frame rate %.0f fps%s", fps, r ? " refused" : "");
 }

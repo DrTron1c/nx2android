@@ -116,11 +116,19 @@ jobs:
           mkdir -p ci
           cd builder && NX2A_VERSION_CODE=$GITHUB_RUN_NUMBER gradle assembleRelease --no-daemon 2>&1 | tail -80 | tee ../ci/app.log
           test -f app/build/outputs/apk/release/app-release.apk
+      - name: libadrenotools, which loads a custom GPU driver
+        run: |
+          curl -fsSL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q ndk.zip && rm ndk.zip
+          python3 nxnative/dm/android/build.py --game 0400A3A01EE4C000 --ndk "$PWD/android-ndk-r27c" --out out/at --release --adrenotools --only-adrenotools
+          ls -la out/at/lib*.so
+          rm -rf android-ndk-r27c
       - name: The engine
         run: |
           mkdir -p eng/nx2android/nxnative
           cp -r porter eng/nx2android/; cp requirements.txt builder/toolchain/sitecustomize.py eng/nx2android/
           cp -r nxnative/dm nxnative/scripts eng/nx2android/nxnative/
+          mkdir -p eng/nx2android/nxnative/dm/android/adrenotools_prebuilt; cp out/at/lib*.so eng/nx2android/nxnative/dm/android/adrenotools_prebuilt/
           rm -rf eng/nx2android/nxnative/dm/{ios,mac,sanitizers,third_party/ryujinx,third_party/dav1d,gfx/tests,host/tests,tools/tests,tools/fuzz,gfx/tools/dmsh_xlate_bin}
           find eng -name '__pycache__' -prune -exec rm -rf {} +
           tar --format=gnu -czf engine.tar.gz -C eng nx2android

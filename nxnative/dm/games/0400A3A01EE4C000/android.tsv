@@ -10,6 +10,8 @@ env	DM_NVN_DROP_CODE=1
 env	DM_VK_ASYNC_COMPUTE=1
 # handheld: the game picks its lower resolution and settings. Docked it asked more of the tablet than its memory and GPU have: under 15 fps in its first area, and closed by Android after 6 minutes
 env	DM_OPMODE=0
+# Docked saved in settings.txt before this row existed does not count (front_android.c settings_load)
+env	DM_SETTINGS_EPOCH=2
 # the sticks float: hidden, and under the finger on its half of the window (front_android.c touch_event)
 env	DM_OV_FLOAT=1
 # the frame's Vulkan calls on a thread of their own (gfx_vk_dq.c): replaying takes 14 to 19 ms of a 40 ms frame

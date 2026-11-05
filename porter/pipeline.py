@@ -7,7 +7,7 @@ import importlib.util, os, re, shutil, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, datapack, direct, dumps, fpslocker, install, paths, profiles, switch2, toolchain
+from porter import config, datapack, direct, driver, dumps, fpslocker, install, paths, profiles, switch2, toolchain
 from porter.adb import Adb, AdbError
 from porter.paths import DM, NXNATIVE
 from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, profile_guess, say
@@ -36,6 +36,7 @@ class Options:
     experimental: bool = False         # a game not ported to Android yet: a provisional profile from upstream's survey (or a copy of its iOS profile), status experimental
     package: str = ''                  # the app's package instead of the profile's (a test install beside another build of the game)
     fps60: bool = False                # 60 fps: the profile's own frame-rate cap, else the build's FPSLocker-Warehouse config (porter/fpslocker.py)
+    gpu_boost: bool = False            # the GPU held at its highest clock (DM_GPU_TURBO, dm/android/perf_android.c)
     vulkan_driver: Path = None         # an arm64 Vulkan driver (Mesa's Turnip) packed in the APK and used instead of the system's (DM_VK_DRIVER, dm/android/gfx_vk_core.c)
     mt_replay: bool = False            # multithread replay: DM_VK_MT_REPLAY=1 in env.txt (dm/android/gfx_vk_dq.c), after the profile's env rows
     touch: bool = False                # a game played by touch: the on-screen gamepad starts hidden (TOUCH_SETTINGS), so it takes none of the game's touches
@@ -180,8 +181,7 @@ class Port:
         if not o.folder.is_dir(): raise BuildError(f'not a folder: {o.folder}')
         version_code('v0', o.vercode_offset); alias_headroom_gb(o.alias_headroom)   # an offset or headroom out of range fails now, not after the shaders
         if o.vulkan_driver:
-            o.vulkan_driver = Path(o.vulkan_driver).expanduser().resolve()
-            if not o.vulkan_driver.is_file() or o.vulkan_driver.suffix != '.so': raise BuildError(f'--vulkan-driver: not a .so library: {o.vulkan_driver}')
+            o.vulkan_driver = driver.prepare(o.vulkan_driver, o.work or o.folder)
         self.s2 = switch2.find(o.folder)
         keys = o.keys or self.cfg.get('keys')
         if not keys and not self.s2: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
@@ -687,7 +687,7 @@ class Port:
         font_env, font_files = self.button_font()
         dst = self.o.out / f'{app_stem(self.g, self.app_name)}-data'
         man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.romfs(self.game), shaders=self.dmsv,
-                             aoc=self.aoc, language=self.lang, package=self.package, env=self.fps_env + font_env + (['DM_VK_MT_REPLAY=1'] if self.o.mt_replay else [])
+                             aoc=self.aoc, language=self.lang, package=self.package, env=self.fps_env + font_env + (['DM_VK_MT_REPLAY=1'] if self.o.mt_replay else []) + (['DM_GPU_TURBO=1'] if self.o.gpu_boost else [])
                              + ([f'DM_VK_DRIVER={self.o.vulkan_driver.name}'] if self.o.vulkan_driver else []), settings=TOUCH_SETTINGS if self.o.touch else None,
                              files={**self.fps_files, **font_files, **({'shaders_extra.dmsv': self.extra} if getattr(self, 'extra', None) else {})},
                              progress=lambda what: PROG.set(step=f'linking {what}'))

@@ -22,6 +22,7 @@ ap.add_argument('-O', default='2')
 ap.add_argument('--gfx', default='vk', choices=('vk', 'null'), help='graphics backend: Vulkan or the null device')
 ap.add_argument('--release', action='store_true', help='a build to keep installed: no debug information, stripped, no DM_CTL')
 ap.add_argument('--adrenotools', action='store_true', help='also libadrenotools.so and its hooks (third_party/libadrenotools), which the APK carries with a custom Vulkan driver')
+ap.add_argument('--only-adrenotools', action='store_true', help='those libraries and nothing else')
 a = ap.parse_args()
 if not (a.exe or a.lib): a.exe = a.lib = True
 
@@ -92,6 +93,32 @@ def compile_one(s):
     r = subprocess.run([CC] + flags + ['-MMD', '-MF', str(d), '-c', str(src), '-o', str(o)], capture_output=True, text=True, errors='replace')
     return s, o, r.returncode, r.stderr
 
+# --adrenotools: libadrenotools.so (gfx_vk_core.c vk_init loads a custom Vulkan driver through it, DM_VK_DRIVER) and the hooks it loads from the APK's library folder,
+# as its CMake files build them: linkernsbypass inside libadrenotools and libhook_impl, the three small hooks over libhook_impl with -z global
+# On a device the engine brings them ready made (adrenotools_prebuilt, .github/workflows/builder.yml): the bundle's compiler is not the one they are made with
+def adrenotools():
+    ready = DM / 'android/adrenotools_prebuilt'
+    if ready.is_dir():
+        for f in ready.glob('lib*.so'): shutil.copyfile(f, out / f.name)
+        return
+    AT = DM / 'third_party/libadrenotools'; LN = AT / 'lib/linkernsbypass'
+    ATF = [TARGET, '-O2'] + DBG + ['-fPIC', '-w', f'-I{AT / "include"}', f'-I{AT}', f'-I{LN}']
+    ATL = ['-fuse-ld=lld', '-shared', '-Wl,-z,max-page-size=16384', '-static-libstdc++', '-landroid', '-llog', '-ldl']
+    CXX = str(bin_ / ('clang++.exe' if os.name == 'nt' else 'clang++'))
+    libs = [('libadrenotools.so', [AT / 'src/driver.cpp', AT / 'src/bcenabler.cpp', LN / 'android_linker_ns.cpp', LN / 'elf_soname_patcher.cpp'], []),
+            ('libhook_impl.so', [AT / 'src/hook/hook_impl.cpp', LN / 'android_linker_ns.cpp', LN / 'elf_soname_patcher.cpp'], ['-fvisibility=hidden'])]
+    libs += [(f'lib{h}.so', [AT / f'src/hook/{h}.c'], ['-Wl,-z,global', f'-L{out}', '-lhook_impl']) for h in ('main_hook', 'file_redirect_hook', 'gsl_alloc_hook')]
+    newest = max(p.stat().st_mtime for p in AT.rglob('*') if p.is_file())
+    for name, files, extra in libs:
+        o = out / name
+        if o.exists() and o.stat().st_mtime >= newest: continue
+        r = subprocess.run([CXX if any(f.suffix == '.cpp' for f in files) else CC] + ATF + [str(f) for f in files] + ['-o', str(o), f'-Wl,-soname,{name}'] + ATL + extra,
+                           capture_output=True, text=True, errors='replace')
+        print(r.stderr.strip() if r.returncode else f'linked {o}', file=sys.stderr if r.returncode else sys.stdout)
+        if r.returncode: sys.exit(1)
+
+if a.only_adrenotools: adrenotools(); sys.exit(0)
+
 SEEN = [0]
 def build(files):
     objs, failed = [], []
@@ -126,21 +153,4 @@ if a.lib:
         subprocess.run([str(bin_ / ('llvm-strip.exe' if os.name == 'nt' else 'llvm-strip')), '--strip-unneeded', str(out / 'libdmhost.so')], check=True)
         print(f'stripped {out / "libdmhost.so"}: {(out / "libdmhost.so").stat().st_size // 1024} KB')
 
-# --adrenotools: libadrenotools.so (gfx_vk_core.c vk_init loads a custom Vulkan driver through it, DM_VK_DRIVER) and the hooks it loads from the APK's library folder,
-# as its CMake files build them: linkernsbypass inside libadrenotools and libhook_impl, the three small hooks over libhook_impl with -z global
-if a.adrenotools:
-    AT = DM / 'third_party/libadrenotools'; LN = AT / 'lib/linkernsbypass'
-    ATF = [TARGET, '-O2'] + DBG + ['-fPIC', '-w', f'-I{AT / "include"}', f'-I{AT}', f'-I{LN}']
-    ATL = ['-fuse-ld=lld', '-shared', '-Wl,-z,max-page-size=16384', '-static-libstdc++', '-landroid', '-llog', '-ldl']
-    CXX = str(bin_ / ('clang++.exe' if os.name == 'nt' else 'clang++'))
-    libs = [('libadrenotools.so', [AT / 'src/driver.cpp', AT / 'src/bcenabler.cpp', LN / 'android_linker_ns.cpp', LN / 'elf_soname_patcher.cpp'], []),
-            ('libhook_impl.so', [AT / 'src/hook/hook_impl.cpp', LN / 'android_linker_ns.cpp', LN / 'elf_soname_patcher.cpp'], ['-fvisibility=hidden'])]
-    libs += [(f'lib{h}.so', [AT / f'src/hook/{h}.c'], ['-Wl,-z,global', f'-L{out}', '-lhook_impl']) for h in ('main_hook', 'file_redirect_hook', 'gsl_alloc_hook')]
-    newest = max(p.stat().st_mtime for p in AT.rglob('*') if p.is_file())
-    for name, files, extra in libs:
-        o = out / name
-        if o.exists() and o.stat().st_mtime >= newest: continue
-        r = subprocess.run([CXX if any(f.suffix == '.cpp' for f in files) else CC] + ATF + [str(f) for f in files] + ['-o', str(o), f'-Wl,-soname,{name}'] + ATL + extra,
-                           capture_output=True, text=True, errors='replace')
-        print(r.stderr.strip() if r.returncode else f'linked {o}', file=sys.stderr if r.returncode else sys.stdout)
-        if r.returncode: sys.exit(1)
+if a.adrenotools: adrenotools()
