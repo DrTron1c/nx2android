@@ -5,7 +5,7 @@
 # --release: no debug information, the library stripped, DM_RELEASE defined (the app ignores DM_CTL), outputs in dm/android/out/<title ID>-release.
 # Outputs in <out> (default dm/android/out/<title ID>): dmhost (an executable for adb shell runs: headless, no window) and libdmhost.so (the app's NativeActivity).
 # Objects are rebuilt when a source or a header it includes changed (clang -MMD dependency files).
-import argparse, concurrent.futures as cf, os, re, subprocess, sys
+import argparse, concurrent.futures as cf, os, re, shutil, subprocess, sys
 from pathlib import Path
 
 DM = Path(__file__).resolve().parent.parent          # dm/
@@ -121,7 +121,8 @@ if a.lib:
     r = subprocess.run([CC] + LDFLAGS + ['-shared', '-Wl,-soname,libdmhost.so', '-o', str(out / 'libdmhost.so')] + [str(o) for o in objs + vobjs] + LIBS, capture_output=True, text=True, errors='replace')
     print(r.stderr.strip() if r.returncode else f'linked {out / "libdmhost.so"}', file=sys.stderr if r.returncode else sys.stdout)
     if r.returncode: sys.exit(1)
-    if a.release:   # the static symbol table goes too (the dynamic one stays: ANativeActivity_onCreate)
+    if a.release:   # the static symbol table goes too (the dynamic one stays: ANativeActivity_onCreate); libdmhost.sym.so keeps it, to name the frames of a crash (porter/adb.py launch_report)
+        shutil.copyfile(out / 'libdmhost.so', out / 'libdmhost.sym.so')
         subprocess.run([str(bin_ / ('llvm-strip.exe' if os.name == 'nt' else 'llvm-strip')), '--strip-unneeded', str(out / 'libdmhost.so')], check=True)
         print(f'stripped {out / "libdmhost.so"}: {(out / "libdmhost.so").stat().st_size // 1024} KB')
 

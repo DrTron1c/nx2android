@@ -24,7 +24,7 @@ def by_hand(adb, apk, package):
     raise AdbError(f'{apk.name} was not installed from Files')
 
 
-def install(apk, data, adb_exe, serial=None, replace_signer=False):
+def install(apk, data, adb_exe, serial=None, replace_signer=False, symbols=None):
     apk, data = Path(apk), Path(data)
     man = datapack.read_manifest(data)
     if not man: raise BuildError(f'not a data pack (no {datapack.MANIFEST}): {data}')
@@ -68,5 +68,14 @@ def install(apk, data, adb_exe, serial=None, replace_signer=False):
         if gone:   # Android deletes an app's files folder with the app: a push into it then fails part-way (a size mismatch)
             raise BuildError(f'{man["package"]} was uninstalled on the device while its data was being pushed ({e})') from e
         raise BuildError(str(e)) from e
+    # On the device nobody else can read a crash, and a crash before the app's log opens leaves that log as it was: the port itself tries the game and reports what Android saw
+    if os.environ.get('NX2A_PREBUILT'):
+        PROG.set(step='starting the game once to see that it opens')
+        try: crash = adb.launch_report(man['package'], symbols)
+        except AdbError as e: crash = None; say(f'could not try the game: {e}')
+        if crash is None: say('the game started and was still running 12 seconds later')
+        else:
+            say('[RED] the game closed within 12 seconds of starting. What Android recorded:')
+            for ln in crash: say(ln)
     PROG.end(f'{man["name"]} on {model or dev}')
     say(f'installed: open "{man["name"]}" on the device')

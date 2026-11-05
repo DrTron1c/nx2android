@@ -2,7 +2,7 @@
 # devices (a 6 GB RomFS), so small files go in batches (tar archives of up to 64 MB when there are many) and big files in 64 MB pieces that the device joins; a rerun resumes (files already at their size are skipped,
 # pieces already in place are kept). The port's own outputs are also compared by MD5: a rewriter cut changes a module without changing its size, and Unpacking's sdk cuts never
 # reached the device until they were. Pushes use -Z: compressing them took adbd down.
-import contextlib, hashlib, os, re, shlex, shutil, subprocess, tarfile, tempfile, time
+import bisect, contextlib, hashlib, os, re, shlex, shutil, struct, subprocess, tarfile, tempfile, time
 from pathlib import Path
 
 
@@ -12,6 +12,34 @@ class AdbError(Exception):
 
 LONG_PATH = 240   # adb.exe is not long-path aware: it cannot open a file whose full path passes Windows' 260 characters (Viractal's Unity bundles in a deep game folder)
 TAR_MIN, TAR_FILES, TAR_BYTES = 256, 8192, 64 << 20   # push_tree: from this many small files on, tar archives of at most this many files / bytes
+
+
+def load_symbols(path):
+    """The functions of an ELF64 file's static symbol table: (sorted addresses, [(address, size, name)]), None without one"""
+    try: d = Path(path).read_bytes() if path else b''
+    except OSError: return None
+    if d[:5] != b'\x7fELF\x02': return None
+    shoff, = struct.unpack_from('<Q', d, 0x28); entsize, count = struct.unpack_from('<HH', d, 0x3a)
+    sec = [struct.unpack_from('<IIQQQQIIQQ', d, shoff + i * entsize) for i in range(count)]
+    rows = []
+    for s in sec:
+        if s[1] != 2: continue   # SHT_SYMTAB
+        strs = sec[s[6]][4]
+        for o in range(s[4], s[4] + s[5], 24):
+            nm, info, _, shndx, value, size = struct.unpack_from('<IBBHQQ', d, o)
+            if info & 15 != 2 or not shndx: continue   # STT_FUNC, defined here
+            rows.append((value, size, d[strs + nm:d.index(b'\0', strs + nm)].decode(errors='replace')))
+    rows.sort()
+    return ([r[0] for r in rows], rows) if rows else None
+
+
+def name_frame(line, symbols):
+    """A tombstone's backtrace line with the function of a libdmhost.so frame added"""
+    m = re.search(r'#\d+ pc ([0-9a-f]+)\s.*libdmhost\.so', line)
+    if not m or not symbols: return line
+    pc = int(m.group(1), 16); i = bisect.bisect_right(symbols[0], pc) - 1
+    if i < 0 or pc - symbols[1][i][0] > max(symbols[1][i][1], 1 << 16): return line
+    return f'{line}  <- {symbols[1][i][2]}+{pc - symbols[1][i][0]:#x}'
 
 
 def long_path(p):   # a path Python can open on Windows past 260 characters
@@ -155,6 +183,23 @@ class Adb:
             self.log(f'{package} has another signing key: uninstalling it first')
             self.run('uninstall', package, timeout=300, retries=1)
             self.run('install', apk, timeout=600, retries=1)
+
+    def launch_report(self, package, symbols=None, wait=12):
+        """Start the app and see whether it lives. None if it does (it is stopped again: the player opens it), else what Android recorded of the crash, as lines. Android keeps a
+        tombstone for a crash before the app's own log opens (a library that does not load), and it is the only record of one: last in dropbox, then the crash log buffer.
+        symbols: the host before stripping, which names the libdmhost.so frames"""
+        p = shlex.quote(package)
+        self.shell(f'am force-stop {p}; am start -W -n {p}/android.app.NativeActivity >/dev/null 2>&1; true', timeout=60)
+        time.sleep(wait)
+        if self.shell(f'pidof {p}; true', check=False).strip():
+            self.shell(f'am force-stop {p}; true', check=False)
+            return None
+        last = ("awk '/^========================================/{n++; o=\"\"} {o=o $0 \"\\n\"} END{printf \"%s\", o}'")
+        out = self.shell(f'dumpsys dropbox --print data_app_native_crash 2>&1 | {last} | head -n 90; echo == crash buffer; logcat -d -b crash -t 120 | tail -n 120; '
+                         f'echo == files; ls -la /sdcard/Android/data/{package}/files | head -n 40; df -h /sdcard | tail -1; '
+                         f'dumpsys package {p} | grep -E "lastUpdateTime|versionCode|primaryCpuAbi|flags="; true', check=False, timeout=60)
+        names = load_symbols(symbols)
+        return [name_frame(l, names) for l in out.splitlines()]
 
     def prepare_app_files(self, package, timeout=30):
         """Have Android create the app's files folder (/sdcard/Android/data/<package>/files) before anything is pushed into it: the system makes it, owned by the app with

@@ -711,7 +711,7 @@ class Port:
 
     # ---- install (optional) ----
     def install(self):
-        install.install(self.apk_path, self.data_path, self.tools['adb'], self.o.device or self.cfg.get('device'), replace_signer=self.o.replace_signer)
+        install.install(self.apk_path, self.data_path, self.tools['adb'], self.o.device or self.cfg.get('device'), replace_signer=self.o.replace_signer, symbols=self.so.with_name('libdmhost.sym.so'))
 
 
 def emit_result(r):   # the last JSON event of a port (the GUI's done screen); a summary line in the other modes
