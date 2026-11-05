@@ -45,7 +45,7 @@ for sh in sorted((DM / 'android/shaders').glob('*.*')):
     hdr = gen / a.game / f'{sh.stem}_{sh.suffix[1:]}.spv.h'
     if hdr.exists() and hdr.stat().st_mtime >= sh.stat().st_mtime: continue
     spv = gen / f'{sh.name}.spv'
-    subprocess.run([str(GLSLC), '--target-env=vulkan1.1', '-O', str(sh), '-o', str(spv)], check=True)
+    subprocess.run([str(GLSLC), '--target-env=vulkan1.1', '-O', f'-I{DM / "third_party/fsr1"}', str(sh), '-o', str(spv)], check=True)
     words = spv.read_bytes(); n = len(words) // 4
     import struct as _st
     body = ', '.join(f'{w:#010x}' for w in _st.unpack(f'<{n}I', words))

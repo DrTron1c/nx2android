@@ -10,6 +10,12 @@ env	DM_NVN_DROP_CODE=1
 env	DM_VK_ASYNC_COMPUTE=1
 # handheld: the game picks its lower resolution and settings. Docked it asked more of the tablet than its memory and GPU have: under 15 fps in its first area, and closed by Android after 6 minutes
 env	DM_OPMODE=0
+# the sticks float: hidden, and under the finger on its half of the window (front_android.c touch_event)
+env	DM_OV_FLOAT=1
+# the frame's Vulkan calls on a thread of their own (gfx_vk_dq.c): replaying takes 14 to 19 ms of a 40 ms frame
+env	DM_VK_MT_REPLAY=1
+# one frame's passes in play, for the stripes on Ditto: remove with them
+env	DM_VK_PASSDUMP=9000
 # the gamepad as in the player's picture (themes/pokopia, devtools/pokopia_hud.py). L3 and R3 are not in it: size 0, no touch
 overlay	tablet zl 0.0781 0.1494 0.1660 0.1318
 overlay	tablet l 0.0781 0.2939 0.1660 0.1318

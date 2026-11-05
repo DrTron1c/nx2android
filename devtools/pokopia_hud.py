@@ -12,8 +12,8 @@ SRC = Image.open(PACK / 'design.png').convert('RGB')
 BOLD = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 IH = 1024; IW = 1536   # the picture
 PLUM = (92, 44, 76); WHITE = (255, 255, 255)
-GREY = (150, 160, 163); PILL = (152, 161, 164); PAD = (172, 179, 182)
-COL = dict(zl=(183, 155, 214), l=(253, 212, 138), zr=(244, 155, 160), r=(137, 201, 224), x=(227, 204, 167), y=(208, 184, 228), a=(148, 210, 166), b=(254, 190, 110))
+GREY = (150, 160, 163); PILL = (136, 148, 154); PAD = (146, 158, 166)
+COL = dict(zl=(171, 128, 232), l=(255, 200, 92), zr=(255, 128, 142), r=(92, 196, 244), x=(238, 194, 128), y=(200, 160, 244), a=(104, 220, 142), b=(255, 164, 66))
 CLOUD = [(-34, -18, 40), (6, -30, 44), (42, -8, 38), (-44, 16, 36), (-8, 26, 44), (34, 26, 38), (0, 0, 52)]   # the cloud: circles, in the picture's pixels from its centre
 # name: centre in the picture, width and height for the touch, icon's centre, badge
 CTL = {'zl': (120, 153, 170, 135, (122, 154), 'ZL'), 'l': (120, 301, 170, 135, (122, 298), 'L'), 'zr': (1402, 153, 170, 135, (1402, 158), 'ZR'), 'r': (1402, 301, 170, 135, (1403, 300), 'R'),
@@ -36,15 +36,9 @@ class Art:
     def down(s, im): return im.resize((max(1, im.width // s.S), max(1, im.height // s.S)), Image.LANCZOS)
     def shape(s, w, h, fn):   # a mask in w x h picture pixels, centred
         m = s.base(w, h); fn(ImageDraw.Draw(m), w / 2, h / 2, s.k * s.S); return s.down(m)
-    def layered(s, w, h, outer, fill, ring=7, glow=0.6, holdk=1):
-        o = outer; K = s.k
-        inner = o.filter(ImageFilter.GaussianBlur(ring * K * 0.75)).point(lambda v: min(255, max(0, (v - 214) * 9)))
-        c = Image.new('RGBA', o.size, (255, 255, 255, 0))
-        g = o.filter(ImageFilter.GaussianBlur(11 * K)).point(lambda v: int(v * glow))
-        c.paste((255, 255, 255, 255), (0, 0), g); c.putalpha(g)
-        c = Image.alpha_composite(c, Image.merge('RGBA', (*Image.new('RGB', o.size, WHITE).split(), o)))
-        c = Image.alpha_composite(c, Image.merge('RGBA', (*Image.new('RGB', o.size, fill).split(), inner)))
-        return c
+    def layered(s, w, h, outer, fill, inner):   # a white ring round a filled shape: outer and inner are the same shape drawn at two sizes. No glow
+        c = Image.merge('RGBA', (*Image.new('RGB', outer.size, WHITE).split(), outer))
+        return Image.alpha_composite(c, Image.merge('RGBA', (*Image.new('RGB', outer.size, fill).split(), inner)))
     def icon(s, cx, cy, r, exclude=None, keep=None):
         K = s.k; box = (cx - r, cy - r, cx + r, cy + r); crop = SRC.crop(box).resize((int(2 * r * K), int(2 * r * K)), Image.BICUBIC)
         lo = ImageChops.darker(ImageChops.darker(crop.getchannel(0), crop.getchannel(1)), crop.getchannel(2))
@@ -69,13 +63,12 @@ def badge(a, im, text, r):   # a white disc with a plum ring and a letter, top r
 def button(a, name, held):
     cx, cy, w, h, ic, label = CTL[name]; M = 40; W, H = (250, 210) if name in ('zl', 'l', 'zr', 'r') else (250, 200) if name in ('minus', 'plus') else (230, 230)
     K = a.k; fill = COL.get(name, PILL)
-    def cloud(d, x, y, s):
-        for ox, oy, r in CLOUD: d.ellipse(((x + ox * 0.95 - r) * s, (y + oy * 0.95 - r) * s, (x + ox * 0.95 + r) * s, (y + oy * 0.95 + r) * s), fill=255)
-    def disc(d, x, y, s): r = 68; d.ellipse(((x - r) * s, (y - r) * s, (x + r) * s, (y + r) * s), fill=255)
-    def pill(d, x, y, s): d.rounded_rectangle(((x - 88) * s, (y - 59) * s, (x + 88) * s, (y + 59) * s), 59 * s, fill=255)
-    o = a.shape(W, H, cloud if name in ('zl', 'l', 'zr', 'r') else pill if name in ('minus', 'plus') else disc)
+    def cloud(g): return lambda d, x, y, s: [d.ellipse(((x + ox * 0.95 - r + g) * s, (y + oy * 0.95 - r + g) * s, (x + ox * 0.95 + r - g) * s, (y + oy * 0.95 + r - g) * s), fill=255) for ox, oy, r in CLOUD]
+    def disc(g): return lambda d, x, y, s: d.ellipse(((x - 68 + g) * s, (y - 68 + g) * s, (x + 68 - g) * s, (y + 68 - g) * s), fill=255)
+    def pill(g): return lambda d, x, y, s: d.rounded_rectangle(((x - 88 + g) * s, (y - 59 + g) * s, (x + 88 - g) * s, (y + 59 - g) * s), (59 - g) * s, fill=255)
+    form = cloud if name in ('zl', 'l', 'zr', 'r') else pill if name in ('minus', 'plus') else disc
     if held: fill = darker(fill, 0.82)
-    im = a.layered(W, H, o, fill, glow=0.85 if held else 0.55)
+    im = a.layered(W, H, a.shape(W, H, form(0)), fill, a.shape(W, H, form(6.5)))
     r = 50 if name not in ('minus', 'plus') else 52
     ix, iy = ic; m = a.icon(ix, iy, r)
     bx, by, br = BADGE[name]; yy, xx = (Image.new('L', m.size, 255),) * 2
@@ -86,19 +79,18 @@ def button(a, name, held):
     return im, W, H
 
 def stick(a):
-    D = 2 * (STICK_R + 30); K = a.k
+    D = 2 * (STICK_R + 8)
     def rr(r): return lambda d, x, y, s: d.ellipse(((x - r) * s, (y - r) * s, (x + r) * s, (y + r) * s), fill=255)
-    base = a.layered(D, D, a.shape(D, D, rr(STICK_R)), (196, 203, 205), ring=7, glow=0.5)
-    base.putalpha(base.getchannel('A').point(lambda v: v))
-    kd = 2 * (KNOB_R + 26)
-    knob = a.layered(kd, kd, a.shape(kd, kd, rr(KNOB_R)), (206, 212, 215), ring=7, glow=0.35)
-    t = a.shape(kd, kd, rr(KNOB_R - 13)); t2 = a.shape(kd, kd, rr(KNOB_R - 16)); knob.paste((236, 240, 241, 255), (0, 0), ImageChops.subtract(t, t2))
+    base = a.layered(D, D, a.shape(D, D, rr(STICK_R)), (170, 182, 190), a.shape(D, D, rr(STICK_R - 6.5)))
+    kd = 2 * (KNOB_R + 8)
+    knob = a.layered(kd, kd, a.shape(kd, kd, rr(KNOB_R)), (206, 214, 220), a.shape(kd, kd, rr(KNOB_R - 6.5)))
+    t = a.shape(kd, kd, rr(KNOB_R - 13)); t2 = a.shape(kd, kd, rr(KNOB_R - 16)); knob.paste((240, 244, 246, 255), (0, 0), ImageChops.subtract(t, t2))
     return base, D, knob, kd
 
 def dpad_arm(a, held, rot):
     W = 130; K = a.k
-    def sq(d, x, y, s): d.rounded_rectangle(((x - 45) * s, (y - 46) * s, (x + 45) * s, (y + 46) * s), 22 * s, fill=255)
-    im = a.layered(W, W, a.shape(W, W, sq), darker(PAD, 0.82) if held else PAD, ring=7, glow=0.5)
+    def sq(g): return lambda d, x, y, s: d.rounded_rectangle(((x - 45 + g) * s, (y - 46 + g) * s, (x + 45 - g) * s, (y + 46 - g) * s), (22 - g) * s, fill=255)
+    im = a.layered(W, W, a.shape(W, W, sq(0)), darker(PAD, 0.82) if held else PAD, a.shape(W, W, sq(6.5)))
     S = a.S; chev = Image.new('L', (int(W * K * S),) * 2, 0); c = W * K * S / 2; d = ImageDraw.Draw(chev); w = int(10 * K * S)
     pts = [(c - 20 * K * S, c + 10 * K * S), (c, c - 10 * K * S), (c + 20 * K * S, c + 10 * K * S)]
     d.line(pts, fill=255, width=w, joint='curve')
@@ -114,8 +106,8 @@ def hub(a):
 
 def app_menu(a, held):
     W, H = 150, 110; mw, mh = MENU[2], MENU[3]
-    def pill(d, x, y, s): d.rounded_rectangle(((x - mw / 2) * s, (y - mh / 2) * s, (x + mw / 2) * s, (y + mh / 2) * s), mh / 2 * s, fill=255)
-    im = a.layered(W, H, a.shape(W, H, pill), darker(PILL, 0.82) if held else PILL, ring=4, glow=0.4)
+    def pill(g): return lambda d, x, y, s: d.rounded_rectangle(((x - mw / 2 + g) * s, (y - mh / 2 + g) * s, (x + mw / 2 - g) * s, (y + mh / 2 - g) * s), (mh / 2 - g) * s, fill=255)
+    im = a.layered(W, H, a.shape(W, H, pill(0)), darker(PILL, 0.82) if held else PILL, a.shape(W, H, pill(4)))
     d = ImageDraw.Draw(im); K = a.k
     for ox in (-16, 0, 16): r = 4.2 * K; x = W * K / 2 + ox * K; y = H * K / 2; d.ellipse((x - r, y - r, x + r, y + r), fill=(255, 255, 255, 255))
     return im, W, H

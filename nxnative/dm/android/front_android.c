@@ -53,6 +53,9 @@ static char g_root[512];
 static _Atomic int g_set_overlay = 1, g_set_rumble = 1, g_set_fps;   // the gamepad shown; rumble and tap vibration; the frame rate counter (top left)
 static _Atomic int g_set_opacity = 60;   // the gamepad's opacity, percent (OV_OPACITY_MIN..MAX: the menu's Opacity slider)
 static _Atomic int g_set_grid;   // the layout editor's Snap to grid
+static _Atomic int g_disp[DISP_N] = {[DISP_SHARP] = 1}, g_disp_ver;   // the Display tab (overlay_layout.h dm_disp) and the floating sticks
+static int g_float_ptr[2] = {-1, -1}; static _Atomic int g_float_at[2][2];   // the finger on each floating stick, and where it went down, 1/10000 of the window
+int dm_disp(int what) { return what >= 0 && what < DISP_N ? atomic_load(&g_disp[what]) : 0; }
 // the player's own layout (overlay_layout.h dm_overlay_custom): [0] the saved one (settings.txt ui= rows), [1] the layout editor's while it is open; per layout
 // and control: x + 1, y + 1 in 1/10000 of the window's width and height (0 = the layout's place), the size factor in 1/1000 (0 = 1)
 static _Atomic int g_cust[2][2][DM_AOV_N][3], g_cust_ver, g_edit;
@@ -60,6 +63,7 @@ static const char *const LAYOUT_NAMES[2] = {"tablet", "phone"};
 static int ctl_named(const char *n) { for (int i = 0; i < OV_N; i++) if (!strcmp(OV_LAYOUTS[0][i].name, n)) return i; return -1; }
 int dm_opmode(void); void dm_set_opmode(int m);   // hle_oe.c: 0 handheld, 1 docked; a change reaches the game as the Switch's operation mode notification
 static void settings_load(void) {
+    { const char *e = getenv("DM_OV_FLOAT"); if (e) atomic_store(&g_disp[DISP_FLOAT], atoi(e) != 0); }   // the profile's default; the player's setting below wins
     char p[600]; snprintf(p, sizeof p, "%s/settings.txt", g_root); FILE *f = fopen(p, "r"); char line[128];
     if (!f) return;
     while (fgets(line, sizeof line, f)) { int v; if (sscanf(line, "overlay=%d", &v) == 1) atomic_store(&g_set_overlay, v != 0); else if (sscanf(line, "rumble=%d", &v) == 1) atomic_store(&g_set_rumble, v != 0);
@@ -67,6 +71,11 @@ static void settings_load(void) {
         else if (sscanf(line, "docked=%d", &v) == 1) setenv("DM_OPMODE", v ? "1" : "0", 1);   // over env.txt's: the host reads it once, at its first query
         else if (sscanf(line, "opacity=%d", &v) == 1) atomic_store(&g_set_opacity, v < OV_OPACITY_MIN ? OV_OPACITY_MIN : v > OV_OPACITY_MAX ? OV_OPACITY_MAX : v);
         else if (sscanf(line, "grid=%d", &v) == 1) atomic_store(&g_set_grid, v != 0);
+        else if (sscanf(line, "aspect=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_ASPECT], v);
+        else if (sscanf(line, "fsr=%d", &v) == 1) atomic_store(&g_disp[DISP_FSR], v != 0);
+        else if (sscanf(line, "sharp=%d", &v) == 1 && v >= 0 && v < 4) atomic_store(&g_disp[DISP_SHARP], v);
+        else if (sscanf(line, "framegen=%d", &v) == 1) atomic_store(&g_disp[DISP_FG], v != 0);
+        else if (sscanf(line, "float=%d", &v) == 1) atomic_store(&g_disp[DISP_FLOAT], v != 0);
         else if (!strncmp(line, "ui=", 3)) {   // ui=<layout>,<control>,<x>,<y>,<size>: x, y in 1/10000 of the window (-1 the layout's place), size in 1/1000
             char lay[16], name[32]; int x, y, z, l, i;
             if (sscanf(line + 3, "%15[^,],%31[^,],%d,%d,%d", lay, name, &x, &y, &z) != 5 || (i = ctl_named(name)) < 0) continue;
@@ -84,6 +93,7 @@ static void settings_save(void) {
     FILE *f = fopen(tmp, "w"); if (!f) { LOG("[RED] cannot write %s", tmp); return; }
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\nopacity=%d\ngrid=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps),
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
+    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT));
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);
         if ((x && y) || z) fprintf(f, "ui=%s,%s,%d,%d,%d\n", LAYOUT_NAMES[l], OV_LAYOUTS[0][i].name, x && y ? x - 1 : -1, x && y ? y - 1 : -1, z ? z : 1000);
@@ -189,11 +199,16 @@ float dm_overlay_scale(void) {
 }
 void dm_overlay_knob(int stick, float *dx, float *dy) { *dx = atomic_load(&g_knob[stick][0]) / 10000.0f; *dy = atomic_load(&g_knob[stick][1]) / 10000.0f; }
 static int g_ptr_ctl[32];   // pointer id → control index + 1 (0 = the touch screen)
+int dm_overlay_float(int stick, float *x, float *y) {
+    if (!dm_disp(DISP_FLOAT) || atomic_load(&g_edit)) return 0;
+    *x = atomic_load(&g_float_at[stick][0]) / 10000.0f; *y = atomic_load(&g_float_at[stick][1]) / 10000.0f; return 1;
+}
 static int ctl_at(float x, float y, float W, float H) {   // the control under (x, y) in pixels, -1 if none (in the layout editor: every control, shown or not)
     int best = -1, vis = atomic_load(&g_edit) ? 1 : dm_overlay_visible(), shown = vis == 1; float bd = 1e9f;
     if (!vis) return -1;   // a controller is attached: every touch is the game's
     for (int i = 0; i < OV_N; i++) {
         const ov_ctl *c = &OV_CTLS[i]; if (!shown && c->kind != OV_MENU) continue;   // hidden: only the menu button answers
+        if ((c->kind == OV_STICK_L || c->kind == OV_STICK_R) && dm_disp(DISP_FLOAT) && !atomic_load(&g_edit)) continue;   // floating sticks: wherever the finger lands (touch_event)
         float b[4]; ov_box(c, W, H, b);
         float d = ov_sdf(c, b, x - b[0], y - b[1]), reach = ov_reach(c, b, H), m = fminf(b[2], b[3]);
         if (d < reach && (d + m) / (m + reach) < bd) { bd = (d + m) / (m + reach); best = i; }   // between two, the one the touch is deeper into, for its size
@@ -281,7 +296,7 @@ int dm_menu_state(void) {
     if (atomic_load(&g_edit)) return OVE_ST | atomic_load(&g_ed_st);
     if (atomic_load(&g_sp_on)) return OVS_ST | (atomic_load(&g_sp_hi) + 1) << 4 | (atomic_load(&g_sp_ver) & 255) << 20;
     return atomic_load(&g_set_overlay) | atomic_load(&g_set_rumble) << 1 | (dm_opmode() != 0) << 2 | atomic_load(&g_set_fps) << 3 | (atomic_load(&g_menu_hi) + 1) << 4 |
-           atomic_load(&g_menu_tab) << 8 | atomic_load(&g_set_opacity) << 9 | atomic_load(&g_sv_st) << 20 | (atomic_load(&g_sv_n) & 15) << 24;
+           (atomic_load(&g_menu_tab) & 1) << 8 | atomic_load(&g_set_opacity) << 9 | atomic_load(&g_sv_st) << 20 | (atomic_load(&g_sv_n) & 15) << 24 | (atomic_load(&g_menu_tab) >> 1) << 28 | (atomic_load(&g_disp_ver) & 3) << 29;
 }
 int dm_overlay_fps(void) { return atomic_load(&g_set_fps) && !atomic_load(&g_menu); }   // gfx_vk_present.c draws the counter (not while the menu holds the game)
 static void menu_open(int hi) {
@@ -317,6 +332,9 @@ static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
+    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP) {
+        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : DISP_SHARP, n = item == OVM_ASPECT ? 5 : item == OVM_SHARP ? 4 : 2;
+        atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); atomic_fetch_add(&g_disp_ver, 1); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
     else if (item == OVM_TAB) { menu_tab(atomic_load(&g_menu_tab) + 1); return; }
     else if (item == OVM_EDIT) { dm_haptics_android_tap(); ed_open(); return; }
@@ -692,6 +710,13 @@ static void touch_event(AInputEvent *e) {
     if (act == AMOTION_EVENT_ACTION_DOWN || act == AMOTION_EVENT_ACTION_POINTER_DOWN) {
         int i = act == AMOTION_EVENT_ACTION_DOWN ? 0 : ai, id = AMotionEvent_getPointerId(e, (size_t)i) & 31;
         int c = ctl_at(AMotionEvent_getX(e, (size_t)i), AMotionEvent_getY(e, (size_t)i), W, H);
+        // Floating sticks: a touch on no control takes the stick of its half of the window, centred where it landed
+        if (c < 0 && dm_disp(DISP_FLOAT) && dm_overlay_visible() == 1) {
+            float fx = AMotionEvent_getX(e, (size_t)i), fy = AMotionEvent_getY(e, (size_t)i); int s = fx >= W / 2, st = -1;
+            if (g_float_ptr[s] < 0 || !g_ptr_ctl[g_float_ptr[s]]) { for (int k = 0; k < OV_N; k++) if (OV_CTLS[k].kind == (s ? OV_STICK_R : OV_STICK_L)) st = k;
+                if (st >= 0) { float b[4]; ov_box(&OV_CTLS[st], W, H, b); fx = fminf(fmaxf(fx, b[2]), W - b[2]); fy = fminf(fmaxf(fy, b[2]), H - b[2]);
+                    atomic_store(&g_float_at[s][0], (int)(fx / W * 10000)); atomic_store(&g_float_at[s][1], (int)(fy / H * 10000)); g_float_ptr[s] = id; c = st; } }
+        }
         g_ptr_ctl[id] = c + 1;
         if (c >= 0 && OV_CTLS[c].kind == OV_MENU) { atomic_store(&g_menu_t, mono_ns()); dm_haptics_android_tap(); menu_grab(id, &OV_CTLS[c], AMotionEvent_getX(e, (size_t)i), AMotionEvent_getY(e, (size_t)i), W, H); }
         if (!atomic_load(&g_overlay) && !atomic_load(&g_pads)) { atomic_store(&g_overlay, 1); dm_haptics_android_device(-1); }   // a touch brings the gamepad back (not over an attached controller)
@@ -711,12 +736,14 @@ static void touch_event(AInputEvent *e) {
                 else open = act != AMOTION_EVENT_ACTION_CANCEL;
                 if (id == g_drag.id) g_drag.id = -1;
             }
+            for (int s = 0; s < 2; s++) if (g_float_ptr[s] == id) g_float_ptr[s] = -1;
             g_ptr_ctl[id] = 0; continue;
         }
         if (c < 0) { if (n < 16) { t[n].id = (uint32_t)id & 15; t[n].x = (x / W - pic[0]) / pic[2]; t[n].y = (y / H - pic[1]) / pic[3]; n++; } continue; }   // relative to the game's picture
         const ov_ctl *k = &OV_CTLS[c];
         if (k->kind == OV_MENU) { if (id == g_drag.id) menu_drag(k, x, y, W, H); continue; }
         float b[4]; ov_box(k, W, H, b);
+        if (k->kind == OV_STICK_L || k->kind == OV_STICK_R) { float fx, fy; if (dm_overlay_float(k->kind == OV_STICK_R, &fx, &fy)) { b[0] = fx * W; b[1] = fy * H; } }
         float dx = (x - b[0]) / b[2], dy = (y - b[1]) / b[2], m = sqrtf(dx * dx + dy * dy);   // in the control's half widths (a stick's or the d-pad's radius)
         if (k->kind == OV_BUTTON) btn |= k->btn;
         else if (k->kind == OV_DPAD) {

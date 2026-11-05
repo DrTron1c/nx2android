@@ -94,6 +94,8 @@ static _Atomic uint32_t g_pic[4] = {0, 0, 1u << 20, 1u << 20};
 static void vk_pic_set(float x, float y, float w, float h) { atomic_store(&g_pic[0], (uint32_t)(x * (1 << 20))); atomic_store(&g_pic[1], (uint32_t)(y * (1 << 20))); atomic_store(&g_pic[2], (uint32_t)(w * (1 << 20))); atomic_store(&g_pic[3], (uint32_t)(h * (1 << 20))); }
 void dm_picture_rect(float r[4]) { for (int i = 0; i < 4; i++) r[i] = (float)atomic_load(&g_pic[i]) / (1 << 20); }
 __attribute__((weak)) int dm_overlay_visible(void) { return 0; }
+__attribute__((weak)) int dm_disp(int what) { (void)what; return 0; }
+__attribute__((weak)) int dm_overlay_float(int stick, float *x, float *y) { (void)stick; (void)x; (void)y; return 0; }
 __attribute__((weak)) float dm_overlay_scale(void) { return 1; }
 __attribute__((weak)) void dm_overlay_knob(int stick, float *dx, float *dy) { (void)stick; *dx = *dy = 0; }
 __attribute__((weak)) int64_t dm_overlay_pressed(int ctl, uint64_t bit) { (void)ctl; (void)bit; return 0; }
@@ -197,12 +199,13 @@ static int ov_round(const ov_ctl *c) { return c->w == c->h; }
 static uint32_t ov_layout_sprites(uint32_t w, uint32_t h) {   // places the sprites, returns the strip's height
     float x = 4, top = (float)h, mr = 0, disc = 0, b[4];
     for (int i = 0; i < OV_N; i++) { ov_box(&OV_CTLS[i], (float)w, (float)h, b); if (OV_CTLS[i].kind == OV_BUTTON && ov_round(&OV_CTLS[i]) && b[2] > disc) disc = b[2]; }
-    for (int i = 0; i < SP_N; i++) {
-        const ov_ctl *c = i < OV_N ? &OV_CTLS[i] : NULL; float hw = 0, hh = 0;
+    for (int k = 0; k < SP_N; k++) {   // the solid blocks first: a theme's larger controls need no sprite here, and past the texture's width these would sample nothing
+        int i = (k + OV_N) % SP_N; const ov_ctl *c = i < OV_N ? &OV_CTLS[i] : NULL; float hw = 0, hh = 0;
         if (!c) hw = hh = i == SP_DISC ? disc : 6;
         else { ov_box(c, (float)w, (float)h, b);
             if (c->kind == OV_STICK_L || c->kind == OV_STICK_R) hw = hh = b[2] * OV_KNOB;
             else if (c->kind == OV_MENU || (c->kind == OV_BUTTON && !ov_round(c))) { hw = b[2]; hh = b[3]; } }   // a wider button's glow is its own shape
+        if (c && x + 2 * hw + 8 > (float)w) hw = 0;
         g_ov.sp[i][2] = hw; g_ov.sp[i][3] = hh; if (!hw) continue; g_ov.sp[i][0] = x + hw + 2; x += 2 * hw + 8; if (hh > mr) mr = hh;
     }
     for (int i = 0; i < SP_N; i++) g_ov.sp[i][1] = top + mr + 4;
@@ -345,13 +348,14 @@ static void cv_panel(const ov_canvas *cv, float x0, float y0, float x1, float y1
 }
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
-static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Mode", "Export save", "Import save", "Resume", ""};
+static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Resume", ""};
+static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[4] = {"Low", "Medium", "High", "Max"};
 static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import"};   // the rows that are a button: its word
 static const char *const OVM_MODES[2] = {"Handheld", "Docked"};
 static void ov_menu_panel(const ov_canvas *cv, int st) {
     float p[4] = {0, 0, (float)cv->w, (float)cv->h}, r[4]; ov_menu_rowrect(p, 0, r);
     float rh = r[3], rw = r[2], gap = rh * 0.35f, sh = rh * 0.40f, sw = sh * 1.85f;
-    int tab = st >> 8 & 1, sel = (st >> 4 & 15) - 1, op = st >> 9 & 127;
+    int tab = (st >> 8 & 1) | (st >> 28 & 1) << 1, sel = (st >> 4 & 15) - 1, op = st >> 9 & 127;
     int is = (int)fmaxf(1, roundf(rh * 0.30f / 7));
     for (; is > 1; is--) {   // the widest row: its label, a gap and its control
         float need = 0;
@@ -388,6 +392,8 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
             snprintf(v, sizeof v, "%s", x == OVX_BUSY ? "Exporting..." : x == OVX_DONE ? nm : x == OVX_NOSAVE ? "No save yet" : "Failed");
             while (vs > 1 && cv_text_w(v, vs) > rw - cv_text_w(OVM_LABELS[it], is) - gap - rh * 0.3f) vs--;
             cv_text(cv, x1 - cv_text_w(v, vs), cy, v, vs, x == OVX_FAILED ? C_ACCENT : C_WHITE);
+        } else if (it == OVM_ASPECT || it == OVM_SHARP) {   // a value: a tap takes the next
+            const char *w = it == OVM_ASPECT ? OV_ASPECTS[dm_disp(DISP_ASPECT)] : OV_SHARPS[dm_disp(DISP_SHARP)]; float bw = cv_text_w("Stretch", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, w, 1, 0);
         } else if (OVM_BUTTONS[it]) {   // a button
             float bw = cv_text_w(OVM_BUTTONS[it], is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, OVM_BUTTONS[it], 0, 0);
         } else if (it == OVM_MODE) {   // two segments, the current one filled: handheld (performance) | docked (resolution)
@@ -396,7 +402,7 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
             cv_rrect(cv, x0 + docked * segw, cy - hh / 2, x0 + (docked + 1) * segw, cy + hh / 2, hh / 2, C_ACCENT); cv_rframe(cv, x0, cy - hh / 2, x1, cy + hh / 2, hh / 2, fmaxf(2, hh * 0.07f), C_WHITE);
             for (int k = 0; k < 2; k++) cv_text(cv, x0 + k * segw + (segw - cv_text_w(OVM_MODES[k], is)) / 2, cy, OVM_MODES[k], is, k == docked ? C_PLUM : C_WHITE);
         } else {   // a switch
-            int on = st >> (it == OVM_OVERLAY ? 0 : it == OVM_RUMBLE ? 1 : 3) & 1; float sx0 = x1 - sw;
+            int on = it == OVM_FLOAT ? dm_disp(DISP_FLOAT) : it == OVM_FSR ? dm_disp(DISP_FSR) : it == OVM_FG ? dm_disp(DISP_FG) : st >> (it == OVM_OVERLAY ? 0 : it == OVM_RUMBLE ? 1 : 3) & 1; float sx0 = x1 - sw;
             cv_rrect(cv, sx0, cy - sh / 2, x1, cy + sh / 2, sh / 2, on ? C_GO : C_OFF); cv_rframe(cv, sx0, cy - sh / 2, x1, cy + sh / 2, sh / 2, fmaxf(2, sh * 0.08f), C_WHITE);
             cv_disc(cv, on ? x1 - sh / 2 : sx0 + sh / 2, cy, sh / 2 - fmaxf(2, sh * 0.1f), on ? C_WHITE : C_KNOB_OFF);
             const char *word = on ? "ON" : "OFF"; cv_text(cv, sx0 - gap - cv_text_w(word, is), cy, word, is, on ? C_WHITE : C_DIM);
@@ -534,6 +540,7 @@ static void ov_theme_draw(VkCommandBuffer cb, const ov_theme *t, float alpha) { 
     for (int i = 0; i < OV_N; i++) {
         const ov_ctl *c = &L[i]; if (c->kind == OV_MENU) continue;
         ov_box(c, W, H, b); float kc = k * ov_cscale(c); int stick = c->kind == OV_STICK_L || c->kind == OV_STICK_R, held = c->kind != OV_DPAD && dm_overlay_pressed(i, 0) != 0;
+        if (stick) { float fx, fy; if (dm_overlay_float(c->kind == OV_STICK_R, &fx, &fy)) { if (!held) continue; b[0] = fx * W; b[1] = fy * H; } }   // a floating stick: only under the finger
         float kx = 0, ky = 0; if (stick) { dm_overlay_knob(c->kind == OV_STICK_R, &kx, &ky); kx *= t->travel * kc; ky *= t->travel * kc; }
         for (int j = 0; j < t->n; j++) {
             const ov_tsprite *s = &t->sp[j]; if (s->ctl != i || s->state == OVT_DECOR) continue;
@@ -776,7 +783,8 @@ static uint64_t pace_desired(double period) {   // the frame's desired present t
     g_pace_target = t;
     return t - g_refresh_ns / 2;
 }
-static void present_window(vkimg_t *im, const int crop[4], double period, uint64_t ticket) {   // period: the game's frame period (s); < 0 for a redraw (ticket 0)
+#include "gfx_vk_fx.h"
+static void present_window(vkimg_t *im, const int crop[4], double period, uint64_t ticket, int mid) {   // period: the game's frame period (s); < 0 for a redraw (ticket 0). mid: the frame generated before this one
     uint32_t k = g_pi++ % 8;
     vkWaitForFences(V.dev, 1, &g_pfence[k], 1, UINT64_MAX);
     VkFormat want = im->fmt == VK_FORMAT_R8G8B8A8_SRGB || im->fmt == VK_FORMAT_B8G8R8A8_SRGB || im->fmt == VK_FORMAT_A8B8G8R8_SRGB_PACK32 ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
@@ -788,16 +796,23 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
     VkCommandBuffer cb = g_pcb[k];
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT}; vkBeginCommandBuffer(cb, &bi);
     vk_img_barrier_all(cb);   // after everything submitted before on this queue
+    vkimg_t mimg; int fg_on = dm_disp(DISP_FG) && V.has_dynrender; VkImageView mview = VK_NULL_HANDLE;
+    if (mid && fg_make(cb, k, im)) { mimg = *im; mimg.img = g_fx.mid.i; im = &mimg; mview = g_fx.mid.raw; }
     barrier(cb, g_simg[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkClearColorValue black = {{0, 0, 0, 1}}; VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(cb, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &rg);
     int cx = crop ? crop[0] : 0, cy = crop ? crop[1] : 0, cw = crop && crop[2] ? crop[2] : (int)im->w, ch = crop && crop[3] ? crop[3] : (int)im->h;
-    double s = fmin((double)g_sext.width / cw, (double)g_sext.height / ch); int dw = (int)(cw * s), dh = (int)(ch * s), dx = ((int)g_sext.width - dw) / 2, dy = ((int)g_sext.height - dh) / 2;
+    static const double aspects[4] = {0, 16.0 / 10, 3.0 / 2, 4.0 / 3}; int am = dm_disp(DISP_ASPECT);   // the Display tab: the game's own shape, another, or the whole window
+    double ar = am >= 1 && am <= 3 ? aspects[am] : (double)cw / ch, s = fmin((double)g_sext.width / ar, (double)g_sext.height); int dw = (int)(ar * s), dh = (int)s;
+    if (am == 4) { dw = (int)g_sext.width; dh = (int)g_sext.height; }
+    int dx = ((int)g_sext.width - dw) / 2, dy = ((int)g_sext.height - dh) / 2;
     vk_pic_set((float)dx / g_sext.width, (float)dy / g_sext.height, (float)dw / g_sext.width, (float)dh / g_sext.height);
     VkImageBlit b = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{cx, cy, 0}, {cx + cw, cy + ch, 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{dx, dy, 0}, {dx + dw, dy + dh, 1}}};
     if (vk_window_bottom_up()) { b.srcOffsets[0].y = cy + ch; b.srcOffsets[1].y = cy; }   // lower-left origin: the window image is stored bottom-up (gfx_vk_exec.c)
-    vkCmdBlitImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR);
-    VkImageLayout lay = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    VkImageLayout lay = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; int fsr = 0;
+    if (dm_disp(DISP_FSR) && dw >= cw && dh >= ch && (mview || (mview = fx_view_of(im, 1)))) { static const float stops[4] = {1.5f, 1.0f, 0.5f, 0.1f};
+        fsr = fsr_draw(cb, k, im->img, mview, im->w, im->h, cx, cy, cw, ch, dx, dy, dw, dh, idx, &lay, stops[dm_disp(DISP_SHARP)]); }
+    if (!fsr) vkCmdBlitImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR);
     int ovm = dm_overlay_visible(), menu = dm_menu_state(), fps = dm_overlay_fps();
     if ((ovm || menu >= 0 || fps) && overlay_ready(cb, k, menu) && (V.has_dynrender || ov_fb(idx))) {   // without dynamic rendering, only with the image's framebuffer
         barrier(cb, g_simg[idx], lay, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL); lay = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -815,6 +830,7 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
         if (V.has_dynrender) vkCmdEndRendering(cb); else vkCmdEndRenderPass(cb);
     }
     barrier(cb, g_simg[idx], lay, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    if (fg_on && !mid && ticket) { vk_img_barrier_all(cb); fg_keep(cb, im); }
     vkEndCommandBuffer(cb);
     VkPipelineStageFlags ws = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO, NULL, 1, &g_acq[k], &ws, 1, &cb, 1, &g_done_sem[k]};
@@ -881,12 +897,17 @@ static void *present_thread(void *arg) {
         atomic_store(&g_redraw, 0);
         if (g_pq_tail == g_pq_head) {   // a redraw, no new frame
             pthread_mutex_unlock(&g_pq_mu);
-            if (last.im) { pthread_mutex_lock(&g_present_mu); if (swap_make()) present_window(last.im, last.has_crop ? last.crop : NULL, -1, 0); pthread_mutex_unlock(&g_present_mu); }
+            if (last.im) { pthread_mutex_lock(&g_present_mu); if (swap_make()) present_window(last.im, last.has_crop ? last.crop : NULL, -1, 0, 0); pthread_mutex_unlock(&g_present_mu); }
             continue;
         }
         typeof(g_pq[0]) e = g_pq[g_pq_tail % PQ_N];
         pthread_mutex_unlock(&g_pq_mu);
-        if (e.im) { last = e; pthread_mutex_lock(&g_present_mu); if (swap_make()) present_window(e.im, e.has_crop ? e.crop : NULL, e.period, e.n); pthread_mutex_unlock(&g_present_mu); }
+        if (e.im) {
+            // Frame generation: the frame half way to this one goes first, this one half a frame later. The gap between the game's frames sets that half, and a game below 15 fps gets none
+            static uint64_t t_last; uint64_t t_now = mono_ns(), gap = t_last ? t_now - t_last : 0; t_last = t_now; int gen = dm_disp(DISP_FG) && V.has_dynrender && gap > 8000000 && gap < 70000000;
+            if (gen) { pthread_mutex_lock(&g_present_mu); if (swap_make()) { present_window(e.im, e.has_crop ? e.crop : NULL, -1, 0, 1); atomic_fetch_add(&g_fps_frames, 1); } pthread_mutex_unlock(&g_present_mu);
+                uint64_t spent = mono_ns() - t_now; if (spent < gap / 2) { uint64_t w = gap / 2 - spent; struct timespec ts = {0, (long)w}; nanosleep(&ts, NULL); } }
+            last = e; pthread_mutex_lock(&g_present_mu); if (swap_make()) present_window(e.im, e.has_crop ? e.crop : NULL, e.period, e.n, 0); pthread_mutex_unlock(&g_present_mu); }
         pthread_mutex_lock(&g_pq_mu); g_pq_tail++; g_pq_done = e.n; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
     }
     return NULL;

@@ -278,6 +278,7 @@ void dm_perf_frame(double period) {
 // The window's frame rate: the game's rate, so the display can pick a mode it divides (60 / 120 Hz rather than 144 Hz for a 60 fps game).
 void dm_perf_window(ANativeWindow *w, double fps) {
     if (!w || fps <= 0) return;
+    { int dm_disp(int what); if (dm_disp(3) && fps < 60) fps = 60; }   // frame generation (overlay_layout.h DISP_FG): a window slowed to the game's rate could not show the frames between
     int r = ANativeWindow_setFrameRate(w, (float)fps, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
     LOG("[perf] window frame rate %.0f fps%s", fps, r ? " refused" : "");
 }
