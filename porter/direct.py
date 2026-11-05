@@ -134,7 +134,9 @@ def install(apk, data, token, port=PORT, wait=WAIT):
         tell('install_apk', apk=str(apk), package=pkg, label=name, flag=str(flag))
         end, was = time.time() + wait, False
         while not srv.finished:
-            if flag.is_file(): raise BuildError(flag.read_text(encoding='utf-8').strip() or 'Android did not install the game')
+            if flag.is_file():
+                time.sleep(0.5)   # the app may be between making the file and filling it
+                raise BuildError(flag.read_text(encoding='utf-8').strip() or 'Android did not install the game')
             if srv.failed: raise BuildError(f'the game could not copy its data: {srv.failed}')
             if time.time() > end: raise BuildError(f'{name} was not opened: tap Port again to go on')
             if srv.seen and not was:
