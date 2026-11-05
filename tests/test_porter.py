@@ -79,7 +79,7 @@ class AndroidProfiles(unittest.TestCase):
         self.assertEqual(android_profile.theme('0100000000AAA000').name, 'ergo')
         rows = [l.split('\t') for l in (android_profile.THEMES / 'themes.tsv').read_text(encoding='utf-8').splitlines() if l and not l.startswith('#')]
         self.assertEqual(len({r[0] for r in rows}), len(rows))   # one pack per game
-        for r in rows: self.assertRegex(r[0], r'^0100[0-9A-F]{12}$'); self.assertTrue((android_profile.THEMES / r[1] / 'theme.tsv').is_file(), r)
+        for r in rows: self.assertRegex(r[0], r'^0[14]00[0-9A-F]{12}$'); self.assertTrue((android_profile.THEMES / r[1] / 'theme.tsv').is_file(), r)
 
     def test_theme_packs(self):   # every pack: both layouts' atlases, and sprites only of the layout's controls, within the atlas, every control drawn idle (a button held too)
         from PIL import Image

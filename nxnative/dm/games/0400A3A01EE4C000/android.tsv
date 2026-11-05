@@ -10,3 +10,36 @@ env	DM_NVN_DROP_CODE=1
 env	DM_VK_ASYNC_COMPUTE=1
 # handheld: the game picks its lower resolution and settings. Docked it asked more of the tablet than its memory and GPU have: under 15 fps in its first area, and closed by Android after 6 minutes
 env	DM_OPMODE=0
+# the gamepad as in the player's picture (themes/pokopia, devtools/pokopia_hud.py). L3 and R3 are not in it: size 0, no touch
+overlay	tablet zl 0.0781 0.1494 0.1660 0.1318
+overlay	tablet l 0.0781 0.2939 0.1660 0.1318
+overlay	tablet zr 0.9128 0.1494 0.1660 0.1318
+overlay	tablet r 0.9128 0.2939 0.1660 0.1318
+overlay	tablet x 0.8542 0.4521 0.1367 0.1367
+overlay	tablet y 0.7786 0.5635 0.1367 0.1367
+overlay	tablet a 0.9121 0.5635 0.1367 0.1367
+overlay	tablet b 0.8385 0.6719 0.1367 0.1367
+overlay	tablet minus 0.3288 0.1074 0.1719 0.1152
+overlay	tablet plus 0.6602 0.1074 0.1719 0.1152
+overlay	tablet stick_l 0.0944 0.8457 0.2441 0.2441
+overlay	tablet stick_r 0.9030 0.8496 0.2441 0.2441
+overlay	tablet dpad 0.1126 0.5186 0.2246 0.2246
+overlay	tablet menu 0.5000 0.0547 0.0898 0.0488
+overlay	tablet ls 0.5 0.5 0 0
+overlay	tablet rs 0.5 0.5 0 0
+overlay	phone zl 0.0528 0.1494 0.1660 0.1318
+overlay	phone l 0.0528 0.2939 0.1660 0.1318
+overlay	phone zr 0.9411 0.1494 0.1660 0.1318
+overlay	phone r 0.9411 0.2939 0.1660 0.1318
+overlay	phone x 0.9015 0.4521 0.1367 0.1367
+overlay	phone y 0.8505 0.5635 0.1367 0.1367
+overlay	phone a 0.9406 0.5635 0.1367 0.1367
+overlay	phone b 0.8909 0.6719 0.1367 0.1367
+overlay	phone minus 0.3844 0.1074 0.1719 0.1152
+overlay	phone plus 0.6082 0.1074 0.1719 0.1152
+overlay	phone stick_l 0.0638 0.8457 0.2441 0.2441
+overlay	phone stick_r 0.9345 0.8496 0.2441 0.2441
+overlay	phone dpad 0.0761 0.5186 0.2246 0.2246
+overlay	phone menu 0.5000 0.0547 0.0898 0.0488
+overlay	phone ls 0.5 0.5 0 0
+overlay	phone rs 0.5 0.5 0 0

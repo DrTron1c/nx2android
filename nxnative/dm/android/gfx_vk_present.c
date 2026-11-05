@@ -41,6 +41,7 @@ static void hang_watch_tick(void) {
 #include <time.h>
 #include "overlay_layout.h"
 #include "font5x7.h"
+#include "font_ui.h"
 #include "overlay_vert.spv.h"
 #include "overlay_frag.spv.h"
 
@@ -226,12 +227,21 @@ static void ov_box_ring(uint8_t *px, uint32_t w, uint32_t h, const ov_ctl *c, co
         else if (d < -ring) ov_plot(px, w, h, x, y, 50, 30);
     }
 }
+// The rounded letters (font_ui.h): a glyph's coverage at (u, v), in its cell's texels. An em is 9 of the old 5x7 font's scale steps, so text fills about the room it did
+#define UI_EM_PER_SCALE 9.0f
+static float ui_cov(unsigned ch, float u, float v) {
+    unsigned g = (ch >= 32 && ch < 127 ? ch : 63) - 32; int w = UI_G[g].w, x = (int)floorf(u), y = (int)floorf(v); float fx = u - x, fy = v - y;
+    const uint8_t *a = UI_A + UI_G[g].off;
+    float t = 0; for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) { int X = x + i, Y = y + j; if (X < 0 || Y < 0 || X >= w || Y >= UI_CELL) continue; t += a[Y * w + X] * (i ? fx : 1 - fx) * (j ? fy : 1 - fy); }
+    return t / 255;
+}
+static float ui_text_w(const char *s, float em) { float n = 0; for (; *s; s++) n += UI_G[((unsigned char)*s >= 32 && (unsigned char)*s < 127 ? (unsigned char)*s : 63) - 32].adv16 / 16.0f; return n * em / UI_EM; }
 static void ov_text(uint8_t *px, uint32_t w, uint32_t h, float cx, float cy, const char *s, int scale) {
-    int n = (int)strlen(s), x0 = (int)(cx - n * 6 * scale / 2.0f), y0 = (int)(cy - 7 * scale / 2.0f);
-    for (int i = 0; i < n; i++) {
-        unsigned c = (unsigned char)s[i]; const unsigned char *g = FONT5X7[(c >= 32 && c < 127 ? c : 63) - 32];
-        for (int col = 0; col < 5; col++) for (int row = 0; row < 7; row++) if (g[col] >> row & 1)
-            for (int dy = 0; dy < scale; dy++) for (int dx = 0; dx < scale; dx++) ov_plot(px, w, h, x0 + i * 6 * scale + col * scale + dx, y0 + row * scale + dy, 220, 255);
+    float em = UI_EM_PER_SCALE * scale, f = em / UI_EM, pen = cx - ui_text_w(s, em) / 2; int y0 = (int)(cy - UI_CELL * f / 2);
+    for (; *s; s++) {
+        unsigned c = (unsigned char)*s, g = (c >= 32 && c < 127 ? c : 63) - 32; int x0 = (int)(pen + UI_G[g].left * f), dw = (int)ceilf(UI_G[g].w * f), dh = (int)ceilf(UI_CELL * f);
+        for (int dy = 0; dy < dh; dy++) for (int dx = 0; dx < dw; dx++) { float a = ui_cov(c, (dx + 0.5f) / f - 0.5f, (dy + 0.5f) / f - 0.5f); if (a > 0.04f) ov_plot(px, w, h, x0 + dx, y0 + dy, (uint8_t)(a * 220 + 0.5f), 255); }
+        pen += UI_G[g].adv16 / 16.0f * f;
     }
 }
 // colour drawing for the menu button and the panel: straight alpha, "over" blending, shapes antialiased by their distance
@@ -263,16 +273,25 @@ static void cv_ring(const ov_canvas *cv, float cx, float cy, float r, float t, c
         cv_blend(cv, x, y, c, fminf(0.5f - (d - r), 0.5f + (d - (r - t))));
     }
 }
-static float cv_text_w(const char *s, int scale) { return (float)strlen(s) * 6 * scale - scale; }
+static float cv_text_w(const char *s, int scale) { return ui_text_w(s, UI_EM_PER_SCALE * scale); }
 static void cv_text(const ov_canvas *cv, float x, float cy, const char *s, int scale, const uint8_t c[4]) {   // x: the left edge
-    int x0 = (int)(x + 0.5f), y0 = (int)(cy - 7 * scale / 2.0f + 0.5f);
-    for (int i = 0; s[i]; i++) {
-        unsigned ch = (unsigned char)s[i]; const unsigned char *g = FONT5X7[(ch >= 32 && ch < 127 ? ch : 63) - 32];
-        for (int col = 0; col < 5; col++) for (int row = 0; row < 7; row++) if (g[col] >> row & 1)
-            for (int dy = 0; dy < scale; dy++) for (int dx = 0; dx < scale; dx++) cv_blend(cv, x0 + i * 6 * scale + col * scale + dx, y0 + row * scale + dy, c, 1);
+    float em = UI_EM_PER_SCALE * scale, f = em / UI_EM, pen = x; int y0 = (int)(cy - UI_CELL * f / 2 + 0.5f);
+    for (; *s; s++) {
+        unsigned ch = (unsigned char)*s, g = (ch >= 32 && ch < 127 ? ch : 63) - 32; int x0 = (int)(pen + UI_G[g].left * f + 0.5f), dw = (int)ceilf(UI_G[g].w * f), dh = (int)ceilf(UI_CELL * f);
+        for (int dy = 0; dy < dh; dy++) for (int dx = 0; dx < dw; dx++) cv_blend(cv, x0 + dx, y0 + dy, c, ui_cov(ch, (dx + 0.5f) / f - 0.5f, (dy + 0.5f) / f - 0.5f));
+        pen += UI_G[g].adv16 / 16.0f * f;
     }
 }
-static const uint8_t C_WHITE[4] = {255, 255, 255, 255}, C_ACCENT[4] = {255, 60, 142, 255};
+// a rounded rectangle's outline, t thick, inside its edge: the menus' white rings
+static void cv_rframe(const ov_canvas *cv, float x0, float y0, float x1, float y1, float rad, float t, const uint8_t c[4]) {
+    float cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, hx = (x1 - x0) / 2 - rad, hy = (y1 - y0) / 2 - rad;
+    for (int y = (int)y0 - 1; y <= (int)y1 + 1; y++) for (int x = (int)x0 - 1; x <= (int)x1 + 1; x++) {
+        float qx = fabsf(x + 0.5f - cx) - hx, qy = fabsf(y + 0.5f - cy) - hy, ox = qx > 0 ? qx : 0, oy = qy > 0 ? qy : 0;
+        float d = sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0) - rad;
+        cv_blend(cv, x, y, c, fminf(0.5f - d, 0.5f + d + t));
+    }
+}
+static const uint8_t C_WHITE[4] = {255, 255, 255, 255}, C_ACCENT[4] = {183, 155, 214, 255}, C_PLUM[4] = {64, 30, 54, 255}, C_GO[4] = {148, 210, 166, 255};   // the gamepad's pastels: ZL's lilac, A's green; the letter badges' plum on them
 static void ov_menu_icon(const ov_canvas *cv, const ov_ctl *c, const float b[4]) {   // the menu button: a dark pill with a ring and three bars
     static const uint8_t fill[4] = {20, 20, 26, 170}, ring[4] = {255, 255, 255, 210};
     float r = b[3], t = fmaxf(2, r * 0.07f);
@@ -311,14 +330,18 @@ static void ov_text_panel(const ov_canvas *cv) {
     while (hs > 1 && cv_text_w(k, hs) > W - 2 * pad) hs--;
     cv_text(cv, (W - cv_text_w(k, hs)) / 2, H * 0.95f, k, hs, dim);
 }
-static const uint8_t C_BG[4] = {14, 14, 20, 236}, C_LINE[4] = {255, 255, 255, 40}, C_HI[4] = {255, 255, 255, 34}, C_DIM[4] = {200, 200, 210, 255}, C_OFF[4] = {80, 80, 92, 255},
-                     C_KNOB_OFF[4] = {215, 215, 222, 255};
-static void cv_button(const ov_canvas *cv, const float b[4], const char *l, int fill, int held) {   // a rounded button with its word, as large as fits
-    static const uint8_t face[4] = {255, 255, 255, 30}, rim[4] = {255, 255, 255, 90};
-    float rad = b[3] * 0.28f; cv_rrect(cv, b[0], b[1], b[0] + b[2], b[1] + b[3], rad, held ? C_WHITE : rim);
-    cv_rrect(cv, b[0] + 2, b[1] + 2, b[0] + b[2] - 2, b[1] + b[3] - 2, rad - 2, held ? C_ACCENT : fill ? C_ACCENT : face);
+static const uint8_t C_BG[4] = {30, 28, 36, 240}, C_LINE[4] = {255, 255, 255, 40}, C_HI[4] = {255, 255, 255, 34}, C_DIM[4] = {214, 214, 224, 255}, C_OFF[4] = {112, 118, 124, 255},
+                     C_KNOB_OFF[4] = {232, 234, 236, 255};
+static void cv_button(const ov_canvas *cv, const float b[4], const char *l, int fill, int held) {   // a pill with a white ring and its word, as large as fits
+    static const uint8_t face[4] = {152, 161, 164, 200};
+    float rad = b[3] * 0.5f, t = fmaxf(2, b[3] * 0.07f); int on = held || fill;
+    cv_rrect(cv, b[0], b[1], b[0] + b[2], b[1] + b[3], rad, held ? C_WHITE : on ? C_ACCENT : face);
+    cv_rframe(cv, b[0], b[1], b[0] + b[2], b[1] + b[3], rad, t, C_WHITE);
     int s = (int)fmaxf(1, roundf(b[3] * 0.40f / 7)); while (s > 1 && cv_text_w(l, s) > b[2] * 0.82f) s--;
-    cv_text(cv, b[0] + (b[2] - cv_text_w(l, s)) / 2, b[1] + b[3] / 2, l, s, C_WHITE);
+    cv_text(cv, b[0] + (b[2] - cv_text_w(l, s)) / 2, b[1] + b[3] / 2, l, s, on ? C_PLUM : C_WHITE);
+}
+static void cv_panel(const ov_canvas *cv, float x0, float y0, float x1, float y1, float rad) {   // a menu's dark panel in its white ring
+    cv_rrect(cv, x0, y0, x1, y1, rad, C_BG); cv_rframe(cv, x0, y0, x1, y1, rad, fmaxf(2, rad * 0.14f), C_WHITE);
 }
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
@@ -338,20 +361,20 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
         }
         if (need <= rw && cv_text_w(OVM_TAB_NAMES[0], is) < rw / 2 - sh) break;
     }
-    cv_rrect(cv, 0, 0, p[2], p[3], rh * 0.18f, C_BG);
+    cv_panel(cv, 0, 0, p[2], p[3], rh * 0.42f);
     for (int row = 0; row < OVM_ROWS; row++) {
         int it = ov_menu_item(tab, row); ov_menu_rowrect(p, row, r); float cy = r[1] + rh / 2, x1 = r[0] + rw - rh * 0.15f;
         if (it < 0) continue;
-        if (row == sel) cv_rrect(cv, r[0], r[1] + rh * 0.08f, r[0] + rw, r[1] + rh * 0.92f, rh * 0.14f, C_HI);
+        if (row == sel) cv_rrect(cv, r[0], r[1] + rh * 0.08f, r[0] + rw, r[1] + rh * 0.92f, rh * 0.42f, C_HI);
         if (it == OVM_TAB) {   // the tabs: a segmented bar, the open one filled
             float th = rh * 0.62f, tw = rw / OVM_TABS;
             cv_rrect(cv, r[0], cy - th / 2, r[0] + rw, cy + th / 2, th / 2, C_OFF);
-            cv_rrect(cv, r[0] + tab * tw, cy - th / 2, r[0] + (tab + 1) * tw, cy + th / 2, th / 2, C_ACCENT);
-            for (int k = 0; k < OVM_TABS; k++) cv_text(cv, r[0] + k * tw + (tw - cv_text_w(OVM_TAB_NAMES[k], is)) / 2, cy, OVM_TAB_NAMES[k], is, k == tab ? C_WHITE : C_DIM);
+            cv_rrect(cv, r[0] + tab * tw, cy - th / 2, r[0] + (tab + 1) * tw, cy + th / 2, th / 2, C_ACCENT); cv_rframe(cv, r[0], cy - th / 2, r[0] + rw, cy + th / 2, th / 2, fmaxf(2, th * 0.07f), C_WHITE);
+            for (int k = 0; k < OVM_TABS; k++) cv_text(cv, r[0] + k * tw + (tw - cv_text_w(OVM_TAB_NAMES[k], is)) / 2, cy, OVM_TAB_NAMES[k], is, k == tab ? C_PLUM : C_WHITE);
             cv_rrect(cv, r[0], r[1] + rh - 1, r[0] + rw, r[1] + rh, 0.5f, C_LINE);
             continue;
         }
-        if (it == OVM_RESUME) { cv_rrect(cv, r[0], r[1], r[0] + rw, r[1] + 1, 0.5f, C_LINE); cv_text(cv, r[0] + (rw - cv_text_w("Resume", is)) / 2, cy, "Resume", is, C_ACCENT); continue; }
+        if (it == OVM_RESUME) { cv_rrect(cv, r[0], r[1], r[0] + rw, r[1] + 1, 0.5f, C_LINE); { float bw = cv_text_w("Resume", is) + 3 * rh, b[4] = {r[0] + (rw - bw) / 2, cy - rh * 0.36f, bw, rh * 0.72f}; cv_button(cv, b, "Resume", 1, 0); } continue; }
         cv_text(cv, r[0] + rh * 0.15f, cy, OVM_LABELS[it], is, row == sel ? C_WHITE : C_DIM);
         if (it == OVM_OPACITY) {   // the slider: its track, filled to the value, the knob and the percent
             float t[3]; ov_menu_track(p, row, t); float f = (float)(op - OV_OPACITY_MIN) / (OV_OPACITY_MAX - OV_OPACITY_MIN), th = fmaxf(2, rh * 0.08f), kr = rh * 0.20f;
@@ -370,11 +393,11 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
         } else if (it == OVM_MODE) {   // two segments, the current one filled: handheld (performance) | docked (resolution)
             int docked = st >> 2 & 1; float hh = rh * 0.46f, segw = fmaxf(cv_text_w(OVM_MODES[0], is), cv_text_w(OVM_MODES[1], is)) + sh, x0 = x1 - 2 * segw;
             cv_rrect(cv, x0, cy - hh / 2, x1, cy + hh / 2, hh / 2, C_OFF);
-            cv_rrect(cv, x0 + docked * segw, cy - hh / 2, x0 + (docked + 1) * segw, cy + hh / 2, hh / 2, C_ACCENT);
-            for (int k = 0; k < 2; k++) cv_text(cv, x0 + k * segw + (segw - cv_text_w(OVM_MODES[k], is)) / 2, cy, OVM_MODES[k], is, k == docked ? C_WHITE : C_DIM);
+            cv_rrect(cv, x0 + docked * segw, cy - hh / 2, x0 + (docked + 1) * segw, cy + hh / 2, hh / 2, C_ACCENT); cv_rframe(cv, x0, cy - hh / 2, x1, cy + hh / 2, hh / 2, fmaxf(2, hh * 0.07f), C_WHITE);
+            for (int k = 0; k < 2; k++) cv_text(cv, x0 + k * segw + (segw - cv_text_w(OVM_MODES[k], is)) / 2, cy, OVM_MODES[k], is, k == docked ? C_PLUM : C_WHITE);
         } else {   // a switch
             int on = st >> (it == OVM_OVERLAY ? 0 : it == OVM_RUMBLE ? 1 : 3) & 1; float sx0 = x1 - sw;
-            cv_rrect(cv, sx0, cy - sh / 2, x1, cy + sh / 2, sh / 2, on ? C_ACCENT : C_OFF);
+            cv_rrect(cv, sx0, cy - sh / 2, x1, cy + sh / 2, sh / 2, on ? C_GO : C_OFF); cv_rframe(cv, sx0, cy - sh / 2, x1, cy + sh / 2, sh / 2, fmaxf(2, sh * 0.08f), C_WHITE);
             cv_disc(cv, on ? x1 - sh / 2 : sx0 + sh / 2, cy, sh / 2 - fmaxf(2, sh * 0.1f), on ? C_WHITE : C_KNOB_OFF);
             const char *word = on ? "ON" : "OFF"; cv_text(cv, sx0 - gap - cv_text_w(word, is), cy, word, is, on ? C_WHITE : C_DIM);
         }
@@ -395,7 +418,7 @@ static void ov_edit_panel(const ov_canvas *cv, int st) {
     float tb[4], pr[4]; ov_ed_rects(tb, pr);
     int held = (st >> 4 & 15) - 1, sel = (st >> 8 & 255) - 1;
     static const char *const words[OVE_ALL] = {"-", "+", "Reset", "Cancel", "Save", "Snap to grid: Off", "Discard", "Keep editing"};
-    cv_rrect(cv, tb[0], tb[1], tb[0] + tb[2], tb[1] + tb[3], tb[3] * 0.14f, C_BG);
+    cv_panel(cv, tb[0], tb[1], tb[0] + tb[2], tb[1] + tb[3], tb[3] * 0.2f);
     char hint[96];
     if (sel >= 0 && sel < OV_N) snprintf(hint, sizeof hint, "%s: drag, pinch, - +", ov_ctl_name(&OV_CTLS[sel]));   // (short: 2x-scale letters on a phone)
     else snprintf(hint, sizeof hint, "Drag to move, pinch to resize");
@@ -404,7 +427,7 @@ static void ov_edit_panel(const ov_canvas *cv, int st) {
     for (int i = 0; i < OVE_N; i++) { float b[4]; ov_ed_button(i, tb, b); int grid = i == OVE_GRID && (st & OVE_GRID_ON);
         cv_button(cv, b, grid ? "Snap to grid: On" : words[i], i == OVE_SAVE || grid, i == held); }
     if (!(st & 1)) return;
-    cv_rrect(cv, pr[0], pr[1], pr[0] + pr[2], pr[1] + pr[3], pr[3] * 0.10f, C_BG);
+    cv_panel(cv, pr[0], pr[1], pr[0] + pr[2], pr[1] + pr[3], pr[3] * 0.14f);
     const char *q = "Discard your changes?"; int qs = (int)fmaxf(1, roundf(pr[3] * 0.13f / 7)); while (qs > 1 && cv_text_w(q, qs) > pr[2] * 0.9f) qs--;
     cv_text(cv, pr[0] + (pr[2] - cv_text_w(q, qs)) / 2, pr[1] + pr[3] * 0.27f, q, qs, C_WHITE);
     for (int i = OVE_DISCARD; i <= OVE_KEEP; i++) { float b[4]; ov_ed_button(i, pr, b); cv_button(cv, b, words[i], i == OVE_DISCARD, i == held); }
@@ -418,12 +441,12 @@ static void ov_save_panel(const ov_canvas *cv, int st) {
     for (int k = 0; k <= OVS_BACK; k++) size[k] = k == OVS_NOTE ? (int)fmaxf(1, roundf(is0 * 0.8f)) : is0;
     for (int row = 0; row < OVM_ROWS; row++) { const ov_srow *q = &rows[row]; int *s = &size[q->style];
         while (*s > 1 && cv_text_w(q->left, *s) + (q->right[0] ? gap + cv_text_w(q->right, *s) : 0) > room) --*s; }
-    cv_rrect(cv, 0, 0, p[2], p[3], rh * 0.18f, C_BG);
+    cv_panel(cv, 0, 0, p[2], p[3], rh * 0.42f);
     for (int row = 0; row < OVM_ROWS; row++) {
         const ov_srow *q = &rows[row]; ov_menu_rowrect(p, row, r); float cy = r[1] + rh / 2, x0 = r[0] + rh * 0.15f, x1 = r[0] + rw - rh * 0.15f;
         if (q->style == OVS_EMPTY) continue;
         int is = size[q->style];
-        if (row == sel) cv_rrect(cv, r[0], r[1] + rh * 0.08f, r[0] + rw, r[1] + rh * 0.92f, rh * 0.14f, C_HI);
+        if (row == sel) cv_rrect(cv, r[0], r[1] + rh * 0.08f, r[0] + rw, r[1] + rh * 0.92f, rh * 0.42f, C_HI);
         if (q->style == OVS_BACK) { cv_rrect(cv, r[0], r[1], r[0] + rw, r[1] + 1, 0.5f, C_LINE); cv_text(cv, r[0] + (rw - cv_text_w(q->left, is)) / 2, cy, q->left, is, C_ACCENT); continue; }
         if (q->style == OVS_BUTTON) { float bw = fminf(rw, cv_text_w(q->left, is) + 4 * gap), b[4] = {r[0] + (rw - bw) / 2, cy - rh * 0.34f, bw, rh * 0.68f}; cv_button(cv, b, q->left, 1, row == sel); continue; }
         cv_text(cv, x0, cy, q->left, is, q->style == OVS_TITLE || row == sel ? C_WHITE : C_DIM);

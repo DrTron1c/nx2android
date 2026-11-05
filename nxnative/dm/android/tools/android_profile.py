@@ -8,7 +8,7 @@
 #   requires     device features, separated by spaces: bcn (BC texture compression)
 #   setting      <name>=<value>, one row each: the pause menu's defaults on first launch (overlay, rumble, docked, fps, opacity: 20..80 by 5)
 #   env          <KEY>=<VALUE>, one row each: host switches the game needs on Android (the data pack's env.txt)
-#   overlay      <tablet|phone> <control> <x> <y>: moves one control of that layout (dm/android/overlay_default.tsv) to x, y as fractions of the window
+#   overlay      <tablet|phone> <control> <x> <y> [<w> <h>]: moves one control of that layout (dm/android/overlay_default.tsv) to x, y as fractions of the window, and sizes it
 # Usage: android_profile.py header <id> <out.h> (android_profile.h for the host: the gamepad layouts, written only when it changes); android_profile.py list;
 #   android_profile.py <id> [<key>] (the profile's keys, or one key's value); android_profile.py theme <id> (the gamepad theme pack porter puts in the APK)
 # From Python: import android_profile; p = android_profile.load(<id>) (None without android.tsv); p.status, p.package, p.settings, p.env, p.overlay_table();
@@ -105,6 +105,7 @@ class AndroidProfile:
         for v in self.values('overlay'):
             c = v.split()
             by[c[0], c[1]].update(anchor=c[2], x='0', y=c[3])
+            if len(c) == 6: by[c[0], c[1]].update(w=c[4], h=c[5])   # its size too, in window heights; 0: not drawn and not touched (a theme without it)
         return rows
 
     def check(self):
@@ -120,8 +121,8 @@ class AndroidProfile:
         names = {r['name'] for r in default_layout()}
         for v in self.values('overlay'):
             c = v.split()
-            if len(c) != 4 or c[0] not in LAYOUTS or c[1] not in names or not all(re.fullmatch(r'\d*\.?\d+', x) for x in c[2:]):
-                bad.append(f'overlay {v!r}: <tablet|phone> <control> <x> <y>, control one of {", ".join(sorted(names))}')
+            if len(c) not in (4, 6) or c[0] not in LAYOUTS or c[1] not in names or not all(re.fullmatch(r'\d*\.?\d+', x) for x in c[2:]):
+                bad.append(f'overlay {v!r}: <tablet|phone> <control> <x> <y> [<w> <h>], control one of {", ".join(sorted(names))}')
         if bad: raise ProfileError(f'{self.path}: ' + '; '.join(bad))
 
 

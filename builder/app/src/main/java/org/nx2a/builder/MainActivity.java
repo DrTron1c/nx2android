@@ -40,7 +40,7 @@ import org.json.JSONObject;
 
 /** One screen: tools, game, keys, device connection, port. */
 public final class MainActivity extends Activity implements PortService.Listener {
-    private static final int BG = 0xFF14161A, CARD = 0xFF1E2127, TEXT = 0xFFE8EAED, DIM = 0xFF9AA0A6, ACCENT = 0xFFFF5C5C, GOOD = 0xFF5CC689;
+    private static final int BG = 0xFF0E0D12, CARD = 0xFF26242C, TEXT = 0xFFFFFFFF, DIM = 0xFFC9CDD0, ACCENT = 0xFFF49BA0, GOOD = 0xFF94D2A6, LILAC = 0xFFB79BD6, PLUM = 0xFF401E36, PILL = 0xFF5F676B;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private Env env;
@@ -76,23 +76,25 @@ public final class MainActivity extends Activity implements PortService.Listener
     private TextView text(String s, int size, int color, boolean bold) {
         TextView t = new TextView(this); t.setText(s); t.setTextSize(size); t.setTextColor(color); if (bold) t.setTypeface(Typeface.DEFAULT_BOLD); return t;
     }
+    // the game's gamepad: pastel pills in a white ring on near black, plum letters on the pastel
+    private GradientDrawable ring(int fill, int radius, int stroke) { GradientDrawable g = new GradientDrawable(); g.setCornerRadius(dp(radius)); g.setColor(fill); g.setStroke(dp(stroke), Color.WHITE); return g; }
     private Button button(String s, boolean primary, View.OnClickListener l) {
-        Button x = new Button(this); x.setText(s); x.setAllCaps(false); x.setTextColor(primary ? Color.WHITE : TEXT); x.setOnClickListener(l);
-        GradientDrawable g = new GradientDrawable(); g.setCornerRadius(dp(10)); g.setColor(primary ? ACCENT : 0xFF2C3038); x.setBackground(g);
-        x.setMinHeight(dp(44)); x.setPadding(dp(16), 0, dp(16), 0);
+        Button x = new Button(this); x.setText(s); x.setAllCaps(false); x.setTextColor(primary ? PLUM : TEXT); x.setTypeface(Typeface.DEFAULT_BOLD); x.setOnClickListener(l);
+        x.setBackground(ring(primary ? LILAC : PILL, 26, 2));
+        x.setMinHeight(dp(48)); x.setPadding(dp(20), 0, dp(20), 0);
         return x;
     }
     private LinearLayout card(String title) {
-        LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); c.setPadding(dp(16), dp(14), dp(16), dp(16));
-        GradientDrawable g = new GradientDrawable(); g.setCornerRadius(dp(14)); g.setColor(CARD); c.setBackground(g);
-        c.addView(text(title, 16, TEXT, true));
+        LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); c.setPadding(dp(18), dp(16), dp(18), dp(18));
+        c.setBackground(ring(CARD, 24, 2));
+        c.addView(text(title, 17, TEXT, true));
         return c;
     }
     private void add(LinearLayout parent, View v, int top) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); p.topMargin = dp(top); parent.addView(v, p);
     }
     private EditText field(String hint, int width) {
-        EditText e = new EditText(this); e.setHint(hint); e.setInputType(InputType.TYPE_CLASS_NUMBER); e.setTextColor(TEXT); e.setHintTextColor(DIM); e.setSingleLine(true); e.setWidth(dp(width)); return e;
+        EditText e = new EditText(this); e.setHint(hint); e.setInputType(InputType.TYPE_CLASS_NUMBER); e.setTextColor(TEXT); e.setHintTextColor(DIM); e.setSingleLine(true); e.setWidth(dp(width)); e.setBackground(ring(PILL, 20, 2)); e.setPadding(dp(14), dp(8), dp(14), dp(8)); return e;
     }
 
     private void grow(LinearLayout row, View v) {
@@ -135,15 +137,17 @@ public final class MainActivity extends Activity implements PortService.Listener
         add(root, c4, 12);
 
         LinearLayout c5 = card("5. Port");
-        touch = new CheckBox(this); touch.setText("Touch game (hide the on-screen gamepad)"); touch.setTextColor(TEXT); add(c5, touch, 6);
-        fps60 = new CheckBox(this); fps60.setText("60 fps when the game's build allows it"); fps60.setTextColor(TEXT); add(c5, fps60, 0);
-        installAfter = new CheckBox(this); installAfter.setText("Install when done"); installAfter.setTextColor(TEXT); installAfter.setChecked(true); add(c5, installAfter, 0);
-        keepOn = new CheckBox(this); keepOn.setText("Keep the screen on while porting"); keepOn.setTextColor(TEXT); keepOn.setChecked(prefs.getBoolean("keepOn", true)); add(c5, keepOn, 0);
+        touch = new CheckBox(this); touch.setText("Touch game (hide the on-screen gamepad)"); touch.setTextColor(TEXT);  add(c5, touch, 6);
+        fps60 = new CheckBox(this); fps60.setText("60 fps when the game's build allows it"); fps60.setTextColor(TEXT);  add(c5, fps60, 0);
+        installAfter = new CheckBox(this); installAfter.setText("Install when done"); installAfter.setTextColor(TEXT);  installAfter.setChecked(true); add(c5, installAfter, 0);
+        keepOn = new CheckBox(this); keepOn.setText("Keep the screen on while porting"); keepOn.setTextColor(TEXT);  keepOn.setChecked(prefs.getBoolean("keepOn", true)); add(c5, keepOn, 0);
         keepOn.setOnCheckedChangeListener((v, on) -> { prefs.edit().putBoolean("keepOn", on).apply(); screen(); });
+        for (CheckBox b : new CheckBox[]{touch, fps60, installAfter, keepOn}) b.setButtonTintList(android.content.res.ColorStateList.valueOf(LILAC));
         overallText = text("", 16, TEXT, true); overallText.setVisibility(View.GONE); add(c5, overallText, 10);
         overallBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); overallBar.setMax(1000); overallBar.setVisibility(View.GONE); add(c5, overallBar, 4);
         stepText = text("", 14, TEXT, false); add(c5, stepText, 8);
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); bar.setVisibility(View.GONE); add(c5, bar, 4);
+        for (ProgressBar b : new ProgressBar[]{overallBar, bar}) { b.setProgressTintList(android.content.res.ColorStateList.valueOf(LILAC)); b.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(LILAC)); b.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(PILL)); }
         checklist = new LinearLayout(this); checklist.setOrientation(LinearLayout.VERTICAL); add(c5, checklist, 8);
         portButton = button("Port this game", true, v -> port()); add(c5, portButton, 10);
         pauseButton = button("Pause", false, v -> PortService.command(this, PortService.state(this).paused ? PortService.RESUME : PortService.PAUSE)); pauseButton.setVisibility(View.GONE); add(c5, pauseButton, 8);

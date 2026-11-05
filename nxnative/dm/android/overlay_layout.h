@@ -66,6 +66,7 @@ static inline float ov_sdf(const ov_ctl *c, const float b[4], float dx, float dy
 #define OV_REACH_MIN 0.045f   // a small button (-, +, the menu button) still takes touches this far from its centre (of the window's height)
 // how far outside its edge a control still takes a touch, in pixels: a button a quarter of its size (at least to OV_REACH_MIN), a stick or the d-pad half
 static inline float ov_reach(const ov_ctl *c, const float b[4], float H) {
+    if (c->w <= 0) return -1e30f;   // a control the game's theme leaves out (android.tsv: size 0)
     float m = fminf(b[2], b[3]);
     return c->kind == OV_BUTTON || c->kind == OV_MENU ? fmaxf(m * 0.25f, OV_REACH_MIN * H * dm_overlay_scale() - m) : m * 0.5f;
 }
