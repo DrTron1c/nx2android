@@ -18,6 +18,11 @@ env	DM_OPMODE=0
 env	DM_SETTINGS_EPOCH=2
 # the sticks float: hidden, and under the finger on its half of the window (front_android.c touch_event)
 env	DM_OV_FLOAT=1
+# the render size: the game's dynamic resolution starts from 720p, not 900p to 1080p (loader.c levels_apply; the offsets are Banana Native's, update v655360 only). The pause menu changes it
+env	DM_RES_LEVELS=76a489f3bd3642fa5e18bd83d32c98ba,0x2849658,34,0x2804ff0:8,0x2805160:8,0x2805198:8,0x2805458:8,0x28055c0:8,0x2808b60:9,0x2808b69:10,0x2808b73:9,0x2808b7c:9
+env	DM_WINDOW_SIZE=1280x720
+# the exposure histogram, one frame in three (gfx_vk_exec.c thin_skip)
+env	DM_VK_THIN_COMPUTE=3:2118ab534fac88c6,d0c17f1fff8e5db5
 # the game goes on while the frame is replayed, on the fastest cores: a frame took the two one after the other
 env	DM_NVN_ASYNC=1
 env	DM_PIN_REPLAY=prime

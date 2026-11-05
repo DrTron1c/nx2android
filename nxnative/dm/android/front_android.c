@@ -77,7 +77,7 @@ static void settings_load(void) {
         else if (sscanf(line, "grid=%d", &v) == 1) atomic_store(&g_set_grid, v != 0);
         else if (sscanf(line, "aspect=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_ASPECT], v);
         else if (sscanf(line, "scale=%d", &v) == 1 && v >= 0 && v < 4) {   // read once, when the game sizes its picture: the menu's change counts from the next start
-            atomic_store(&g_disp[DISP_SCALE], v); static const char *const pct[4] = {"100", "85", "75", "60"}; setenv("DM_DISPLAY_SCALE", pct[v], 1); }
+            atomic_store(&g_disp[DISP_SCALE], v); static const char *const size[4] = {"1280x720", "1120x630", "960x540", "original"}; setenv("DM_WINDOW_SIZE", size[v], 1); }
         else if (sscanf(line, "fsr=%d", &v) == 1) atomic_store(&g_disp[DISP_FSR], v != 0);
         else if (sscanf(line, "sharp=%d", &v) == 1 && v >= 0 && v < 4) atomic_store(&g_disp[DISP_SHARP], v);
         else if (sscanf(line, "framegen=%d", &v) == 1) atomic_store(&g_disp[DISP_FG], v != 0);

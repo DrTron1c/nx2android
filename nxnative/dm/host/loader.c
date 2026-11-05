@@ -721,6 +721,39 @@ static uint8_t *slurp(const char *path, size_t *n) {
     close(fd); *n = st.st_size; return p;
 }
 
+// A game with dynamic resolution takes DM_WINDOW_SIZE=<w>x<h> as a cap on its render size (Banana Native's levels_apply, its profile key res_levels; here DM_RES_LEVELS, the env row
+// <main build ID>,<size table offset>,<levels>,<list offset>:<length>,...). The game keeps a table of sizes (u32 widths, then u32 heights) and picks its level from short byte lists, one per
+// operation mode and graphics scale, stepping down the list when the GPU runs late. Each list that starts above the cap is rewritten to start at the largest level that fits. The table
+// stays: render targets keep their size and the game draws into part of them, as its own dynamic resolution does (lowering the table too broke Pokopia's terrain). Fixed offsets run only on
+// the build they were found in, and the table and the lists are checked first. Read-only data is still writable here
+static void levels_apply(module_t *m) {
+    if (strcmp(m->name, "main")) return;
+    const char *e = getenv("DM_RES_LEVELS"), *w = getenv("DM_WINDOW_SIZE"); unsigned cw, ch; char x;
+    if (!e || !*e || !w || !*w || !strcmp(w, "original")) return;
+    if (sscanf(w, "%ux%u%c", &cw, &ch, &x) != 2 || !cw || !ch) { LOG("[RED] DM_WINDOW_SIZE=%s: must be <width>x<height> or original; the resolution stays the game's", w); return; }
+    char build[40]; unsigned long long table; unsigned n; int at = 0;
+    if (sscanf(e, "%39[^,],%llx,%u%n", build, &table, &n, &at) != 3 || n < 2 || n > 255) { LOG("[RED] DM_RES_LEVELS=%s: not understood", e); return; }
+    if (strcmp(build, m->build_id)) { LOG("[RED] DM_RES_LEVELS: main is build %s, not %s; the resolution stays the game's", m->build_id, build); return; }
+    struct { unsigned long long off; unsigned len; } l[12]; unsigned nl = 0;
+    for (const char *q = e + at; *q == ',' && nl < 12; ) { int k = 0; if (sscanf(q, ",%llx:%u%n", &l[nl].off, &l[nl].len, &k) != 2) break; nl++; q += k; }
+    if (table + 8ull * n > m->size) { LOG("[RED] DM_RES_LEVELS: main+%#llx is outside main", table); return; }
+    const uint32_t *tw = (const uint32_t *)(m->base + table), *th = tw + n;
+    for (unsigned i = 0; i < n; i++) if (!tw[i] || !th[i] || (i && (tw[i] < tw[i - 1] || th[i] < th[i - 1]))) { LOG("[RED] DM_RES_LEVELS: the size table at main+%#llx does not grow at level %u (%ux%u)", table, i, tw[i], th[i]); return; }
+    for (unsigned k = 0; k < nl; k++) {
+        if (l[k].off + l[k].len > m->size) { LOG("[RED] DM_RES_LEVELS: list main+%#llx is outside main", l[k].off); return; }
+        for (unsigned i = 0; i < l[k].len; i++) if (m->base[l[k].off + i] >= n) { LOG("[RED] DM_RES_LEVELS: list main+%#llx holds %u, not a level", l[k].off, m->base[l[k].off + i]); return; }
+    }
+    int top = 0, changed = 0;
+    for (unsigned i = 0; i < n; i++) if (tw[i] <= cw && th[i] <= ch) top = (int)i;
+    for (unsigned k = 0; k < nl; k++) {
+        uint8_t *p = m->base + l[k].off;
+        if (p[0] <= top) continue;
+        for (unsigned i = 0; i < l[k].len; i++) p[i] = (uint8_t)(top > (int)i ? top - (int)i : 0);
+        changed++;
+    }
+    LOG("resolution: at most %ux%u (level %d of the game's %u): %d of %u level lists lowered", tw[top], th[top], top, n, changed, nl);
+}
+
 // Seal the code area immediately after copying into anonymous pages (16 KB pages): [0, text_end) and the patch area are read-only+execute, and from then on any write to the code area crashes on the spot;
 // what lies between (ro and data on the same page can only go together) is writable
 static void map_image(module_t *m, const char *dir) {
@@ -737,7 +770,7 @@ static void map_image(module_t *m, const char *dir) {
         if (a == MAP_FAILED) die("%s mmap %#llx", m->name, (unsigned long long)(pre + m->size));
         m->base = a + pre;
         memcpy(m->base, raw, fl); memcpy(a, raw + fl, sz - bl - fl); if (bl) memcpy(m->base + m->back_off, raw + sz - bl, bl);
-        free(raw); install_key_page(m);
+        free(raw); install_key_page(m); levels_apply(m);
         if (bl && mprotect(m->base + m->back_off, bl, PROT_READ | PROT_EXEC)) die("%s mprotect back patch", m->name);
         uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
         if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
@@ -748,7 +781,7 @@ static void map_image(module_t *m, const char *dir) {
     m->size = (sz + 0x3FFF) & ~0x3FFFull;
     m->base = mmap(NULL, m->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (m->base == MAP_FAILED) die("%s mmap", m->name);
-    memcpy(m->base, raw, sz); free(raw); install_key_page(m);
+    memcpy(m->base, raw, sz); free(raw); install_key_page(m); levels_apply(m);
     uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
     if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
     uint64_t po = m->patch_off & ~0x3FFFull;

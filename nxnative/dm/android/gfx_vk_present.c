@@ -361,7 +361,7 @@ static void cv_panel(const ov_canvas *cv, float x0, float y0, float x1, float y1
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
 static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "Resume", ""};
-static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[4] = {"Low", "Medium", "High", "Max"}, *const OV_SCALES[4] = {"100%", "85%", "75%", "60%"};
+static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[4] = {"Low", "Medium", "High", "Max"}, *const OV_SCALES[4] = {"720p", "630p", "540p", "Full"};
 static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import"};   // the rows that are a button: its word
 static const char *const OVM_MODES[2] = {"Handheld", "Docked"};
 static void ov_menu_panel(const ov_canvas *cv, int st) {

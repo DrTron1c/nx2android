@@ -1294,6 +1294,16 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
 // a new command buffer (g_cmd_gen, gfx_vk_core.c) starts empty. Xenoblade Chronicles 3 docked: ~1,900 draws a frame, each with 10 dynamic-state calls and
 // its binds, most the same as the draw before; the driver's time grows with what is recorded (vkEndCommandBuffer too). DM_VK_X_NOBC=1: everything every draw
 extern uint64_t g_cmd_gen;
+// DM_VK_THIN_COMPUTE=<n>:<key>,<key>...: these compute shaders run one frame in n, and their results stand in between. For work that follows the scene slowly: Pokopia's exposure histogram
+// (2118ab534fac88c6, 8x8 groups over the whole 1080p picture, then d0c17f1fff8e5db5 averages it) took 13.6 of a 15 ms frame in bright areas on a phone (Banana Native's note). n is odd, so a
+// result the game keeps in two images by turns reaches both
+static int thin_skip(uint64_t key) {
+    static int n = -1, nk; static uint64_t k[4];
+    if (n < 0) { n = 0; const char *e = getenv("DM_VK_THIN_COMPUTE"); char *q; if (e && (n = (int)strtol(e, &q, 10)) > 1 && *q == ':') { for (q++; *q && nk < 4; ) { char *z; uint64_t v = strtoull(q, &z, 16); if (z == q) break; k[nk++] = v; q = *z == ',' ? z + 1 : z; if (z == q) break; } } else n = 0; }
+    if (n < 2 || g_tex_frame % (uint64_t)n == 0) return 0;
+    for (int i = 0; i < nk; i++) if (k[i] == key) return 1;
+    return 0;
+}
 // DM_VK_SHADOW_BIAS=<slope>,<units>: more depth bias for a depth-only D16 pass (the sun's shadow map). A stopgap, cause open: the lit side of everything in Pokopia's first area shows the moire of
 // a surface shadowing itself, in bands at the cascades, on Android and not on the Mac, with the same bias sent. The game's own values are logged ([shadow]). Its 25 taps reach 2 texels
 // each way, so a slope of about 3 covers them; a clamp keeps steep casters from lifting their shadows off the ground
@@ -1845,6 +1855,7 @@ static void dispatch(const p_dispatch *d) {
         pthread_mutex_unlock(&g_cpipe_mu);
     }
     if (p == (void *)1) return;
+    if (thin_skip(cs->key)) return;
     g_dispatch[0] = (uint32_t)d->x; g_dispatch[1] = (uint32_t)d->y; g_dispatch[2] = (uint32_t)d->z;
     vk_img_barrier_all(cb);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
