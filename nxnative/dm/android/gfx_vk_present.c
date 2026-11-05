@@ -239,6 +239,18 @@ static float ui_cov(unsigned ch, float u, float v) {
     return t / 255;
 }
 static float ui_text_w(const char *s, float em) { float n = 0; for (; *s; s++) n += UI_G[((unsigned char)*s >= 32 && (unsigned char)*s < 127 ? (unsigned char)*s : 63) - 32].adv16 / 16.0f; return n * em / UI_EM; }
+void dm_ui_text(uint32_t *px, int stride, int w, int h, float cx, float cy, const char *s, float em, uint32_t abgr) {   // the same letters on a plain RGBA picture: the screen the game shows while it copies its data (front_android.c)
+    float f = em / UI_EM, pen = cx - ui_text_w(s, em) / 2; int y0 = (int)(cy - UI_CELL * f / 2);
+    for (; *s; s++) {
+        unsigned c = (unsigned char)*s, g = (c >= 32 && c < 127 ? c : 63) - 32; int x0 = (int)(pen + UI_G[g].left * f), dw = (int)ceilf(UI_G[g].w * f), dh = (int)ceilf(UI_CELL * f);
+        for (int dy = 0; dy < dh; dy++) for (int dx = 0; dx < dw; dx++) {
+            float a = ui_cov(c, (dx + 0.5f) / f - 0.5f, (dy + 0.5f) / f - 0.5f); int X = x0 + dx, Y = y0 + dy;
+            if (a <= 0.04f || X < 0 || Y < 0 || X >= w || Y >= h) continue;
+            uint8_t *d = (uint8_t *)&px[Y * stride + X]; for (int i = 0; i < 3; i++) d[i] = (uint8_t)(d[i] + (((abgr >> (8 * i)) & 255) - d[i]) * a);
+        }
+        pen += UI_G[g].adv16 / 16.0f * f;
+    }
+}
 static void ov_text(uint8_t *px, uint32_t w, uint32_t h, float cx, float cy, const char *s, int scale) {
     float em = UI_EM_PER_SCALE * scale, f = em / UI_EM, pen = cx - ui_text_w(s, em) / 2; int y0 = (int)(cy - UI_CELL * f / 2);
     for (; *s; s++) {

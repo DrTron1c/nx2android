@@ -15,6 +15,7 @@
 #include <android/asset_manager.h>
 #include <android/configuration.h>
 #include <android/input.h>
+#include <android/asset_manager.h>
 #include <android/log.h>
 #include <android/looper.h>
 #include <android/native_activity.h>
@@ -883,6 +884,95 @@ static void env_file(const char *path) {   // KEY=VALUE per line (# comments): s
     }
     fclose(f);
 }
+// ---- the data with no adb: the start right after an install from the builder app (pack_sync_core.h) ----
+// This start is not the game's: the process only copies, shows how far it has got, and ends, and the app opens the game again. A fresh process and a fresh surface, because a window once
+// drawn from the CPU cannot be given to Vulkan, and because everything the game reads (env.txt among it) may just have changed.
+#include "pack_sync_core.h"
+__attribute__((weak)) void dm_ui_text(uint32_t *px, int stride, int w, int h, float cx, float cy, const char *s, float em, uint32_t abgr);
+static ps_t g_ps;
+static atomic_int g_syncing;
+#define SYNC_BG 0xfffbf1f7u      // the menus' colours, as 0xAABBGGRR
+#define SYNC_TRACK 0xfff2dce6u
+#define SYNC_BAR 0xffe8a0b8u
+#define SYNC_INK 0xff7a3f5bu
+static void sync_pill(ANativeWindow_Buffer *b, int x0, int y0, int x1, int y1, uint32_t c) {
+    int r = (y1 - y0) / 2;
+    for (int y = y0; y < y1 && y < b->height; y++) for (int x = x0; x < x1 && x < b->width; x++) {
+        int d = 0, dy = y - (y0 + r);
+        if (x < x0 + r) d = x0 + r - x; else if (x >= x1 - r) d = x - (x1 - r - 1);
+        if (d * d + dy * dy <= r * r) ((uint32_t *)b->bits)[y * b->stride + x] = c;
+    }
+}
+static void sync_draw(void) {
+    static ANativeWindow *sized;
+    pthread_mutex_lock(&g_win_mu);
+    ANativeWindow_Buffer b; ANativeWindow *w = g_win;
+    if (w && w != sized) { ANativeWindow_setBuffersGeometry(w, 0, 0, WINDOW_FORMAT_RGBA_8888); sized = w; }
+    if (w && !ANativeWindow_lock(w, &b, NULL)) {
+        uint32_t *px = b.bits; for (int y = 0; y < b.height; y++) for (int x = 0; x < b.width; x++) px[y * b.stride + x] = SYNC_BG;
+        int ph = atomic_load(&g_ps.phase); long long done = atomic_load(&g_ps.done), total = atomic_load(&g_ps.total);
+        float em = b.height / 22.0f, cx = b.width / 2.0f, cy = b.height / 2.0f; int bw = b.width * 6 / 10, bh = b.height / 26, x0 = b.width / 2 - bw / 2, y0 = (int)cy - bh / 2;
+        char l1[64], l2[240] = "", l3[80] = "";
+        float frac = total > 0 ? (float)((double)done / (double)total) : 0; if (frac > 1) frac = 1;
+        if (ph == PS_CHECKING) { snprintf(l1, sizeof l1, "Checking the game's files"); snprintf(l2, sizeof l2, "%lld of %lld", done, total); }
+        else if (ph == PS_COPYING) {
+            snprintf(l1, sizeof l1, "Copying the game's data");
+            snprintf(l2, sizeof l2, "%d%%   %.1f of %.1f GB", (int)(frac * 100), (double)done / (1 << 30), (double)total / (1 << 30));
+            snprintf(l3, sizeof l3, "Keep this open. The game starts when this is done.");
+        } else if (ph == PS_FINISHING) { snprintf(l1, sizeof l1, "Finishing"); frac = 1; }
+        else if (ph == PS_DONE) { snprintf(l1, sizeof l1, "Starting the game"); frac = 1; }
+        else { snprintf(l1, sizeof l1, "The copy stopped"); snprintf(l2, sizeof l2, "%s", g_ps.msg); snprintf(l3, sizeof l3, "See the builder app, then tap Port there to go on."); frac = 0; }
+        if (dm_ui_text) dm_ui_text(px, b.stride, b.width, b.height, cx, cy - em * 2.2f, l1, em * 1.3f, SYNC_INK);
+        if (ph != PS_FAILED) {
+            sync_pill(&b, x0, y0, x0 + bw, y0 + bh, SYNC_TRACK);
+            if (frac > 0) { int fw = (int)(bw * frac); sync_pill(&b, x0, y0, x0 + (fw < bh ? bh : fw), y0 + bh, SYNC_BAR); }
+        }
+        if (dm_ui_text) { dm_ui_text(px, b.stride, b.width, b.height, cx, cy + em * 2, l2, em * 0.8f, SYNC_INK); dm_ui_text(px, b.stride, b.width, b.height, cx, cy + em * 3.4f, l3, em * 0.65f, SYNC_INK); }
+        ANativeWindow_unlockAndPost(w);
+    }
+    pthread_mutex_unlock(&g_win_mu);
+}
+static void *sync_ui(void *a) { (void)a; pthread_setname_np(pthread_self(), "packui"); for (;;) { sync_draw(); usleep(250000); } return NULL; }
+static void *sync_work(void *a) {
+    (void)a; pthread_setname_np(pthread_self(), "packcopy");
+    if (ps_run(&g_ps)) {
+        LOG("[RED] [pack] %s", g_ps.msg);
+        char m[260]; snprintf(m, sizeof m, "fail/%s", g_ps.msg); ps_say(&g_ps, m);
+        atomic_store(&g_ps.phase, PS_FAILED); sleep(15);
+    } else {
+        LOG("[pack] the files folder matches the pack");
+        atomic_store(&g_ps.phase, PS_DONE); ps_say(&g_ps, "done"); usleep(300000);
+    }
+    ANativeActivity_finish(g_act); usleep(300000); _exit(0);
+    return NULL;
+}
+static int sync_input(int fd, int ev, void *d) {   // nobody reads the touches here, and a window that leaves them unread gets the "not responding" popup
+    (void)fd; (void)ev; AInputQueue *q = d; AInputEvent *e;
+    while (AInputQueue_getEvent(q, &e) >= 0) { if (AInputQueue_preDispatchEvent(q, e)) continue; AInputQueue_finishEvent(q, e, 0); }
+    return 1;
+}
+static void sync_queue_created(ANativeActivity *a, AInputQueue *q) { (void)a; AInputQueue_attachLooper(q, ALooper_forThread(), 1, sync_input, q); }
+static void sync_queue_destroyed(ANativeActivity *a, AInputQueue *q) { (void)a; AInputQueue_detachLooper(q); }
+static void sync_window_destroyed(ANativeActivity *a, ANativeWindow *w) { (void)a; (void)w; pthread_mutex_lock(&g_win_mu); g_win = NULL; pthread_mutex_unlock(&g_win_mu); }
+static void sync_callbacks(ANativeActivity *act) {
+    act->callbacks->onInputQueueCreated = sync_queue_created; act->callbacks->onInputQueueDestroyed = sync_queue_destroyed; act->callbacks->onNativeWindowDestroyed = sync_window_destroyed;
+    act->callbacks->onPause = NULL; act->callbacks->onResume = NULL; act->callbacks->onWindowFocusChanged = NULL;
+}
+static int sync_begin(ANativeActivity *act) {   // 1: the builder app is serving this port's data, and this start copies it
+    AAsset *f = AAssetManager_open(act->assetManager, "pack.txt", AASSET_MODE_BUFFER); if (!f) return 0;
+    char t[128] = ""; AAsset_read(f, t, sizeof t - 1); AAsset_close(f);
+    if (sscanf(t, "%d %63s", &g_ps.port, g_ps.token) != 2) return 0;
+    g_ps.root = g_root;
+    long long n; int s = ps_get(&g_ps, "hello", 0, 2, &n); if (s < 0) return 0;
+    close(s);
+    LOG("[pack] the builder app is serving the data on port %d: this start copies it", g_ps.port);
+    atomic_store(&g_syncing, 1); sync_callbacks(act);
+    pthread_t a, b;
+    pthread_create(&a, NULL, sync_ui, NULL); pthread_detach(a);
+    pthread_create(&b, NULL, sync_work, NULL); pthread_detach(b);
+    return 1;
+}
+
 __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActivity *act, void *saved, size_t saved_size) {
     (void)saved; (void)saved_size;
     g_act = act;
@@ -890,6 +980,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     act->callbacks->onNativeWindowCreated = on_window_created; act->callbacks->onNativeWindowDestroyed = on_window_destroyed;
     act->callbacks->onInputQueueCreated = on_queue_created; act->callbacks->onInputQueueDestroyed = on_queue_destroyed;
     act->callbacks->onPause = on_pause; act->callbacks->onResume = on_resume; act->callbacks->onWindowFocusChanged = on_window_focus; act->callbacks->onDestroy = on_destroy;
+    if (atomic_load(&g_syncing)) sync_callbacks(act);
     ANativeActivity_setWindowFlags(act, AWINDOW_FLAG_KEEP_SCREEN_ON | AWINDOW_FLAG_FULLSCREEN, 0);
     static int started; if (started++) return;   // a second onCreate (configuration change) keeps the running game
     snprintf(g_root, sizeof g_root, "%s", act->externalDataPath ? act->externalDataPath : act->internalDataPath);
@@ -897,6 +988,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     snprintf(p, sizeof p, "%s/log.txt", g_root); char prev[720]; snprintf(prev, sizeof prev, "%s/log.prev.txt", g_root); rename(p, prev);
     if (!freopen(p, "w", stderr)) __android_log_print(ANDROID_LOG_ERROR, "dmhost", "cannot write %s", p);
     setvbuf(stderr, NULL, _IOLBF, 0);
+    if (sync_begin(act)) return;
     setenv("DM_ROOT", g_root, 1);
     snprintf(p, sizeof p, "%s/RomFS.img", g_root);   // a Switch 2 game keeps its RomFS as one image
     if (access(p, R_OK)) snprintf(p, sizeof p, "%s/RomFS", g_root);

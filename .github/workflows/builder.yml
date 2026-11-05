@@ -2,7 +2,7 @@
 #   nx2android-builder.apk  the app
 #   toolchain.tar.gz        Python, clang, adb, glslc and the .NET runtime for Android, the NDK's sysroot, and nx_extract and the shader translator already built
 #   engine.tar.gz           porter and the engine
-#   versions.txt            what the app compares to know whether to download again
+#   versions.txt            what the app compares to know whether to download again: the toolchain's commit, the engine's commit, the app's build number
 name: builder
 on:
   push:
@@ -134,9 +134,10 @@ jobs:
           OLD=$(gh release download builder-tools --repo "$GITHUB_REPOSITORY" -p versions.txt -O - 2>/dev/null || true)
           T=$(echo "$OLD" | awk '{print $1}'); [ -f toolchain.tar.gz ] && T=$GITHUB_SHA && gh release upload builder-tools toolchain.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
           gh release upload builder-tools engine.tar.gz --clobber --repo "$GITHUB_REPOSITORY"
-          echo "${T:-none} $GITHUB_SHA" > versions.txt
-          gh release upload builder-tools versions.txt --clobber --repo "$GITHUB_REPOSITORY"
           if [ -f builder/app/build/outputs/apk/release/app-release.apk ]; then cp builder/app/build/outputs/apk/release/app-release.apk nx2android-builder.apk; gh release upload builder-tools nx2android-builder.apk --clobber --repo "$GITHUB_REPOSITORY"; fi
+          A=$(echo "$OLD" | awk '{print $3}'); [ -f nx2android-builder.apk ] && A=$GITHUB_RUN_NUMBER
+          echo "${T:-none} $GITHUB_SHA ${A:-0}" > versions.txt
+          gh release upload builder-tools versions.txt --clobber --repo "$GITHUB_REPOSITORY"
       - name: Publish the logs
         if: always()
         run: |

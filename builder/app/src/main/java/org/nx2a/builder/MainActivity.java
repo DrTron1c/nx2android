@@ -46,12 +46,12 @@ public final class MainActivity extends Activity implements PortService.Listener
     private Env env;
     private SharedPreferences prefs;
     private TextView toolsState, gameState, keysState, adbState, overallText, stepText, logText;
-    private Button toolsButton, portButton, pauseButton, cancelButton;
+    private Button toolsButton, appButton, portButton, pauseButton, cancelButton;
     private ProgressBar overallBar, bar;
     private LinearLayout checklist;
     private ScrollView logScroll;
     private EditText pairPort, pairCode, connectPort;
-    private CheckBox touch, fps60, installAfter, keepOn;
+    private CheckBox touch, fps60, installAfter, overAdb, keepOn;
     private boolean isSwitch2;
 
     @Override protected void onCreate(Bundle b) {
@@ -64,12 +64,15 @@ public final class MainActivity extends Activity implements PortService.Listener
     }
     @Override protected void onResume() {
         super.onResume(); PortService.listener = this;
+        Installer.report = m -> post(() -> { stepText.setText(m); stepText.setTextColor(TEXT); appButton.setEnabled(true); });
+        Installer.resumed(this);
+        if (System.currentTimeMillis() - appChecked > 1800000) checkApp();
         String dev = prefs.getString("device", null);
         if (dev != null) { adbState.setText("Last connected: " + dev); connectPort.setText(prefs.getString("connect", "")); }
         if (PortService.running) { logText.setText(PortService.recentLog()); setBusy(true); }
         onState();
     }
-    @Override protected void onPause() { super.onPause(); PortService.listener = null; }
+    @Override protected void onPause() { super.onPause(); PortService.listener = null; Installer.front = false; Installer.report = null; }
 
     // ---- layout ----
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
@@ -113,6 +116,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         LinearLayout c1 = card("1. Tools");
         toolsState = text("", 14, DIM, false); add(c1, toolsState, 6);
         toolsButton = button("Download tools", true, v -> downloadTools()); add(c1, toolsButton, 10);
+        appButton = button("Update this app", true, v -> updateApp()); appButton.setVisibility(View.GONE); add(c1, appButton, 8);
         add(root, c1, 16);
 
         LinearLayout c2 = card("2. Game");
@@ -125,9 +129,9 @@ public final class MainActivity extends Activity implements PortService.Listener
         add(c3, button("Choose prod.keys", false, v -> pick(Environment.getExternalStorageDirectory(), false)), 10);
         add(root, c3, 12);
 
-        LinearLayout c4 = card("4. Wireless debugging");
+        LinearLayout c4 = card("4. Wireless debugging (optional)");
         adbState = text("", 14, DIM, false); add(c4, adbState, 6);
-        add(c4, text("Needed to install the game and copy its data. Tap the button, then in Settings open Developer options → Wireless debugging → Pair device with pairing code and leave that popup open. Pull down the notification from this app, tap Enter code and type the six-digit code.", 13, DIM, false), 6);
+        add(c4, text("Not needed to install a game any more. It is for the Game log button and the old way of installing. Tap the button, then in Settings open Developer options → Wireless debugging → Pair device with pairing code and leave that popup open. Pull down the notification from this app, tap Enter code and type the six-digit code.", 13, DIM, false), 6);
         add(c4, button("Pair using a notification", true, v -> pairByNotification()), 10);
         add(c4, text("Or type them here, with this app and Settings side by side:", 13, DIM, false), 12);
         LinearLayout row = new LinearLayout(this); pairPort = field("Pairing port", 110); pairCode = field("Pairing code", 110); grow(row, pairPort); grow(row, pairCode);
@@ -140,9 +144,11 @@ public final class MainActivity extends Activity implements PortService.Listener
         touch = new CheckBox(this); touch.setText("Touch game (hide the on-screen gamepad)"); touch.setTextColor(TEXT);  add(c5, touch, 6);
         fps60 = new CheckBox(this); fps60.setText("60 fps when the game's build allows it"); fps60.setTextColor(TEXT);  add(c5, fps60, 0);
         installAfter = new CheckBox(this); installAfter.setText("Install when done"); installAfter.setTextColor(TEXT);  installAfter.setChecked(true); add(c5, installAfter, 0);
+        overAdb = new CheckBox(this); overAdb.setText("Install over Wireless debugging instead"); overAdb.setTextColor(TEXT); overAdb.setChecked(prefs.getBoolean("overAdb", false)); add(c5, overAdb, 0);
+        overAdb.setOnCheckedChangeListener((v, on) -> prefs.edit().putBoolean("overAdb", on).apply());
         keepOn = new CheckBox(this); keepOn.setText("Keep the screen on while porting"); keepOn.setTextColor(TEXT);  keepOn.setChecked(prefs.getBoolean("keepOn", true)); add(c5, keepOn, 0);
         keepOn.setOnCheckedChangeListener((v, on) -> { prefs.edit().putBoolean("keepOn", on).apply(); screen(); });
-        for (CheckBox b : new CheckBox[]{touch, fps60, installAfter, keepOn}) b.setButtonTintList(android.content.res.ColorStateList.valueOf(LILAC));
+        for (CheckBox b : new CheckBox[]{touch, fps60, installAfter, overAdb, keepOn}) b.setButtonTintList(android.content.res.ColorStateList.valueOf(LILAC));
         overallText = text("", 16, TEXT, true); overallText.setVisibility(View.GONE); add(c5, overallText, 10);
         overallBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); overallBar.setMax(1000); overallBar.setVisibility(View.GONE); add(c5, overallBar, 4);
         stepText = text("", 14, TEXT, false); add(c5, stepText, 8);
@@ -186,6 +192,35 @@ public final class MainActivity extends Activity implements PortService.Listener
     private void bg(Runnable r) { new Thread(r).start(); }
     private void post(Runnable r) { ui.post(r); }
 
+    // ---- this app's own updates: the build number in versions.txt against this one's. Android's installer replaces the app and keeps everything in it ----
+    private long appChecked;
+    private void checkApp() {
+        appChecked = System.currentTimeMillis();
+        bg(() -> {
+            try {
+                String[] w = Download.text("versions.txt").split("\\s+");
+                long have = getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode(), want = w.length > 2 ? Long.parseLong(w[2]) : 0;
+                post(() -> { appButton.setVisibility(want > have ? View.VISIBLE : View.GONE); if (want > have) appButton.setText("Update this app to build " + want); });
+            } catch (Exception ignored) { }   // no connection: the next start asks again
+        });
+    }
+    private void updateApp() {
+        if (PortService.running) { stepText.setText("The update waits until the port has finished: it would stop the port."); return; }
+        if (!Installer.allowed(this)) { stepText.setText("Turn on Allow from this source for this app, then come back and tap the button again."); Installer.askToAllow(this); return; }
+        appButton.setEnabled(false); stepText.setText("Downloading the update"); stepText.setTextColor(TEXT);
+        bg(() -> {
+            try {
+                File dir = new File(getCacheDir(), "update"); delete(dir);
+                File apk = Download.download("nx2android-builder.apk", dir, (what, done, total) -> post(() -> onStep(what, done, total)));
+                post(() -> stepText.setText("Tap Install on the popup. Then open the app again."));
+                Installer.install(this, apk, getPackageName(), null);
+                post(() -> appButton.setEnabled(true));
+            } catch (Exception e) {
+                post(() -> { stepText.setText("The update stopped: " + e.getMessage() + ". Tap the button again to try again."); appButton.setEnabled(true); });
+            }
+        });
+    }
+
     // ---- 1. tools ----
     private void downloadTools() {
         setBusy(true); stepText.setText("Checking the tools");
@@ -193,6 +228,7 @@ public final class MainActivity extends Activity implements PortService.Listener
             try {
                 Download.Progress p = (what, done, total) -> post(() -> onStep(what, done, total));
                 String want = Download.text("versions.txt");
+                post(this::checkApp);
                 File dl = new File(env.tmp, "dl"); dl.mkdirs();
                 String have = prefs.getString("versions", "");
                 String[] w = want.split("\\s+"), h = have.isEmpty() ? new String[]{"", ""} : have.split("\\s+");
@@ -350,12 +386,16 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (!env.ready()) { stepText.setText("Download the tools first."); return; }
         if (f == null) { stepText.setText("Choose the game folder first."); return; }
         if (k == null && !isSwitch2) { stepText.setText("Choose your prod.keys first."); return; }
-        boolean install = installAfter.isChecked();
-        if (install && d == null) { stepText.setText("Connect Wireless debugging first, or untick Install when done."); return; }
+        boolean install = installAfter.isChecked(), wireless = install && overAdb.isChecked();
+        if (wireless && d == null) { stepText.setText("Connect Wireless debugging first, or untick Install over Wireless debugging."); return; }
+        if (install && !wireless && !Installer.allowed(this)) {
+            stepText.setText("Turn on Allow from this source for this app, then come back and tap Port again."); stepText.setTextColor(TEXT);
+            Installer.askToAllow(this); return;
+        }
         askToRunInBackground();
         ArrayList<String> a = new ArrayList<>(Arrays.asList("port", f, "--work", env.work.getPath(), "--jobs", "4", "--progress", "json"));
         if (k != null) { a.add("-k"); a.add(k); }
-        if (install) { a.add("--install"); a.add("--device"); a.add(d); }
+        if (install) { a.add("--install"); if (wireless) { a.add("--device"); a.add(d); } else a.add("--direct"); }
         if (touch.isChecked()) a.add("--touch");
         if (fps60.isChecked()) a.add("--fps60");
         logText.setText(""); setBusy(true); stepText.setText("Starting"); stepText.setTextColor(TEXT);

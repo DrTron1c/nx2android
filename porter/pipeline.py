@@ -7,7 +7,7 @@ import importlib.util, os, re, shutil, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, datapack, dumps, fpslocker, install, paths, profiles, switch2, toolchain
+from porter import config, datapack, direct, dumps, fpslocker, install, paths, profiles, switch2, toolchain
 from porter.adb import Adb, AdbError
 from porter.paths import DM, NXNATIVE
 from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, profile_guess, say
@@ -29,6 +29,7 @@ class Options:
     language: str = ''                 # a code or a name (default: English)
     app_name: str = ''                 # the launcher label (default: the game's name in its control data)
     install: bool = False              # install on the device after packing
+    direct: bool = False               # that device is this one: no adb, the app's installer and the game's own copy (porter/direct.py)
     device: str = ''                   # adb serial
     replace_signer: bool = False       # uninstall an app of the same package signed with another key
     debug: bool = False                # a development build: debug information, debuggable, DM_CTL
@@ -185,7 +186,7 @@ class Port:
         keys = o.keys or self.cfg.get('keys')
         if not keys and not self.s2: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
         o.keys = Path(keys).expanduser().resolve() if keys else None
-        try: self.tools = toolchain.require(self.cfg, str(o.keys) if o.keys else None, adb=o.install, need_keys=not self.s2)
+        try: self.tools = toolchain.require(self.cfg, str(o.keys) if o.keys else None, adb=o.install and not o.direct, need_keys=not self.s2)
         except toolchain.ToolError as e: raise BuildError(str(e)) from e
         o.work = Path(o.work or o.folder).expanduser().resolve()
         o.out = Path(o.out or self.cfg.get('out') or o.work).expanduser().resolve()
@@ -203,7 +204,7 @@ class Port:
         self.check_graphics()
         self.fps_unlock()
         self.rewrite()
-        if o.install: self.pull_captures()
+        if o.install and not o.direct: self.pull_captures()
         self.shaders()
         self.host()
         self.apk()
@@ -652,8 +653,9 @@ class Port:
         icon = self.icon()
         code = version_code(self.pkg_ver, self.o.vercode_offset)
         if self.o.vercode_offset: say(f'versionCode {code} ({self.pkg_ver} + 1 + offset {self.o.vercode_offset})')
+        pack = self.aw / 'pack.txt'; pack.write_text(f'{direct.PORT} {direct.secret(self.aw / "pack-secret.txt")}\n', encoding='utf-8')   # where the game finds the data with no adb
         nsp.run([PY, DM / 'android/apk/mkapk.py', self.so, self.apk_path, paths.signing_key(), '--package', self.package, '--label', self.app_name, '--lib', 'dmhost',
-                 '--version-code', str(code), '--version-name', self.display]
+                 '--version-code', str(code), '--version-name', self.display, '--asset', f'pack.txt={pack}']
                 + (['--landscape'] if self.ap.landscape else []) + (['--icon', icon] if icon else []) + self.theme() + ([] if self.o.debug else ['--release'])
                 + [a for f in ([self.o.vulkan_driver] + [self.so.parent / n for n in ADRENOTOOLS_LIBS] if self.o.vulkan_driver else []) for a in ('--extra-so', str(f))],
                 self.logs / 'android_apk.log', env=self.env)
@@ -711,6 +713,7 @@ class Port:
 
     # ---- install (optional) ----
     def install(self):
+        if self.o.direct: return direct.install(self.apk_path, self.data_path, direct.secret(self.aw / 'pack-secret.txt'))
         install.install(self.apk_path, self.data_path, self.tools['adb'], self.o.device or self.cfg.get('device'), replace_signer=self.o.replace_signer, symbols=self.so.with_name('libdmhost.sym.so'))
 
 

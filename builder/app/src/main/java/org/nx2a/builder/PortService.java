@@ -240,6 +240,15 @@ public final class PortService extends Service {
         stopForeground(true); stopSelf();
     }
 
+    /** porter has the data ready to serve: Android's installer takes the APK, and the game fetches the rest. A failure goes in the file porter is watching. */
+    private void installGame(String apk, String pkg, String flag) {
+        try { Installer.install(this, new File(apk), pkg, flag); }
+        catch (IOException | RuntimeException e) {
+            line("[RED] " + e.getMessage());
+            try (java.io.FileOutputStream o = new java.io.FileOutputStream(flag)) { o.write(("Android could not take the APK: " + e.getMessage()).getBytes(java.nio.charset.StandardCharsets.UTF_8)); } catch (IOException ignored) { }
+        }
+    }
+
     private String event(String l, String summary) {
         PortState s = state(this);
         try {
@@ -253,6 +262,9 @@ public final class PortService extends Service {
                     s.stageEnd(name, o.optBoolean("ok", true), o.optString("summary"), o.optDouble("elapsed", 0));
                     line((o.optBoolean("ok", true) ? "✓ " : "✗ ") + name + (o.optString("summary").isEmpty() ? "" : ": " + o.optString("summary"))); show(); break;
                 case "say": line(o.optString("msg")); break;
+                case "install_apk": installGame(o.optString("apk"), o.optString("package"), o.optString("flag")); break;
+                case "game_seen": Installer.clear(this); break;
+                case "open_game": Installer.clear(this); Installer.openGame(this, o.optString("package"), o.optString("label")); break;
                 case "result": return o.optString("name") + " " + o.optString("display");
                 default: break;
             }
