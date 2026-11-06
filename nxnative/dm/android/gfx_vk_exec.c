@@ -1422,7 +1422,8 @@ static int prepare_draw(int prim, int indexed) {
     k.front = ((S.poly.front == NVN_FRONT_FACE_CCW) == (g_lower_left != 0)) != (g_flipy != 0); k.mode = S.poly.mode; k.depth_clamp = S.depth_clamp;
     k.bias_en = (S.poly.offset_en & (S.poly.mode == 0 ? 1 : S.poly.mode == 1 ? 2 : 4)) != 0;
     if (S.dfmt == VK_FORMAT_D16_UNORM && S.ncol == 0) {
-        static p_poly_offset was; static int wen = -1, n; if (n < 24 && (k.bias_en != wen || memcmp(&was, &S.pofs, sizeof was))) { n++; was = S.pofs; wen = k.bias_en; VKLOG("[shadow] the game's bias in a %ux%u D16 pass: on %d, slope %g, units %g, clamp %g; depth clamp %d", S.pass_w, S.pass_h, k.bias_en, S.pofs.factor, S.pofs.units, S.pofs.clamp, S.depth_clamp); }
+        static p_poly_offset was; static int wen = -1, n; static uint64_t again; if (g_tex_frame >= again) { again = g_tex_frame + 1800; n = 22; wen = -1; }   // (the log a player sends is its tail)
+        if (n < 24 && (k.bias_en != wen || memcmp(&was, &S.pofs, sizeof was))) { n++; was = S.pofs; wen = k.bias_en; VKLOG("[shadow] the game's bias in a %ux%u D16 pass: on %d, slope %g, units %g, clamp %g; depth clamp %d", S.pass_w, S.pass_h, k.bias_en, S.pofs.factor, S.pofs.units, S.pofs.clamp, S.depth_clamp); }
         if (shadow_pass()) k.bias_en = 1;
     }
     if (var == 2) k.bias_en = 0;
