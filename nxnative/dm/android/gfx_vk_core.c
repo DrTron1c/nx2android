@@ -11,6 +11,7 @@
 #include "nvn_hmap.h"
 #include "nvn_dirty.h"
 #include <android/hardware_buffer.h>
+#include <android/thermal.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -463,6 +464,10 @@ void vk_mem_report(void) {
     char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
     FILE *f = fopen("/proc/self/status", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); for (int i = 0; i < 5; i++) { char *p = strstr(b, k[i]); if (p) v[i] = atol(p + strlen(k[i])); } }
+    {   // heat: Android's own view, and what the fastest and slowest cores are clocked at now (a frame rate that sinks late in a session)
+        static AThermalManager *tm; if (!tm) tm = AThermal_acquireManager();
+        long mhz[2] = {0, 0}; for (int i = 0; i < 2; i++) { char pp[80]; snprintf(pp, sizeof pp, "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i ? 7 : 0); FILE *cf = fopen(pp, "r"); if (cf) { if (fscanf(cf, "%ld", &mhz[i]) != 1) mhz[i] = 0; fclose(cf); } mhz[i] /= 1000; }
+        VKLOG("[heat] status %d (0 none, 1 light, 2 moderate, 3 severe, 4 critical), headroom %.2f (1 is the limit), cores %ld / %ld MHz (0: not readable)", tm ? (int)AThermal_getCurrentThermalStatus(tm) : -1, tm ? AThermal_getThermalHeadroom(tm, 0) : -1.f, mhz[0], mhz[1]); }
     static long last_maj; struct rusage ru; long maj = 0; if (!getrusage(RUSAGE_SELF, &ru)) { maj = ru.ru_majflt - last_maj; last_maj = ru.ru_majflt; }
     long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }
