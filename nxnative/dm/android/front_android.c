@@ -993,7 +993,7 @@ static int sync_begin(ANativeActivity *act) {   // 1: the builder app is serving
     return 1;
 }
 
-__attribute__((visibility("default"))) // A run that ended in the crash report (host/crash.c), which is the end of its log
+// A run that ended in the crash report (host/crash.c), which is the end of its log
 static int log_crashed(const char *path) {
     FILE *f = fopen(path, "rb"); if (!f) return 0;
     static char b[1 << 18]; fseek(f, 0, SEEK_END); long n = ftell(f); if (n > (long)sizeof b - 1) fseek(f, n - (long)sizeof b + 1, SEEK_SET); else rewind(f);
@@ -1001,7 +1001,8 @@ static int log_crashed(const char *path) {
     for (size_t i = 0; i + 10 < got; i++) if (b[i] == '[' && !memcmp(b + i, "[dm] CRASH", 10)) return 1;
     return 0;
 }
-void ANativeActivity_onCreate(ANativeActivity *act, void *saved, size_t saved_size) {
+
+__attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActivity *act, void *saved, size_t saved_size) {
     (void)saved; (void)saved_size;
     g_act = act;
     { AConfiguration *cfg = AConfiguration_new(); AConfiguration_fromAssetManager(cfg, act->assetManager); g_dpi = AConfiguration_getDensity(cfg); AConfiguration_delete(cfg); }
