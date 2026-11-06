@@ -291,16 +291,16 @@ static int pool_lazy_on(void) { static int on = -1; if (on < 0) { const char *e 
 // DM_VK_POOL_FILE=1: a lazy pool's pages live in a deleted file of the app's own storage (DM_TEMP) rather than in anonymous memory. Swap on Android is RAM: texture data barely compresses, so
 // Pokopia's 3.7 GB in swap held about as much RAM (the log: 6.6 GB came back when it was killed, 2.8 GB of it outside swap), and Android killed it for low memory with 450 MB left. A file's
 // pages the system can simply drop and read again. What the GPU uses still moves to a hardware buffer (pool_zero_copy), and the file goes with the process, however it ends
-enum { PF_MAX = 32 };
-static struct { uint64_t lo, hi; int fd; } g_pf[PF_MAX]; static int g_npf; static uint64_t g_pf_bytes;
+enum { POOL_FILES = 32 };
+static struct { uint64_t lo, hi; int fd; } g_pf[POOL_FILES]; static int g_npf; static uint64_t g_pf_bytes;
 void vk_pool_file(void *mem, uint64_t size) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_POOL_FILE"); on = e && atoi(e); }
     uint64_t a = (uint64_t)(uintptr_t)mem; const char *dir = getenv("DM_TEMP");
-    if (!on || !pool_lazy_on() || !dir || size < (64ull << 20) || ((a | size) & 0xfff) || g_npf == PF_MAX) return;
+    if (!on || !pool_lazy_on() || !dir || size < (64ull << 20) || ((a | size) & 0xfff) || g_npf == POOL_FILES) return;
     for (int i = 0; i < g_npf; i++) if (a < g_pf[i].hi && a + size > g_pf[i].lo) return;   // the same memory made a pool again: it is in its file already
     struct statvfs sv; if (statvfs(dir, &sv) || (uint64_t)sv.f_bavail * sv.f_frsize < size + (2ull << 30)) { VKLOG("[RED] memory pool %p +%#llx stays in memory: the device has too little free storage for its file", mem, (unsigned long long)size); return; }
     char path[900]; snprintf(path, sizeof path, "%s/pool-%llx.tmp", dir, (unsigned long long)a);
-    uint64_t t0 = tnow(); int fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0); int fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) { VKLOG("[RED] memory pool %p stays in memory: no file (errno %d)", mem, errno); return; }
     unlink(path);
     int rc = posix_fallocate(fd, 0, (off_t)size);   // the room is taken now: a full disk could otherwise only show as a crash at a later write
@@ -319,8 +319,9 @@ void vk_pool_file(void *mem, uint64_t size) {
     atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
     pthread_rwlock_unlock(&g_pool_mu);
     if (!ok) { VKLOG("[RED] memory pool %p stays in memory: its file could not be written (errno %d)", mem, errno); close(fd); return; }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
     g_pf[g_npf].lo = a; g_pf[g_npf].hi = a + size; g_pf[g_npf].fd = fd; g_npf++; g_pf_bytes += size;
-    VKLOG("memory pool %p +%#llx kept in a file: %llu MB held already, %.0f ms (%llu MB in such files)", mem, (unsigned long long)size, (unsigned long long)(kept >> 20), (double)(tnow() - t0) / 1e6, (unsigned long long)(g_pf_bytes >> 20));
+    VKLOG("memory pool %p +%#llx kept in a file: %llu MB held already, %.0f ms (%llu MB in such files)", mem, (unsigned long long)size, (unsigned long long)(kept >> 20), (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6, (unsigned long long)(g_pf_bytes >> 20));
 }
 // Zero copy: the pages of [mem, mem+size) become an AHardwareBuffer's, imported as a VkBuffer. 0 on success. On a chunk already in use (p->lazy) the pages move last, once nothing can fail
 static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
