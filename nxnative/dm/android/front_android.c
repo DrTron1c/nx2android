@@ -79,8 +79,8 @@ static void settings_load(void) {
         else if (sscanf(line, "opacity=%d", &v) == 1) atomic_store(&g_set_opacity, v < OV_OPACITY_MIN ? OV_OPACITY_MIN : v > OV_OPACITY_MAX ? OV_OPACITY_MAX : v);
         else if (sscanf(line, "grid=%d", &v) == 1) atomic_store(&g_set_grid, v != 0);
         else if (sscanf(line, "aspect=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_ASPECT], v);
-        else if (sscanf(line, "scale=%d", &v) == 1 && v >= 0 && v < 4) {   // read once, when the game sizes its picture: the menu's change counts from the next start
-            atomic_store(&g_disp[DISP_SCALE], v); static const char *const size[4] = {"1280x720", "1120x630", "960x540", "original"}; setenv("DM_WINDOW_SIZE", size[v], 1); }
+        else if (sscanf(line, "scale=%d", &v) == 1 && v >= 0 && v < 6) {   // read once, when the game sizes its picture: the menu's change counts from the next start
+            atomic_store(&g_disp[DISP_SCALE], v); static const char *const size[6] = {"1280x720", "1120x630", "960x540", "original", "832x468", "640x360"}; setenv("DM_WINDOW_SIZE", size[v], 1); }
         else if (sscanf(line, "fsr=%d", &v) == 1) atomic_store(&g_disp[DISP_FSR], v != 0);
         else if (sscanf(line, "sharp=%d", &v) == 1 && v >= 0 && v < 6) atomic_store(&g_disp[DISP_SHARP], v);
         else if (sscanf(line, "framegen=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_FG], v);
@@ -349,7 +349,7 @@ static void menu_do(int item) {
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
     else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS || item == OVM_BOOST || item == OVM_SOUND) {
         int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : item == OVM_BOOST ? DISP_BOOST : item == OVM_SOUND ? DISP_SOUND : item == OVM_SHADOWS ? DISP_SHADOWS : DISP_SHARP;
-        int n = item == OVM_SHARP ? 6 : item == OVM_ASPECT ? 5 : item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS ? 4 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
+        int n = item == OVM_SHARP || item == OVM_SCALE ? 6 : item == OVM_ASPECT ? 5 : item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS ? 4 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
         atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); if (item == OVM_CAP) dm_perf_fps_cap(CAP_FPS[atomic_load(&g_disp[w])]); atomic_fetch_add(&g_disp_ver, 1); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
     else if (item == OVM_TAB) { menu_tab(atomic_load(&g_menu_tab) + 1); return; }

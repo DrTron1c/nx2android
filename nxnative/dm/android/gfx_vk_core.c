@@ -463,6 +463,10 @@ void vk_mem_report(void) {
     char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
     FILE *f = fopen("/proc/self/status", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); for (int i = 0; i < 5; i++) { char *p = strstr(b, k[i]); if (p) v[i] = atol(p + strlen(k[i])); } }
+    {   // the GPU's clock now and its ceiling (KGSL): a frame rate that sinks with the work unchanged is a clock that fell
+        long v2[3] = {0, 0, 0}; static const char *const gp[3] = {"/sys/class/kgsl/kgsl-3d0/gpuclk", "/sys/class/kgsl/kgsl-3d0/max_gpuclk", "/sys/class/kgsl/kgsl-3d0/temp"};
+        for (int i = 0; i < 3; i++) { FILE *gf = fopen(gp[i], "r"); if (gf) { if (fscanf(gf, "%ld", &v2[i]) != 1) v2[i] = 0; fclose(gf); } }
+        VKLOG("[gpu] clock %ld MHz of at most %ld MHz, temperature %ld (0: not readable)", v2[0] / 1000000, v2[1] / 1000000, v2[2] > 1000 ? v2[2] / 1000 : v2[2]); }
     static long last_maj; struct rusage ru; long maj = 0; if (!getrusage(RUSAGE_SELF, &ru)) { maj = ru.ru_majflt - last_maj; last_maj = ru.ru_majflt; }
     long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }

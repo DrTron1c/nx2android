@@ -744,6 +744,9 @@ static void levels_apply(module_t *m) {
         for (unsigned i = 0; i < l[k].len; i++) if (m->base[l[k].off + i] >= n) { LOG("[RED] DM_RES_LEVELS: list main+%#llx holds %u, not a level", l[k].off, m->base[l[k].off + i]); return; }
     }
     int top = 0, changed = 0;
+    uint32_t *lw = (uint32_t *)(uintptr_t)tw, *lh = lw + n;
+    if (cw < tw[0] && ch < th[0] && cw >= 320 && ch >= 180 && n > 1) {   // below the game's smallest size (Pokopia: 960x540): level 0 becomes the cap. Only level 0, which the game's own lists
+        LOG("resolution: the game's smallest size %ux%u becomes %ux%u", tw[0], th[0], cw, ch); lw[0] = cw; lh[0] = ch; }   // never reach, so the maximum and the targets stay the game's
     for (unsigned i = 0; i < n; i++) if (tw[i] <= cw && th[i] <= ch) top = (int)i;
     for (unsigned k = 0; k < nl; k++) {
         uint8_t *p = m->base + l[k].off;
