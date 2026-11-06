@@ -52,7 +52,7 @@ public final class MainActivity extends Activity implements PortService.Listener
     private ScrollView logScroll;
     private EditText pairPort, pairCode, connectPort;
     private CheckBox touch, fps60, boost, installAfter, overAdb, keepOn;
-    private TextView driverState, lsfgState;
+    private TextView driverState, lsfgState, storageState;
     private String pickInto = "keys";
     private boolean isSwitch2;
 
@@ -176,6 +176,16 @@ public final class MainActivity extends Activity implements PortService.Listener
         cancelButton = button("Cancel", false, v -> PortService.command(this, PortService.CANCEL)); cancelButton.setVisibility(View.GONE); add(c5, cancelButton, 8);
         add(root, c5, 12);
 
+        LinearLayout c7 = card("Storage");
+        storageState = text("", 14, DIM, false); add(c7, storageState, 6);
+        add(c7, button("Delete temporary files", false, v -> storageJob("Delete temporary files?", "Leftovers of finished and stopped ports. Nothing you need goes.", this::deleteTemp)), 10);
+        add(c7, button("Free space, keep the shaders", false, v -> storageJob("Free space?", "Removes the builder's copy of the game's files. The game keeps its own, and the next port makes them again in under a minute.", this::deleteCopies)), 8);
+        add(c7, button("Delete all port files", false, v -> storageJob("Delete all port files?", "This includes the translated shaders: the next port takes about an hour. Your installed game and its saves stay.", () -> { for (File f : list(env.work)) delete(f); })), 8);
+        add(c7, button("Game's Android storage", false, v -> gameSettings()), 8);
+        add(c7, button("Uninstall the game", false, v -> uninstallGame()), 8);
+        add(c7, text("To start a new game: pause menu, Saves, Delete save. It keeps a backup you can bring back with Import. Clear data in the game's Android storage deletes its saves for good.", 13, DIM, false), 10);
+        add(root, c7, 12);
+
         LinearLayout c6 = card("Log");
         logScroll = new ScrollView(this); logText = text("", 12, DIM, false); logText.setTypeface(Typeface.MONOSPACE); logText.setTextIsSelectable(true); logScroll.addView(logText);
         c6.addView(logScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(240)));
@@ -203,6 +213,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         else if (ready) inspect(f); else gameState.setText(f);
         String dr = prefs.getString("driver", null);
         driverState.setText(dr != null ? new File(dr).getName() + "\nUsed at the next port. If the game then fails to open, tap Use the system's and port again." : "The tablet's own driver. A custom one (a .zip or .so, such as Turnip) goes in the game at the next port.");
+        refreshStorage();
         String ls = prefs.getString("lsfg", null);
         lsfgState.setText(ls != null ? new File(ls).getName() + "\nAdded at the next port. In the game: pause menu, Display, Frame generation." : "Your own Lossless.dll from Lossless Scaling for Windows. It stays on this tablet and is never uploaded.");
         String c = prefs.getString("device", null);
@@ -276,6 +287,63 @@ public final class MainActivity extends Activity implements PortService.Listener
         f.delete();
     }
     private static boolean isLink(File f) { return java.nio.file.Files.isSymbolicLink(f.toPath()); }
+
+    // ---- storage: what the builder keeps, and the game's own place in Android's settings ----
+    private static File[] list(File d) { File[] k = d.listFiles(); return k == null ? new File[0] : k; }
+    private void storageJob(String title, String say, Runnable job) {
+        if (PortService.running) { stepText.setText("Wait for the port to finish first."); return; }
+        new AlertDialog.Builder(this).setTitle(title).setMessage(say).setNegativeButton("Keep", null).setPositiveButton("Delete", (x, i) -> {
+            storageState.setText("Deleting…");
+            bg(() -> { try { job.run(); } catch (RuntimeException e) { post(() -> stepText.setText(e.getMessage())); } refreshStorage(); });
+        }).show();
+    }
+    private void deleteTemp() {
+        delete(env.tmp); env.tmp.mkdirs(); delete(new File(getCacheDir(), "update"));
+        for (File f : list(env.work)) {
+            if (f.getName().endsWith(".partial")) delete(f);
+            delete(new File(f, "tmp"));
+            for (File k : list(new File(f, "shader"))) if (k.getName().endsWith(".partial")) delete(k);
+        }
+    }
+    private void deleteCopies() {   // the game has its own copy: the data packs, and the RomFS images they link to, come back from the game folder at the next port
+        deleteTemp();
+        for (File f : list(env.work)) {
+            if (f.isDirectory() && f.getName().endsWith("-data")) delete(f);
+            for (File v : list(new File(f, "extract"))) { File i = new File(v, "RomFS.img"); if (i.isFile()) i.delete(); }
+        }
+    }
+    private void refreshStorage() {
+        bg(() -> {
+            long tools = 0, work = 0;
+            try {
+                Process p = new ProcessBuilder("/system/bin/du", "-sk", env.work.getPath(), env.root.getPath()).redirectErrorStream(true).start();
+                try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
+                    for (String l; (l = r.readLine()) != null; ) {
+                        String[] c = l.trim().split("\\s+", 2); if (c.length < 2) continue;
+                        long kb; try { kb = Long.parseLong(c[0]); } catch (NumberFormatException e) { continue; }
+                        if (c[1].equals(env.work.getPath())) work = kb; else if (c[1].equals(env.root.getPath())) tools = kb;
+                    }
+                }
+            } catch (java.io.IOException ignored) { }
+            android.os.StatFs fs = new android.os.StatFs(getFilesDir().getPath());
+            double free = fs.getAvailableBytes() / 1073741824.0, ported = work / 1048576.0, all = Math.max(0, tools - work) / 1048576.0;
+            String game = gamePackage();
+            String say = String.format(java.util.Locale.ROOT, "Free on this tablet: %.1f GB\nPort files: %.1f GB\nTools: %.1f GB\nGame: %s", free, ported, all, game == null ? "not installed" : "installed, with its own copy of about 15 GB");
+            post(() -> storageState.setText(say));
+        });
+    }
+    private String gamePackage() {
+        for (android.content.pm.ApplicationInfo a : getPackageManager().getInstalledApplications(0)) if (a.packageName.startsWith("org.nx2a.t")) return a.packageName;
+        return null;
+    }
+    private void gameSettings() {
+        String g = gamePackage(); if (g == null) { stepText.setText("No ported game is installed."); return; }
+        startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + g)));
+    }
+    private void uninstallGame() {
+        String g = gamePackage(); if (g == null) { stepText.setText("No ported game is installed."); return; }
+        startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + g)));
+    }
 
     // ---- 2 and 3. game and keys ----
     private void pick(File start, boolean folder) {

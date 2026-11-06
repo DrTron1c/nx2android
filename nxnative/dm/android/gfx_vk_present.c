@@ -360,9 +360,9 @@ static void cv_panel(const ov_canvas *cv, float x0, float y0, float x1, float y1
 }
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
-static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "FPS lock", "Resume", ""};
+static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "FPS lock", "Delete save", "Resume", ""};
 static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[4] = {"Low", "Medium", "High", "Max"}, *const OV_SCALES[4] = {"720p", "630p", "540p", "Full"}, *const OV_FGS[5] = {"Off", "Basic", "LSFG 2x", "LSFG 3x", "LSFG 4x"}, *const OV_CAPS[4] = {"Auto", "60", "40", "30"};
-static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import"};   // the rows that are a button: its word
+static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import", [OVM_DELSAVE] = "Delete"};   // the rows that are a button: its word
 static const char *const OVM_MODES[2] = {"Handheld", "Docked"};
 static void ov_menu_panel(const ov_canvas *cv, int st) {
     float p[4] = {0, 0, (float)cv->w, (float)cv->h}, r[4]; ov_menu_rowrect(p, 0, r);
@@ -375,7 +375,7 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
             float lw = cv_text_w(OVM_LABELS[i], is), cw = i == OVM_MODE ? 2 * (cv_text_w(OVM_MODES[0], is) + sh) : OVM_BUTTONS[i] ? cv_text_w(OVM_BUTTONS[i], is) + 2 * sh : sw + gap + cv_text_w("OFF", is);
             need = fmaxf(need, i == OVM_OPACITY ? fmaxf(lw / 0.38f, cv_text_w("80%", is) / 0.14f) : lw + gap + cw + rh * 0.3f);
         }
-        if (need <= rw && cv_text_w(OVM_TAB_NAMES[0], is) < rw / 2 - sh) break;
+        if (need <= rw && cv_text_w(OVM_TAB_NAMES[0], is) < rw / OVM_TABS - sh / 2) break;
     }
     cv_panel(cv, 0, 0, p[2], p[3], rh * 0.42f);
     for (int row = 0; row < OVM_ROWS; row++) {
@@ -407,7 +407,7 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
         } else if (it == OVM_ASPECT || it == OVM_SHARP || it == OVM_SCALE || it == OVM_FG || it == OVM_CAP) {   // a value: a tap takes the next
             const char *w = it == OVM_ASPECT ? OV_ASPECTS[dm_disp(DISP_ASPECT)] : it == OVM_SCALE ? OV_SCALES[dm_disp(DISP_SCALE)] : it == OVM_FG ? OV_FGS[dm_disp(DISP_FG)] : it == OVM_CAP ? OV_CAPS[dm_disp(DISP_CAP)] : OV_SHARPS[dm_disp(DISP_SHARP)]; float bw = cv_text_w("LSFG 4x", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, w, 1, 0);
         } else if (OVM_BUTTONS[it]) {   // a button
-            float bw = cv_text_w(OVM_BUTTONS[it], is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, OVM_BUTTONS[it], 0, 0);
+            const char *bl = it == OVM_DELSAVE && dm_disp(DISP_DELSAVE) ? "Tap to confirm" : OVM_BUTTONS[it]; float bw = cv_text_w(bl, is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, bl, 0, 0);
         } else if (it == OVM_MODE) {   // two segments, the current one filled: handheld (performance) | docked (resolution)
             int docked = st >> 2 & 1; float hh = rh * 0.46f, segw = fmaxf(cv_text_w(OVM_MODES[0], is), cv_text_w(OVM_MODES[1], is)) + sh, x0 = x1 - 2 * segw;
             cv_rrect(cv, x0, cy - hh / 2, x1, cy + hh / 2, hh / 2, C_OFF);

@@ -11,4 +11,5 @@ int dm_saves_start(const char *files_root);
 // the committed save (and the device save) to saves/<YYYYMMDD-HHMMSS><suffix>: 0 and its name, or -errno and why (-ENOENT: the game has not saved yet)
 int dm_saves_export(const char *suffix, char *name, int cap, char *err, int ecap);
 int dm_saves_list(dm_save_entry *out, int max);   // the save folders in saves/, newest first
+int dm_saves_request_delete(void);                 // the save is exported, then deleted, at the next start: 0, or -1 when the request cannot be written
 int dm_saves_request_import(const char *name);    // name is imported at the next start: 0, or -1 when the request cannot be written

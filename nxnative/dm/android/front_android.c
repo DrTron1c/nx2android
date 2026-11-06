@@ -336,7 +336,7 @@ static void menu_opacity(int v) {   // the slider: a new value is drawn at once 
     v = v < OV_OPACITY_MIN ? OV_OPACITY_MIN : v > OV_OPACITY_MAX ? OV_OPACITY_MAX : v;
     if (atomic_exchange(&g_set_opacity, v) != v) { dm_haptics_android_tap(); dm_overlay_redraw(); }
 }
-static void menu_tab(int t) { t = (t % OVM_TABS + OVM_TABS) % OVM_TABS; if (atomic_exchange(&g_menu_tab, t) != t) dm_haptics_android_tap(); dm_overlay_redraw(); }
+static void menu_tab(int t) { t = (t % OVM_TABS + OVM_TABS) % OVM_TABS; atomic_store(&g_disp[DISP_DELSAVE], 0); if (atomic_exchange(&g_menu_tab, t) != t) dm_haptics_android_tap(); dm_overlay_redraw(); }
 static void ed_open(void); static void sp_open(void); static void save_export(void);
 static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
@@ -350,6 +350,13 @@ static void menu_do(int item) {
     else if (item == OVM_TAB) { menu_tab(atomic_load(&g_menu_tab) + 1); return; }
     else if (item == OVM_EDIT) { dm_haptics_android_tap(); ed_open(); return; }
     else if (item == OVM_OPACITY) return;   // (the slider is dragged, or stepped with left and right)
+    else if (item == OVM_DELSAVE) {   // two taps. The save is exported first, at the next start (saves_android.c), so Import takes it back
+        struct timespec n; clock_gettime(CLOCK_MONOTONIC, &n); static time_t armed;
+        if (atomic_load(&g_disp[DISP_DELSAVE]) && n.tv_sec - armed < 8) {
+            if (dm_saves_request_delete()) LOG("[RED] [saves] the request to delete the save could not be written");
+            else { LOG("[saves] the save goes at the next start"); ANativeActivity_finish(g_act); }
+        } else { armed = n.tv_sec; atomic_store(&g_disp[DISP_DELSAVE], 1); atomic_fetch_add(&g_disp_ver, 1); }
+    }
     else if (item == OVM_EXPORT) { if (atomic_load(&g_sv_st) == OVX_BUSY) return; save_export(); }
     else if (item == OVM_IMPORT) { dm_haptics_android_tap(); sp_open(); return; }
     if (item >= 0 && item < OVM_N) dm_haptics_android_tap();

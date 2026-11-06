@@ -185,8 +185,24 @@ static int read_request(const char *file, char *first, int fcap, char *req, int 
     }
     fclose(f); unlink(p); return 1;
 }
+int dm_saves_request_delete(void) {
+    char p[640]; snprintf(p, sizeof p, "%s/delete.txt", g_dir); FILE *f = fopen(p, "w");
+    if (!f) return -1;
+    fclose(f); return 0;
+}
+// Delete save (the pause menu's): at the start, before the host mounts anything, as an import. The save is exported as <stamp>-before-delete first, and stays if that fails
+static void delete_apply(void) {
+    char p[640], out[96] = "", err[600] = ""; snprintf(p, sizeof p, "%s/delete.txt", g_dir);
+    if (access(p, F_OK)) return;
+    unlink(p);
+    int r = dm_saves_export("-before-delete", out, sizeof out, err, sizeof err);
+    if (r && r != -ENOENT) { LOG("[RED] [saves] the save could not be backed up (%s): it was not deleted", err); return; }
+    rm_tree(g_save); rm_tree(g_dev); mkdir(g_save, 0700);
+    LOG("[saves] save deleted%s%s", out[0] ? ", backup " : "", out);
+}
 int dm_saves_start(const char *files_root) {
     dm_saves_paths(files_root);
+    delete_apply();
     char name[256], req[96]; int quit = 0, q;
     if (read_request("import.txt", name, sizeof name, req, sizeof req, &q)) { quit |= q; import_apply(name, req); }
     if (read_request("export.txt", name, sizeof name, req, sizeof req, &q)) {
