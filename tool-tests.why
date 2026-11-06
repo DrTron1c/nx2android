@@ -1,0 +1,60 @@
+     53 TypeError: derive_profile() takes 5 positional arguments but 6 were given
+     13 AttributeError: module 'build_ipa_from_nsp' has no attribute 'compute_reader_additions'
+     13 AttributeError: <module 'build_ipa_from_nsp' from '/home/runner/work/nx2android/nx2android/nxnative/scripts/build_ipa_from_nsp.py'> does not have the 
+     10 AttributeError: module 'build_ipa_from_nsp' has no attribute 'configure_dotnet'
+      9 AssertionError: BuildError not raised
+      8 AttributeError: module 'build_ipa_from_nsp' has no attribute 'dlc_only_shader_change'
+      7 TypeError: split_shaders() takes from 8 to 11 positional arguments but 13 were given
+      6 AssertionError: '# registered\npkg.bin\t0\tvertex\tregistered\tx\n' != '# GLSLC capture: observe submitted shaders\n'
+      5 AttributeError: module 'build_ipa_from_nsp' has no attribute 'extract_bytes'
+      5 AttributeError: module 'build_ipa_from_nsp' has no attribute 'check_versions_aarch64'
+      5 AssertionError: 1 != 0 : [RED] no game profile /home/runner/work/nx2android/nx2android/nxnative/dm/games/01007BB017812000/game.tsv (DM_GAME / GAME tak
+      4 TypeError: argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'function'
+      4 IndexError: list index out of range
+      4 AttributeError: module 'build_ipa_from_nsp' has no attribute 'provisional_version'. Did you mean: 'provisional_prep'?
+      4 AttributeError: module 'build_ipa_from_nsp' has no attribute 'package_title_reader'
+      3 AttributeError: module 'build_ipa_from_nsp' has no attribute 'pfs0_names'
+      3 AttributeError: module 'build_ipa_from_nsp' has no attribute 'check_native_python'
+      3 AttributeError: module 'build_ipa_from_nsp' has no attribute 'check_capstone'
+      3 AssertionError: 0 != 1
+      2 TypeError: toolchain() takes 0 positional arguments but 1 was given
+      2 TypeError: 'NoneType' object is not iterable
+      2 OSError: /usr/lib/libproc.dylib: cannot open shared object file: No such file or directory
+      2 AttributeError: module 'build_ipa_from_nsp' has no attribute 'same_build'
+      2 AttributeError: module 'build_ipa_from_nsp' has no attribute 'check_glslc_coverage'
+      2 AssertionError: 'depth\tnear=0\n' not found in 'chain\t0123456789ab\ndepth\tnear=-w\npairs\t16\te6b864566287ba5e\n'
+      2 AssertionError: 'a3c604318217' != '316fb82e2f22'
+      2 AssertionError: '[NOTE] cached shader libraries cannot be reused (b-OLD -> b-NEW)' not found in '[18:50:26] [1/0] Mac shaders …\n'
+      1 subprocess.CalledProcessError: Command '['cc', '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-I', '/home/runner/work/nx2android/nx2android/nxnative/dm
+      1 build_ipa_from_nsp.BuildError: tools not found: xcodebuild (Xcode), xcodegen (brew install xcodegen), dotnet (.NET SDK 10), zstd (brew install zstd), 
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmpwbo_c3mq/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmpt7ozhf_s/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmppjtn1zrb/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmppcbxfrpi/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmpo5tlhxli/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmph1jll_8_/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmpg09rmrr4/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmpdshk19lw/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmpcar4tprg/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no iOS shader libraries in /tmp/tmp04ko49pt/shader/ios/b-0123456789ab
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmpni_3c62h
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmpgelulj3o
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmpax8ihb89
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmp8lid0ooc
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmp69zzy2lf
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmp5d2e4xds
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmp482xxtfj
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmp2e2r3f33
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in /tmp/tmp26co5rq7
+      1 build_ipa_from_nsp.BuildError: no NSP with a readable title ID in .
+      1 argparse.ArgumentError: argument --platform: invalid choice: 'mac-app' (choose from ios, mac)
+      1 ValueError: substring not found
+      1 TypeError: extract() takes 9 positional arguments but 10 were given
+      1 TypeError: derive_profile() got an unexpected keyword argument 'shader_only'
+      1 TypeError: ShaderWatch.__init__() takes 4 positional arguments but 5 were given
+      1 TypeError: 'function' object is not subscriptable
+      1 TypeError: 'builtin_function_or_method' object is not iterable
+      1 OSError: [Errno 8] Exec format error: '/home/runner/work/nx2android/nx2android/nxnative/dm/gfx/tools/spirv_cross_bin/spirv-cross'
+      1 KeyError: 'DM_KEYS'
+      1 ImportError: Failed to import test module: test_regress
+      1 ImportError: Failed to import test module: test_nsp_nup

@@ -1,0 +1,7 @@
+total 4928
+drwxr-xr-x 4 runner runner    4096 Nov  6 18:49 .
+drwxr-xr-x 6 runner runner    4096 Nov  6 18:49 ..
+drwxr-xr-x 3 runner runner    4096 Nov  6 18:49 gen
+-rwxr-xr-x 1 runner runner 2261832 Nov  6 18:49 libdmhost.so
+-rw-r--r-- 1 runner runner 2732920 Nov  6 18:49 libdmhost.sym.so
+drwxr-xr-x 2 runner runner   32768 Nov  6 18:49 obj
