@@ -46,15 +46,16 @@ static int64_t perf_now(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONI
 // adrenotools_set_turbo sets: power control off on /dev/kgsl-3d0; 0 gives it back. A frame held at 30 fps lets the GPU governor lower the clock until the work
 // fills the frame, so its GPU time says little about what 60 would need. Any Vulkan driver on KGSL (Qualcomm's, Turnip)
 static void gpu_turbo(void) {
-    static int on;   // what was last set
+    static int on; static unsigned calls;   // what was last set. The setting is asked for again now and then: on the tablet the GPU's time went from 12 to 37 ms in one frame, after 15 minutes, and stayed there with memory and the replay unchanged
     const char *e = getenv("DM_GPU_TURBO"); int want = e && atoi(e) > 0;
-    if (want == on) return;
+    if (want == on && (!want || ++calls % 10)) return;
     struct { unsigned type; void *value; size_t size; } prop; uint32_t enable = !want;   // (kgsl.h kgsl_device_getproperty; KGSL_PROP_PWRCTRL 0xE: 0 = power control off)
     prop.type = 0xE; prop.value = &enable; prop.size = sizeof enable;
     int fd = open("/dev/kgsl-3d0", O_RDWR); int r = fd < 0 ? -1 : ioctl(fd, _IOW(0x09, 0x32, prop), &prop);   // IOCTL_KGSL_SETPROPERTY
     if (fd >= 0) close(fd);
     if (r) { LOG("[RED] [perf] DM_GPU_TURBO=%d: the GPU's power control could not be set (%s)", want, strerror(errno)); return; }
-    on = want; LOG("[perf] DM_GPU_TURBO=%d: %s", want, want ? "the GPU at its highest clock (power control off)" : "the GPU's own clock control again");
+    if (on != want) LOG("[perf] DM_GPU_TURBO=%d: %s", want, want ? "the GPU at its highest clock (power control off)" : "the GPU's own clock control again");
+    on = want;
 }
 
 static void hint_init(int64_t target) {
