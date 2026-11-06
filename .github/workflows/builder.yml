@@ -22,7 +22,7 @@ concurrency:
 jobs:
   toolchain:
     # about five minutes, and only needed when the bundle itself changes: a commit says so with [toolchain]
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[toolchain]')
+    if: inputs.toolchain || contains(github.event.head_commit.message, '[toolchain]')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:
