@@ -354,7 +354,22 @@ static int bda_on(void) { if (g_bda_on < 0) g_bda_on = !getenv("DM_VK_NO_BDA") &
 static _Atomic uint64_t g_swap_lo, g_swap_hi;
 static int swap_has(uint64_t a) { return a >= atomic_load(&g_swap_lo) && a < atomic_load(&g_swap_hi); }
 static void swap_wait(void) { while (atomic_load(&g_swap_hi)) sched_yield(); }
-static int swap_fault(void *addr, int is_write, void *uc) { (void)uc; if (!is_write || !swap_has((uint64_t)(uintptr_t)addr)) return 0; swap_wait(); return 1; }
+// A write that faulted on the read-only mapping of a swap can reach this hook after the swap is over and the page is writable again: the swap's range is no longer set, no other
+// hook claims the fault, and the game crashed (Pokopia: SIGSEGV in memcpy at the address of the chunk made a hardware buffer just before). The last swapped ranges are kept, and
+// a write fault inside one is retried once by the faulting thread; a second fault at the same address goes on to the other hooks (dirty tracking's read-only pages)
+enum { SWAP_RECENT = 16 };
+static _Atomic uint64_t g_swap_rlo[SWAP_RECENT], g_swap_rhi[SWAP_RECENT]; static _Atomic unsigned g_swap_rn;
+static void swap_recent(uint64_t lo, uint64_t hi) { unsigned i = atomic_fetch_add(&g_swap_rn, 1) % SWAP_RECENT; atomic_store(&g_swap_rhi[i], 0); atomic_store(&g_swap_rlo[i], lo); atomic_store(&g_swap_rhi[i], hi); }
+static int swap_fault(void *addr, int is_write, void *uc) {
+    (void)uc; uint64_t a = (uint64_t)(uintptr_t)addr;
+    if (!is_write) return 0;
+    if (swap_has(a)) { swap_wait(); return 1; }
+    static __thread uint64_t retried;
+    for (int i = 0; i < SWAP_RECENT; i++) if (a >= atomic_load(&g_swap_rlo[i]) && a < atomic_load(&g_swap_rhi[i])) {
+        if (retried == a) { retried = 0; return 0; }
+        retried = a; return 1; }
+    return 0;
+}
 static void swap_prep(void *addr, size_t len) { uint64_t a = (uint64_t)(uintptr_t)addr; if (atomic_load(&g_swap_hi) && a < atomic_load(&g_swap_hi) && a + len > atomic_load(&g_swap_lo)) swap_wait(); }
 static int pool_lazy_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_LAZY_POOLS"); on = e && atoi(e); if (on) { dm_fault_hook_register(swap_fault); dm_guest_write_prep_register(swap_prep); } } return on; }
 // DM_VK_POOL_FILE=1: a lazy pool's pages live in a deleted file of the app's own storage (DM_TEMP) rather than in anonymous memory. Swap on Android is RAM: texture data barely compresses, so
@@ -385,6 +400,7 @@ void vk_pool_file(void *mem, uint64_t size) {
     }
     if (ok && mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) != mem) die("[vk] memory pool %p: cannot map its file (errno %d)", mem, errno);
     if (!ok) mprotect(mem, size, PROT_READ | PROT_WRITE);
+    swap_recent(a, a + size);
     atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
     pthread_rwlock_unlock(&g_pool_mu);
     if (!ok) { VKLOG("[RED] memory pool %p stays in memory: its file could not be written (errno %d)", mem, errno); close(fd); return; }
@@ -429,6 +445,7 @@ static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
         memcpy(tmp, mem, size); munmap(tmp, size);
         if (mmap(mem, size, PROT_READ, MAP_SHARED | MAP_FIXED, fds[0], 0) != mem) die("[vk] memory pool %p: cannot map its hardware buffer (errno %d)", mem, errno);
         nvn_dirty_reopen(mem, size);
+        swap_recent((uint64_t)(uintptr_t)mem, (uint64_t)(uintptr_t)mem + size);
         atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
         for (int i = 0; i < nfd; i++) close(fds[i]);
     }
