@@ -101,9 +101,12 @@ OSStatus AudioOutputUnitStart(AudioUnit u) {
     AAudioStreamBuilder_setSampleRate(b, (int32_t)u->fmt.mSampleRate);
     AAudioStreamBuilder_setChannelCount(b, (int32_t)u->fmt.mChannelsPerFrame);
     AAudioStreamBuilder_setFormat(b, u->fmt.mFormatFlags & kAudioFormatFlagIsFloat ? AAUDIO_FORMAT_PCM_FLOAT : AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    // DM_AUDIO_MEDIA=1 (the pause menu's Speaker sound: Full): the system's ordinary media path, as a video player's sound takes, where the tablet's own sound processing
+    // (Dolby, Xiaomi's speaker tuning) is applied; the low-latency path some devices send past it. A little more delay; the 5 ms callbacks below stay
+    const char *md = getenv("DM_AUDIO_MEDIA"); int media = md && atoi(md);
+    AAudioStreamBuilder_setPerformanceMode(b, media ? AAUDIO_PERFORMANCE_MODE_NONE : AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
-    AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_GAME);
+    AAudioStreamBuilder_setUsage(b, media ? AAUDIO_USAGE_MEDIA : AAUDIO_USAGE_GAME);
     AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MUSIC);
     // 5 ms callbacks unless the host asks otherwise, as the iOS front end sets its I/O buffer (docs/agents/03-bringup.md "Crackling on iOS only"): left to itself AAudio
     // on the Legion Y700 called back with 6-960 frames, more than Tales of Eternia Remastered's CRI output keeps queued (about 2 blocks), so 2600 of 2000 callbacks
