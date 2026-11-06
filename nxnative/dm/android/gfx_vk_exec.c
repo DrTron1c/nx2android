@@ -1307,10 +1307,12 @@ static int thin_skip(uint64_t key) {
 // DM_VK_SHADOW_BIAS=<slope>,<units>: more depth bias for a depth-only D16 pass (the sun's shadow map). A stopgap, cause open: the lit side of everything in Pokopia's first area shows the moire of
 // a surface shadowing itself, in bands at the cascades, on Android and not on the Mac, with the same bias sent. The game's own values are logged ([shadow]). Its 25 taps reach 2 texels
 // each way, so a slope of about 3 covers them; a clamp keeps steep casters from lifting their shadows off the ground
+int dm_disp(int what);
+enum { SHADOWS = 8 };   // overlay_layout.h DISP_SHADOWS: the pause menu's Shadows, which tells the map's faults from the material's on the device. Off doubles as a saving
 static float g_sb_slope = -1, g_sb_units;
 static int shadow_pass(void) {
     if (g_sb_slope < 0) { const char *e = getenv("DM_VK_SHADOW_BIAS"); g_sb_slope = 0; if (e) sscanf(e, "%f,%f", &g_sb_slope, &g_sb_units); }
-    return g_sb_slope > 0 && S.dfmt == VK_FORMAT_D16_UNORM && S.ncol == 0;
+    return g_sb_slope > 0 && S.dfmt == VK_FORMAT_D16_UNORM && S.ncol == 0 && dm_disp(SHADOWS) != 2;
 }
 static struct { uint64_t gen; VkViewport vp; VkRect2D sc; float bc[4]; int sm[2], sw[2], sr[2], line; p_poly_offset po; VkPipelineLayout lay; uint32_t nsets, ndofs;
                 VkDescriptorSet sets[5]; uint32_t dofs[3 * 96]; VkBuffer vb[17]; VkDeviceSize vo[17]; VkBuffer ib; VkDeviceSize io; VkIndexType it; } g_bc;
@@ -1344,7 +1346,7 @@ static void set_dynamic(VkCommandBuffer cb) {
     if (!BC_SAME(sm, S.smask)) { vkCmdSetStencilCompareMask(cb, VK_STENCIL_FACE_FRONT_BIT, (uint32_t)S.smask[0]); vkCmdSetStencilCompareMask(cb, VK_STENCIL_FACE_BACK_BIT, (uint32_t)S.smask[1]); memcpy(g_bc.sm, S.smask, sizeof g_bc.sm); }
     if (!BC_SAME(sw, S.swmask)) { vkCmdSetStencilWriteMask(cb, VK_STENCIL_FACE_FRONT_BIT, (uint32_t)S.swmask[0]); vkCmdSetStencilWriteMask(cb, VK_STENCIL_FACE_BACK_BIT, (uint32_t)S.swmask[1]); memcpy(g_bc.sw, S.swmask, sizeof g_bc.sw); }
     if (!BC_SAME(sr, S.sref)) { vkCmdSetStencilReference(cb, VK_STENCIL_FACE_FRONT_BIT, (uint32_t)S.sref[0]); vkCmdSetStencilReference(cb, VK_STENCIL_FACE_BACK_BIT, (uint32_t)S.sref[1]); memcpy(g_bc.sr, S.sref, sizeof g_bc.sr); }
-    p_poly_offset pv = S.pofs; if (shadow_pass()) { pv.factor += g_sb_slope; pv.units += g_sb_units; if (pv.clamp == 0) pv.clamp = 0.002f; }
+    p_poly_offset pv = S.pofs; if (shadow_pass()) { float m = dm_disp(SHADOWS) == 1 ? 3 : 1; pv.factor += g_sb_slope * m; pv.units += g_sb_units * m; if (pv.clamp == 0) pv.clamp = 0.002f; }
     if (!BC_SAME(po, pv)) { vkCmdSetDepthBias(cb, pv.units, pv.clamp, pv.factor); g_bc.po = pv; }
     if (fresh || !g_bc.line) { vkCmdSetLineWidth(cb, 1.0f); g_bc.line = 1; }
 }
@@ -1365,6 +1367,7 @@ static void rd_read(const uint64_t *a, int n) {
 }
 // everything a draw needs bound; 0 when the draw cannot be done (logged once per reason)
 static int prepare_draw(int prim, int indexed) {
+    if (S.dfmt == VK_FORMAT_D16_UNORM && S.ncol == 0 && dm_disp(SHADOWS) == 3) return 0;   // the map stays at its clear: nothing shadowed
     // DM_VK_CB_DRAWS (read every submission, default 128, 0 = never): the replay is cut every that many draws and what is recorded goes to the GPU at once
     // (vk_cmd_split), so the GPU works on the frame while the rest is replayed instead of after all of it: NEO's Scramble Crossing 36.7 → 15.7 ms a frame
     g_cb_draws++;   // the cut itself happens between passes (begin_pass); inside one only with DM_VK_PASS_SPLIT (below): a pass cut in two stores and reloads its attachments
