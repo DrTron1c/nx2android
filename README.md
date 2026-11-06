@@ -76,4 +76,4 @@ Nintendo's takedown notices so far have gone to whoever hosts a project (13 Swit
 
 ## License
 
-MIT, as nxnative (see `nxnative/LICENSE`). Third-party code keeps its own license.
+MIT, as nxnative (see `nxnative/LICENSE`). Third-party code keeps its own license. Lossless Scaling frame generation (`nxnative/dm/android/lsfg` and `gfx_vk_lsfg.c`, from Banana Native, Eden and lsfg-vk) is GPL-3.0-or-later, so a game app built from this repository is GPL-3.0-or-later as a whole. `Lossless.dll` is never in the repository or an APK: you provide your own copy.

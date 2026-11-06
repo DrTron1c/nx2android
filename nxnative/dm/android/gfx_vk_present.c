@@ -360,8 +360,8 @@ static void cv_panel(const ov_canvas *cv, float x0, float y0, float x1, float y1
 }
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
-static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "Resume", ""};
-static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[4] = {"Low", "Medium", "High", "Max"}, *const OV_SCALES[4] = {"720p", "630p", "540p", "Full"};
+static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "FPS lock", "Resume", ""};
+static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[4] = {"Low", "Medium", "High", "Max"}, *const OV_SCALES[4] = {"720p", "630p", "540p", "Full"}, *const OV_FGS[5] = {"Off", "Basic", "LSFG 2x", "LSFG 3x", "LSFG 4x"}, *const OV_CAPS[4] = {"Auto", "60", "40", "30"};
 static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import"};   // the rows that are a button: its word
 static const char *const OVM_MODES[2] = {"Handheld", "Docked"};
 static void ov_menu_panel(const ov_canvas *cv, int st) {
@@ -404,8 +404,8 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
             snprintf(v, sizeof v, "%s", x == OVX_BUSY ? "Exporting..." : x == OVX_DONE ? nm : x == OVX_NOSAVE ? "No save yet" : "Failed");
             while (vs > 1 && cv_text_w(v, vs) > rw - cv_text_w(OVM_LABELS[it], is) - gap - rh * 0.3f) vs--;
             cv_text(cv, x1 - cv_text_w(v, vs), cy, v, vs, x == OVX_FAILED ? C_ACCENT : C_WHITE);
-        } else if (it == OVM_ASPECT || it == OVM_SHARP || it == OVM_SCALE) {   // a value: a tap takes the next
-            const char *w = it == OVM_ASPECT ? OV_ASPECTS[dm_disp(DISP_ASPECT)] : it == OVM_SCALE ? OV_SCALES[dm_disp(DISP_SCALE)] : OV_SHARPS[dm_disp(DISP_SHARP)]; float bw = cv_text_w("Stretch", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, w, 1, 0);
+        } else if (it == OVM_ASPECT || it == OVM_SHARP || it == OVM_SCALE || it == OVM_FG || it == OVM_CAP) {   // a value: a tap takes the next
+            const char *w = it == OVM_ASPECT ? OV_ASPECTS[dm_disp(DISP_ASPECT)] : it == OVM_SCALE ? OV_SCALES[dm_disp(DISP_SCALE)] : it == OVM_FG ? OV_FGS[dm_disp(DISP_FG)] : it == OVM_CAP ? OV_CAPS[dm_disp(DISP_CAP)] : OV_SHARPS[dm_disp(DISP_SHARP)]; float bw = cv_text_w("LSFG 4x", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, w, 1, 0);
         } else if (OVM_BUTTONS[it]) {   // a button
             float bw = cv_text_w(OVM_BUTTONS[it], is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, OVM_BUTTONS[it], 0, 0);
         } else if (it == OVM_MODE) {   // two segments, the current one filled: handheld (performance) | docked (resolution)
@@ -796,6 +796,8 @@ static uint64_t pace_desired(double period) {   // the frame's desired present t
     return t - g_refresh_ns / 2;
 }
 #include "gfx_vk_fx.h"
+static VkImage g_ls_img; static VkImageView g_ls_view; static uint32_t g_ls_w, g_ls_h;
+int vk_lsfg_frame(vkimg_t *im, const int *crop, double period, int mult, VkImage *out, VkImageView *view, uint32_t *ow, uint32_t *oh, double *hold);
 static void present_window(vkimg_t *im, const int crop[4], double period, uint64_t ticket, int mid) {   // period: the game's frame period (s); < 0 for a redraw (ticket 0). mid: the frame generated before this one
     uint32_t k = g_pi++ % 8;
     vkWaitForFences(V.dev, 1, &g_pfence[k], 1, UINT64_MAX);
@@ -808,8 +810,9 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
     VkCommandBuffer cb = g_pcb[k];
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT}; vkBeginCommandBuffer(cb, &bi);
     vk_img_barrier_all(cb);   // after everything submitted before on this queue
-    vkimg_t mimg; int fg_on = dm_disp(DISP_FG) && V.has_dynrender; VkImageView mview = VK_NULL_HANDLE;
-    if (mid && fg_make(cb, k, im)) { mimg = *im; mimg.img = g_fx.mid.i; im = &mimg; mview = g_fx.mid.raw; }
+    vkimg_t mimg; int fg_on = dm_disp(DISP_FG) == 1 && V.has_dynrender; VkImageView mview = VK_NULL_HANDLE;
+    if (mid == 2) { mimg = *im; mimg.img = g_ls_img; mimg.w = g_ls_w; mimg.h = g_ls_h; im = &mimg; mview = g_ls_view; crop = NULL; }   // a frame of Lossless Scaling's (gfx_vk_lsfg.c)
+    else if (mid && fg_make(cb, k, im)) { mimg = *im; mimg.img = g_fx.mid.i; im = &mimg; mview = g_fx.mid.raw; }
     barrier(cb, g_simg[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkClearColorValue black = {{0, 0, 0, 1}}; VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(cb, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &rg);
@@ -916,7 +919,12 @@ static void *present_thread(void *arg) {
         pthread_mutex_unlock(&g_pq_mu);
         if (e.im) {
             // Frame generation: the frame half way to this one goes first, this one half a frame later. The gap between the game's frames sets that half, and a game below 15 fps gets none
-            static uint64_t t_last; uint64_t t_now = mono_ns(), gap = t_last ? t_now - t_last : 0; t_last = t_now; int gen = dm_disp(DISP_FG) && V.has_dynrender && gap > 8000000 && gap < 70000000;
+            static uint64_t t_last; uint64_t t_now = mono_ns(), gap = t_last ? t_now - t_last : 0; t_last = t_now; int gen = dm_disp(DISP_FG) == 1 && V.has_dynrender && gap > 8000000 && gap < 70000000;
+            if (dm_disp(DISP_FG) >= 2 && gap > 8000000 && gap < 120000000) {   // LSFG: its frames at even steps through the gap, the game's own last
+                VkImage oi[3]; VkImageView ov[3]; uint32_t ow = 0, oh = 0; double hold; int ng = vk_lsfg_frame(e.im, e.has_crop ? e.crop : NULL, gap / 1e9, dm_disp(DISP_FG), oi, ov, &ow, &oh, &hold);
+                for (int g = 0; g < ng; g++) {
+                    pthread_mutex_lock(&g_present_mu); g_ls_img = oi[g]; g_ls_view = ov[g]; g_ls_w = ow; g_ls_h = oh; if (swap_make()) { present_window(e.im, NULL, -1, 0, 2); atomic_fetch_add(&g_fps_frames, 1); } pthread_mutex_unlock(&g_present_mu);
+                    uint64_t at = (uint64_t)((g + 1) * hold * 1e9), spent = mono_ns() - t_now; if (spent < at) { uint64_t w = at - spent; struct timespec ts = {(time_t)(w / 1000000000), (long)(w % 1000000000)}; nanosleep(&ts, NULL); } } }
             if (gen) { pthread_mutex_lock(&g_present_mu); if (swap_make()) { present_window(e.im, e.has_crop ? e.crop : NULL, -1, 0, 1); atomic_fetch_add(&g_fps_frames, 1); } pthread_mutex_unlock(&g_present_mu);
                 uint64_t spent = mono_ns() - t_now; if (spent < gap / 2) { uint64_t w = gap / 2 - spent; struct timespec ts = {0, (long)w}; nanosleep(&ts, NULL); } }
             last = e; pthread_mutex_lock(&g_present_mu); if (swap_make()) present_window(e.im, e.has_crop ? e.crop : NULL, e.period, e.n, 0); pthread_mutex_unlock(&g_present_mu); }

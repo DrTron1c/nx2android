@@ -36,6 +36,7 @@ class Options:
     experimental: bool = False         # a game not ported to Android yet: a provisional profile from upstream's survey (or a copy of its iOS profile), status experimental
     package: str = ''                  # the app's package instead of the profile's (a test install beside another build of the game)
     fps60: bool = False                # 60 fps: the profile's own frame-rate cap, else the build's FPSLocker-Warehouse config (porter/fpslocker.py)
+    lsfg_dll: Path = None              # the player's own Lossless.dll: goes in the data pack, never the APK, for Lossless Scaling frame generation (dm/android/gfx_vk_lsfg.c)
     gpu_boost: bool = False            # the GPU held at its highest clock (DM_GPU_TURBO, dm/android/perf_android.c)
     vulkan_driver: Path = None         # an arm64 Vulkan driver (Mesa's Turnip) packed in the APK and used instead of the system's (DM_VK_DRIVER, dm/android/gfx_vk_core.c)
     mt_replay: bool = False            # multithread replay: DM_VK_MT_REPLAY=1 in env.txt (dm/android/gfx_vk_dq.c), after the profile's env rows
@@ -182,6 +183,12 @@ class Port:
         version_code('v0', o.vercode_offset); alias_headroom_gb(o.alias_headroom)   # an offset or headroom out of range fails now, not after the shaders
         if o.vulkan_driver:
             o.vulkan_driver = driver.prepare(o.vulkan_driver, o.work or o.folder)
+        if o.lsfg_dll:
+            o.lsfg_dll = Path(o.lsfg_dll).expanduser().resolve()
+            try:
+                with open(o.lsfg_dll, 'rb') as f: head = f.read(2)
+            except OSError as e: raise BuildError(f'Lossless.dll: {e}') from e
+            if head != b'MZ': raise BuildError(f'{o.lsfg_dll.name} is not a Windows DLL: choose the Lossless.dll of your own Lossless Scaling')
         self.s2 = switch2.find(o.folder)
         keys = o.keys or self.cfg.get('keys')
         if not keys and not self.s2: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
@@ -698,9 +705,9 @@ class Port:
         font_env, font_files = self.button_font()
         dst = self.o.out / f'{app_stem(self.g, self.app_name)}-data'
         man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.romfs(self.game), shaders=self.dmsv,
-                             aoc=self.aoc, language=self.lang, package=self.package, env=self.fps_env + font_env + (['DM_VK_MT_REPLAY=1'] if self.o.mt_replay else []) + (['DM_GPU_TURBO=1'] if self.o.gpu_boost else [])
+                             aoc=self.aoc, language=self.lang, package=self.package, env=self.fps_env + font_env + (['DM_VK_MT_REPLAY=1'] if self.o.mt_replay else []) + (['DM_GPU_TURBO=1'] if self.o.gpu_boost else []) + (['DM_LSFG_DLL=Lossless.dll'] if self.o.lsfg_dll else [])
                              + ([f'DM_VK_DRIVER={self.o.vulkan_driver.name}'] if self.o.vulkan_driver else []), settings=TOUCH_SETTINGS if self.o.touch else None,
-                             files={**self.fps_files, **font_files, **({'shaders_extra.dmsv': self.extra} if getattr(self, 'extra', None) else {})},
+                             files={**self.fps_files, **font_files, **({'Lossless.dll': self.o.lsfg_dll} if self.o.lsfg_dll else {}), **({'shaders_extra.dmsv': self.extra} if getattr(self, 'extra', None) else {})},
                              progress=lambda what: PROG.set(step=f'linking {what}'))
         self.data_path = dst; self.result['data'] = str(dst)
         PROG.end(f'{man["files"]:,} files, {man["bytes"] / 2**30:.1f} GB')

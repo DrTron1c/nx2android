@@ -63,6 +63,8 @@ static _Atomic int g_cust[2][2][DM_AOV_N][3], g_cust_ver, g_edit;
 static const char *const LAYOUT_NAMES[2] = {"tablet", "phone"};
 static int ctl_named(const char *n) { for (int i = 0; i < OV_N; i++) if (!strcmp(OV_LAYOUTS[0][i].name, n)) return i; return -1; }
 int dm_opmode(void); void dm_set_opmode(int m);   // hle_oe.c: 0 handheld, 1 docked; a change reaches the game as the Switch's operation mode notification
+void dm_perf_fps_cap(int fps);
+static const int CAP_FPS[4] = {0, 60, 40, 30};   // the FPS lock's values (gfx_vk_present.c OV_CAPS)
 static void settings_load(void) {
     { const char *e = getenv("DM_OV_FLOAT"); if (e) atomic_store(&g_disp[DISP_FLOAT], atoi(e) != 0); }   // the profile's default; the player's setting below wins
     char p[600]; snprintf(p, sizeof p, "%s/settings.txt", g_root); FILE *f = fopen(p, "r"); char line[128];
@@ -80,7 +82,8 @@ static void settings_load(void) {
             atomic_store(&g_disp[DISP_SCALE], v); static const char *const size[4] = {"1280x720", "1120x630", "960x540", "original"}; setenv("DM_WINDOW_SIZE", size[v], 1); }
         else if (sscanf(line, "fsr=%d", &v) == 1) atomic_store(&g_disp[DISP_FSR], v != 0);
         else if (sscanf(line, "sharp=%d", &v) == 1 && v >= 0 && v < 4) atomic_store(&g_disp[DISP_SHARP], v);
-        else if (sscanf(line, "framegen=%d", &v) == 1) atomic_store(&g_disp[DISP_FG], v != 0);
+        else if (sscanf(line, "framegen=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_FG], v);
+        else if (sscanf(line, "cap=%d", &v) == 1 && v >= 0 && v < 4) { atomic_store(&g_disp[DISP_CAP], v); dm_perf_fps_cap(CAP_FPS[v]); }
         else if (sscanf(line, "float=%d", &v) == 1) atomic_store(&g_disp[DISP_FLOAT], v != 0);
         else if (!strncmp(line, "ui=", 3)) {   // ui=<layout>,<control>,<x>,<y>,<size>: x, y in 1/10000 of the window (-1 the layout's place), size in 1/1000
             char lay[16], name[32]; int x, y, z, l, i;
@@ -100,7 +103,7 @@ static void settings_save(void) {
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\nopacity=%d\ngrid=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps),
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
     { const char *ep = getenv("DM_SETTINGS_EPOCH"); if (ep) fprintf(f, "epoch=%s\n", ep); }
-    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE));
+    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\ncap=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE), dm_disp(DISP_CAP));
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);
         if ((x && y) || z) fprintf(f, "ui=%s,%s,%d,%d,%d\n", LAYOUT_NAMES[l], OV_LAYOUTS[0][i].name, x && y ? x - 1 : -1, x && y ? y - 1 : -1, z ? z : 1000);
@@ -339,9 +342,10 @@ static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
-    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE) {
-        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : DISP_SHARP, n = item == OVM_ASPECT ? 5 : item == OVM_SHARP || item == OVM_SCALE ? 4 : 2;
-        atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); atomic_fetch_add(&g_disp_ver, 1); settings_save(); }
+    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP) {
+        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : DISP_SHARP;
+        int n = item == OVM_ASPECT ? 5 : item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP ? 4 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
+        atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); if (item == OVM_CAP) dm_perf_fps_cap(CAP_FPS[atomic_load(&g_disp[w])]); atomic_fetch_add(&g_disp_ver, 1); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
     else if (item == OVM_TAB) { menu_tab(atomic_load(&g_menu_tab) + 1); return; }
     else if (item == OVM_EDIT) { dm_haptics_android_tap(); ed_open(); return; }

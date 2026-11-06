@@ -6,6 +6,7 @@
 #include <android/native_window.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -161,9 +162,11 @@ uint64_t dm_present_period_adapt(uint64_t period) {
     int64_t want = STEPS[g_step];
     return (uint64_t)want > period ? (uint64_t)want : period;   // never faster than the game asks
 }
+static _Atomic int g_fps_cap;
+void dm_perf_fps_cap(int fps) { atomic_store(&g_fps_cap, fps); }   // the pause menu's FPS lock: 60, 40, 30, or 0 for the adaptive rate
 static int fps_pin(void) {   // a DM_CTL "env DM_FPS_PIN=40" line holds that step (60, 40 or 30; anything else lets the rate adapt again): tests
     static unsigned k; static int pin = -1; if (k++ % 30) return pin;
-    const char *e = getenv("DM_FPS_PIN"); int v = e ? atoi(e) : 0, st = v == 60 ? 0 : v == 40 ? 1 : v == 30 ? 2 : -1;
+    const char *e = getenv("DM_FPS_PIN"); int v = atomic_load(&g_fps_cap) ? atomic_load(&g_fps_cap) : e ? atoi(e) : 0, st = v == 60 ? 0 : v == 40 ? 1 : v == 30 ? 2 : -1;
     if (st != pin) { pin = st; LOG("[perf] adaptive frame rate %s", st < 0 ? "free again" : "pinned"); }
     return pin;
 }

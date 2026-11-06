@@ -52,7 +52,7 @@ public final class MainActivity extends Activity implements PortService.Listener
     private ScrollView logScroll;
     private EditText pairPort, pairCode, connectPort;
     private CheckBox touch, fps60, boost, installAfter, overAdb, keepOn;
-    private TextView driverState;
+    private TextView driverState, lsfgState;
     private String pickInto = "keys";
     private boolean isSwitch2;
 
@@ -159,6 +159,12 @@ public final class MainActivity extends Activity implements PortService.Listener
         driverRow.addView(button("Choose driver", false, v -> { pickInto = "driver"; String was = prefs.getString("driver", null); pick(was != null ? new File(was) : new File(Environment.getExternalStorageDirectory(), "Download"), false); }));
         driverRow.addView(button("Use the system's", false, v -> { prefs.edit().remove("driver").apply(); refresh(); }));
         add(c5, driverRow, 6);
+        add(c5, text("Lossless Scaling frame generation", 14, TEXT, true), 10);
+        lsfgState = text("", 14, DIM, false); add(c5, lsfgState, 4);
+        LinearLayout lsfgRow = new LinearLayout(this);
+        lsfgRow.addView(button("Choose Lossless.dll", false, v -> { pickInto = "lsfg"; String was = prefs.getString("lsfg", null); pick(was != null ? new File(was) : new File(Environment.getExternalStorageDirectory(), "Download"), false); }));
+        lsfgRow.addView(button("Remove", false, v -> { prefs.edit().remove("lsfg").apply(); refresh(); }));
+        add(c5, lsfgRow, 6);
         overallText = text("", 16, TEXT, true); overallText.setVisibility(View.GONE); add(c5, overallText, 10);
         overallBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); overallBar.setMax(1000); overallBar.setVisibility(View.GONE); add(c5, overallBar, 4);
         stepText = text("", 14, TEXT, false); add(c5, stepText, 8);
@@ -197,6 +203,8 @@ public final class MainActivity extends Activity implements PortService.Listener
         else if (ready) inspect(f); else gameState.setText(f);
         String dr = prefs.getString("driver", null);
         driverState.setText(dr != null ? new File(dr).getName() + "\nUsed at the next port. If the game then fails to open, tap Use the system's and port again." : "The tablet's own driver. A custom one (a .zip or .so, such as Turnip) goes in the game at the next port.");
+        String ls = prefs.getString("lsfg", null);
+        lsfgState.setText(ls != null ? new File(ls).getName() + "\nAdded at the next port. In the game: pause menu, Display, Frame generation." : "Your own Lossless.dll from Lossless Scaling for Windows. It stays on this tablet and is never uploaded.");
         String c = prefs.getString("device", null);
         adbState.setText(c != null ? "Last connected: " + c : "Not connected yet.");
     }
@@ -413,6 +421,8 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (boost.isChecked()) a.add("--gpu-boost");
         String dr = prefs.getString("driver", null);
         if (dr != null) { a.add("--vulkan-driver"); a.add(dr); }
+        String ls = prefs.getString("lsfg", null);
+        if (ls != null) { a.add("--lsfg-dll"); a.add(ls); }
         logText.setText(""); setBusy(true); stepText.setText("Starting"); stepText.setTextColor(TEXT);
         PortService.listener = this;
         PortService.start(this, a);
