@@ -19,6 +19,8 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <dirent.h>
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
@@ -37,6 +39,66 @@ uint32_t vk_mem_type(uint32_t bits, VkMemoryPropertyFlags want, VkMemoryProperty
 }
 
 static int g_has_budget;
+// The GPU clock floor, from Banana Native (dm/gfx/vk_android/vka_dev.c, MIT, Copyright (c) 2026 seedds): with VK_QCOM_queue_perf_hint (Qualcomm's driver) the queue asks for a floor
+// under its clock; without it (Turnip), the same kernel call made directly on the queue's own KGSL contexts: IOCTL_KGSL_SETPROPERTY KGSL_PROP_PWR_CONSTRAINT {PWRLEVEL, context,
+// level}, 1 = the highest clock, 2-100 = a floor at that % of it. The rule only reaches the GPU's management unit while the context is registered with it, and is lost when the
+// GPU sleeps, so it is sent again: Pokopia's GPU time went from 12 to 37 ms a frame after 15 minutes, with the work unchanged, on the tablet's Adreno 740. DM_VK_GPU_FLOOR=s (live):
+// s % of the highest clock (0: the driver's own governor); by default 100 with DM_GPU_TURBO=1, else 0
+static void *g_perf_hint;   // vkQueueSetPerfHintQCOM
+struct kgsl_dc { unsigned int type, context_id; void *data; size_t size; };
+struct kgsl_gp { unsigned int type; void *value; size_t sizebytes; };
+#define KGSL_IOCTL_SETPROPERTY_ _IOW(0x09, 0x32, struct kgsl_gp)
+enum { KG_FDS = 4, KG_IDS = 1024, KG_CTX = 8 };
+static int g_kg_fd[KG_FDS], g_kg_nfd; static uint8_t g_kg_own[KG_FDS][KG_IDS / 8];
+static struct { int fd; unsigned id; } g_kg[KG_CTX]; static int g_kg_n, g_kg_host;
+static uint8_t g_kg_was[KG_FDS][KG_IDS / 8]; static int g_kg_wasfd[KG_FDS], g_kg_wasn, g_kg_tried;
+static int kg_set(int fd, unsigned id, int type, unsigned level) {
+    unsigned lv = level; struct kgsl_dc c = {(unsigned)type, id, &lv, sizeof lv}; struct kgsl_gp g = {0x12, &c, sizeof c};   // KGSL_PROP_PWR_CONSTRAINT
+    int r; do r = ioctl(fd, KGSL_IOCTL_SETPROPERTY_, &g); while (r < 0 && (errno == EINTR || errno == EAGAIN));
+    return r < 0 ? -errno : 0;
+}
+static void kg_scan(void) {   // this process's descriptors on /dev/kgsl-3d0 and the context ids each owns (the kernel lets a descriptor constrain only its own)
+    g_kg_nfd = 0; DIR *d = opendir("/proc/self/fd"); if (!d) return;
+    struct dirent *de; char path[64], to[64];
+    while ((de = readdir(d)) && g_kg_nfd < KG_FDS) {
+        int fd = atoi(de->d_name); if (fd <= 2) continue;
+        snprintf(path, sizeof path, "/proc/self/fd/%d", fd); ssize_t n = readlink(path, to, sizeof to - 1); if (n <= 0) continue; to[n] = 0;
+        if (!strncmp(to, "/dev/kgsl-3d", 12)) g_kg_fd[g_kg_nfd++] = fd;
+    }
+    closedir(d);
+    for (int i = 0; i < g_kg_nfd; i++) { memset(g_kg_own[i], 0, sizeof g_kg_own[i]); for (unsigned id = 1; id < KG_IDS; id++) if (!kg_set(g_kg_fd[i], id, 0, 0)) g_kg_own[i][id / 8] |= (uint8_t)(1u << (id % 8)); }
+}
+static void kgsl_before(int has_hint) {
+    const char *e = getenv("DM_VK_GPU_FLOOR_KGSL"); g_kg_tried = !has_hint && !(e && !atoi(e)); if (!g_kg_tried) return;
+    kg_scan(); g_kg_wasn = g_kg_nfd; memcpy(g_kg_wasfd, g_kg_fd, sizeof g_kg_fd); memcpy(g_kg_was, g_kg_own, sizeof g_kg_own);
+}
+static void kgsl_after(int has_hint) {   // the contexts the new device made: owned now, not before
+    if (has_hint || !g_kg_tried) return;
+    kg_scan(); g_kg_n = 0;
+    for (int i = 0; i < g_kg_nfd; i++) {
+        int w = -1; for (int j = 0; j < g_kg_wasn; j++) if (g_kg_wasfd[j] == g_kg_fd[i]) w = j;
+        for (unsigned id = 1; id < KG_IDS && g_kg_n < KG_CTX; id++)
+            if ((g_kg_own[i][id / 8] >> (id % 8) & 1) && !(w >= 0 && (g_kg_was[w][id / 8] >> (id % 8) & 1))) { g_kg[g_kg_n].fd = g_kg_fd[i]; g_kg[g_kg_n].id = id; g_kg_n++; }
+    }
+    if (g_kg_n) { int r = kg_set(g_kg[0].fd, g_kg[0].id, 1, 50); g_kg_host = r == -EINVAL; kg_set(g_kg[0].fd, g_kg[0].id, 0, 0); }   // 2-100 % with GMU DCVS, else only 1 (highest)
+    VKLOG("GPU clock floor through KGSL: %d of the queue's kernel contexts (%d descriptors; %s)", g_kg_n, g_kg_nfd, g_kg_host ? "highest clock only" : "a floor in % of the highest clock");
+}
+// Once a frame (dm_perf_frame): the floor, sent when it changes and again every 30 frames
+void vk_gpu_floor(void) {
+    if (!g_perf_hint && !g_kg_n) return;
+    const char *e = getenv("DM_VK_GPU_FLOOR"), *t = getenv("DM_GPU_TURBO"); int s = e ? atoi(e) : t && atoi(t) > 0 ? 100 : 0; s = s < 0 ? 0 : s > 100 ? 100 : s;
+    static int cur = -1; static unsigned n; int again = ++n % 30 == 0;
+    if (s == cur && !again) return;
+    VkResult r = VK_SUCCESS;
+    pthread_mutex_lock(&g_vk_queue_mu);
+    if (g_perf_hint) {
+        struct { VkStructureType sType; void *pNext; uint32_t type, scale; } h = {(VkStructureType)1000302000, NULL, s >= 100 ? 2u : s > 0 ? 3u : 0u, s > 0 && s < 100 ? (uint32_t)s : 0u};   // VkPerfHintInfoQCOM: default, frequency max, scaled
+        r = ((VkResult (*)(VkQueue, const void *))g_perf_hint)(V.q, &h);
+    } else for (int k = 0; k < g_kg_n; k++) { int q = s <= 0 ? kg_set(g_kg[k].fd, g_kg[k].id, 0, 0) : kg_set(g_kg[k].fd, g_kg[k].id, 1, s >= 100 || g_kg_host ? 1u : (unsigned)(s < 2 ? 2 : s)); if (q) r = VK_ERROR_UNKNOWN; }
+    pthread_mutex_unlock(&g_vk_queue_mu);
+    if (s != cur) VKLOG("GPU clock floor%s: %d %% (%s): %d", g_perf_hint ? "" : " (KGSL)", s, s >= 100 ? "highest" : s ? "scaled" : "the driver's governor", r);
+    cur = s;
+}
 static int has_ext(const VkExtensionProperties *e, uint32_t n, const char *name) { for (uint32_t i = 0; i < n; i++) if (!strcmp(e[i].extensionName, name)) return 1; return 0; }
 static int is_on(const char *const *on, uint32_t n, const char *name) { for (uint32_t i = 0; i < n; i++) if (!strcmp(on[i], name)) return 1; return 0; }
 // a feature struct as vk_init queries it (sType, pNext, then VkBool32s; the largest, descriptor indexing, has 20); featx: its VkBool32s, all off if it is not chained
@@ -134,6 +196,7 @@ void vk_init(void) {
                           "VK_GOOGLE_display_timing"};
     const char *on[64]; uint32_t non = 0;
     for (unsigned i = 0; i < sizeof want / sizeof *want; i++) if (has_ext(ex, ne, want[i])) on[non++] = want[i]; else VKLOG("device has no %s", want[i]);
+    int x_ph = has_ext(ex, ne, "VK_QCOM_queue_perf_hint"); if (x_ph && non < 64) on[non++] = "VK_QCOM_queue_perf_hint";   // the GPU clock floor (vk_gpu_floor)
     if (has_ext(ex, ne, "VK_EXT_memory_budget") && non < 64) { on[non++] = "VK_EXT_memory_budget"; g_has_budget = 1; }   // vk_mem_report: what the driver holds for this process, which no process count shows
     // A Vulkan 1.1 or 1.2 device (Legion Y700 2023, Adreno 730: its stock driver reports 1.1) has what the replay uses from 1.2 / 1.3 as extensions: they are enabled
     // when present, so the features chained below and the functions loaded by their KHR names are valid there. A 1.3 device needs none of them
@@ -214,12 +277,18 @@ void vk_init(void) {
     fxf.pNext = &fu8;
     VkBaseOutStructure *t = ff.pNext; while (t->pNext) t = t->pNext;   // the queried chain (core / promoted features), then the extensions'
     t->pNext = V.has_xfb ? (VkBaseOutStructure *)&fxf : (VkBaseOutStructure *)&fu8;
-    VkPhysicalDeviceFeatures2 enf = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, ff.pNext, en};
+    struct { VkStructureType sType; void *pNext; VkBool32 queuePerfHint; } fph = {(VkStructureType)1000302001, NULL, 0};   // VkPhysicalDeviceQueuePerfHintFeaturesQCOM (not in the NDK's headers)
+    if (x_ph) { VkPhysicalDeviceFeatures2 q = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &fph}; vkGetPhysicalDeviceFeatures2(V.pd, &q); fph.pNext = ff.pNext; }
+    VkPhysicalDeviceFeatures2 enf = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, x_ph && fph.queuePerfHint ? (void *)&fph : ff.pNext, en};
     float prio = 1;
     VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, NULL, 0, V.qf, 1, &prio};
     VkDeviceCreateInfo dci = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &enf, 0, 1, &qci, 0, NULL, non, on, NULL};
+    kgsl_before(x_ph && fph.queuePerfHint);
     VKCHK(vkCreateDevice(V.pd, &dci, NULL, &V.dev));
     vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)p_vkGetInstanceProcAddr(V.inst, "vkGetDeviceProcAddr");
+    if (x_ph && fph.queuePerfHint) g_perf_hint = (void *)vkGetDeviceProcAddr(V.dev, "vkQueueSetPerfHintQCOM");
+    VKLOG("GPU clock floor (VK_QCOM_queue_perf_hint): %s", g_perf_hint ? "available" : x_ph ? "extension without the feature" : "not on this device");
+    kgsl_after(g_perf_hint != NULL);
 #define VK_LOADD(f) f = (PFN_##f)vkGetDeviceProcAddr(V.dev, #f); if (!f) f = (PFN_##f)vkGetDeviceProcAddr(V.dev, #f "KHR"); if (!f) f = (PFN_##f)p_vkGetInstanceProcAddr(V.inst, #f);   // a promoted function by its extension's name (Vulkan 1.1 / 1.2 devices)
     VK_DEV_FNS(VK_LOADD)
     { void vk_dq_init(void); vk_dq_init(); }   // DM_VK_MT_REPLAY: the vkCmd* calls through the recorder thread (gfx_vk_dq.c)

@@ -266,6 +266,7 @@ void dm_perf_frame(double period) {
     if (g_game_period && (int64_t)g_game_period < p) p = (int64_t)g_game_period;
     hint_init(p);
     { static unsigned n; if (++n % 60 == 0) gpu_turbo(); }
+    { void vk_gpu_floor(void); vk_gpu_floor(); }   // gfx_vk_core.c
     if (g_work_start) {   // (a longer span: the game was held, by the pause menu or the background)
         int64_t w = g_prev_present ? t - g_prev_present - g_pace : t - g_work_start;
         int64_t pq = g_prev_present ? g_pq : 0, pace = g_step > 0 ? pq : 0;   // (t - g_work_start starts after the wait already)
