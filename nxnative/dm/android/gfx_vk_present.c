@@ -361,7 +361,7 @@ static void cv_panel(const ov_canvas *cv, float x0, float y0, float x1, float y1
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
 static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "FPS lock", "Delete save", "Shadows", "Speed boost", "Resume", ""};
-static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[4] = {"Low", "Medium", "High", "Max"}, *const OV_SCALES[4] = {"720p", "630p", "540p", "Full"}, *const OV_FGS[5] = {"Off", "Basic", "LSFG 2x", "LSFG 3x", "LSFG 4x"}, *const OV_CAPS[4] = {"Auto", "60", "40", "30"}, *const OV_SHADOWS[4] = {"Normal", "Strong", "Plain", "Off"};
+static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[6] = {"Low", "Medium", "High", "Max", "Ultra", "Extreme"}, *const OV_SCALES[4] = {"720p", "630p", "540p", "Full"}, *const OV_FGS[5] = {"Off", "Basic", "LSFG 2x", "LSFG 3x", "LSFG 4x"}, *const OV_CAPS[4] = {"Auto", "60", "40", "30"}, *const OV_SHADOWS[4] = {"Normal", "Strong", "Plain", "Off"};
 static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import", [OVM_DELSAVE] = "Delete"};   // the rows that are a button: its word
 static const char *const OVM_MODES[2] = {"Handheld", "Docked"};
 static void ov_menu_panel(const ov_canvas *cv, int st) {
@@ -825,8 +825,9 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
     VkImageBlit b = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{cx, cy, 0}, {cx + cw, cy + ch, 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{dx, dy, 0}, {dx + dw, dy + dh, 1}}};
     if (vk_window_bottom_up()) { b.srcOffsets[0].y = cy + ch; b.srcOffsets[1].y = cy; }   // lower-left origin: the window image is stored bottom-up (gfx_vk_exec.c)
     VkImageLayout lay = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; int fsr = 0;
-    if (dm_disp(DISP_FSR) && dw >= cw && dh >= ch && (mview || (mview = fx_view_of(im, 1)))) { static const float stops[4] = {1.5f, 1.0f, 0.5f, 0.1f};
-        fsr = fsr_draw(cb, k, im->img, mview, im->w, im->h, cx, cy, cw, ch, dx, dy, dw, dh, idx, &lay, stops[dm_disp(DISP_SHARP)]); }
+    if (dm_disp(DISP_FSR) && dw >= cw && dh >= ch && (mview || (mview = fx_view_of(im, 1)))) { static const float stops[4] = {1.5f, 1.0f, 0.5f, 0.1f}; int sh = dm_disp(DISP_SHARP); static const int lines[4] = {720, 630, 540, 1080};
+        float wide = 0.7f * (float)dh / (float)lines[dm_disp(DISP_SCALE) & 3];   // Ultra and Extreme reach as far as the render size has made an edge wide
+        fsr = fsr_draw(cb, k, im->img, mview, im->w, im->h, cx, cy, cw, ch, dx, dy, dw, dh, idx, &lay, stops[sh < 4 ? sh : 3], wide < 1 ? 1 : wide, sh == 4 ? 1.5f : sh == 5 ? 3.0f : 0); }
     if (!fsr) vkCmdBlitImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR);
     int ovm = dm_overlay_visible(), menu = dm_menu_state(), fps = dm_overlay_fps();
     if ((ovm || menu >= 0 || fps) && overlay_ready(cb, k, menu) && (V.has_dynrender || ov_fb(idx))) {   // without dynamic rendering, only with the image's framebuffer
