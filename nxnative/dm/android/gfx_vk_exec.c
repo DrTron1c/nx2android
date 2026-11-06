@@ -403,6 +403,9 @@ static inline float half2f(uint16_t h) { uint32_t s = (uint32_t)(h >> 15) << 31,
 void vk_pass_dump_poll(uint64_t done_fence) {   // gfx_vk_present.c, every present: start on the switch, write once the GPU finished
     const char *e = getenv("DM_VK_PASSDUMP");
     if (g_pd_state == 0 && e && atoi(e) > 1) { char n[16]; snprintf(n, sizeof n, "%d", atoi(e) - 1); setenv("DM_VK_PASSDUMP", n, 1); return; }   // =N: the frame after N - 1 more presents
+    if (g_pd_state == 0 && e && atoi(e) == 1) {   // the capture holds up to 48 full targets until the GPU is done: on a device short of memory that is what gets the game killed (Pokopia, 450 MB left)
+        long kb = 0; char l[128]; FILE *mf = fopen("/proc/meminfo", "r"); while (mf && fgets(l, sizeof l, mf)) if (sscanf(l, "MemAvailable: %ld", &kb) == 1) break; if (mf) fclose(mf);
+        if (kb && kb < 1536 * 1024) { static unsigned pd_low; if (!(pd_low++ & 1023)) VKLOG("[RED] pass dump waits: only %ld MB of memory left", kb >> 10); return; } }
     if (g_pd_state == 0 && e && atoi(e)) { const char *sk = getenv("DM_VK_PASSDUMP_SKIP"); g_pd_skip = sk && !strchr(sk, 'x') ? atoi(sk) : 0;
         snprintf(g_pd_from, sizeof g_pd_from, "%s", sk && strchr(sk, 'x') ? sk : "");
         const char *sz = getenv("DM_VK_PASSDUMP_SIZE"); snprintf(g_pd_size, sizeof g_pd_size, "%s", sz && strcmp(sz, "0") ? sz : "");

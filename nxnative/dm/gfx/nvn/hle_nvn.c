@@ -252,13 +252,15 @@ NVN(nvnMemoryPoolBuilderSetFlags, void, NVNmemoryPoolBuilder *b, int f) { ((pool
 static uint8_t *vpool_reserve(pool_t *o); static void vpool_release(pool_t *o);   // sparse virtual pools, see MapVirtual
 static void replay_lock(void); static void replay_unlock(void);   // the replay's state, from a game thread (see "Asynchronous replay")
 static void nvn_drain(void);
+__attribute__((weak)) void vk_pool_file(void *mem, uint64_t size) { (void)mem; (void)size; }   // Android's Vulkan host: a big pool's memory in a file (DM_VK_POOL_FILE)
+__attribute__((weak)) int dm_replay_overlap(void) { return 0; }   // Android: the pause menu's Speed boost (see the wait in WindowAcquireTexture)
 __attribute__((weak)) void vk_pool_set_flags(const void *mem, int flags) { (void)mem; (void)flags; }   // Android's Vulkan host (gfx_vk_core.c): copied pools by their flags
 __attribute__((weak)) void dm_perf_replay_thread(void) {}   // Android (perf_android.c): the replay thread's CPU placement
 NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
     const pool_builder_t *s = (const pool_builder_t *)b; pool_t *o = (pool_t *)p;
     o->magic = MAGIC('P', 'O', 'O', 'L'); o->flags = s->flags; o->mem = s->mem; o->size = s->size; o->vp = NULL; o->vmode = 0;
     if (!o->mem && (o->flags & 0x200)) { uint8_t *vr = vpool_reserve(o); if (vr) o->mem = vr; }   // a virtual pool's own address range until its first mapping decides (see MapVirtual)
-    else if (o->mem) { replay_lock(); mtl_pool_add(o->mem, o->size); vk_pool_set_flags(o->mem, o->flags); replay_unlock(); nvn_dirty_add_range(o->mem, o->size); }
+    else if (o->mem) { replay_lock(); if (!(o->flags & 0x300)) vk_pool_file((void *)(uintptr_t)o->mem, o->size); mtl_pool_add(o->mem, o->size); vk_pool_set_flags(o->mem, o->flags); replay_unlock(); nvn_dirty_add_range(o->mem, o->size); }
     if (!o->mem && !(o->flags & 0x200)) LOG("[RED] MemoryPoolInitialize: non-virtual pool has no storage flags=%#x size=%#llx", o->flags, o->size);
     if (getenv("DM_NVN_VLOG")) { LOG("[nvn] MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, (unsigned long long)o->size, o->flags); void dm_backtrace(uint64_t fp); dm_backtrace((uint64_t)__builtin_frame_address(0)); }
     OLOG("MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, o->size, o->flags);
@@ -1656,8 +1658,9 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // With the replay on its own thread, the next frame starts only once every job queued so far is replayed (not its GPU work): the game's work after this
     // returns read or wrote something the replay of the frame before still used. Xenoblade Chronicles 3 drew whole-screen garbage while the camera turned when
     // the wait was at its next submission instead (2 of 6 recordings) or absent (2 of 8 with the versioned texture table, about half without), none in 20 with it
-    // here; its work between presenting and acquiring (~13 ms a frame) still overlaps the replay. DM_NVN_ACQ_REPLAYED=0: no wait
-    { static int w = -1; if (w < 0) { const char *ar = getenv("DM_NVN_ACQ_REPLAYED"); w = !(ar && !atoi(ar)); } if (w && nvn_async()) job_wait(g_job_enq, ~0ull); }
+    // here; its work between presenting and acquiring (~13 ms a frame) still overlaps the replay. DM_NVN_ACQ_REPLAYED=0: no wait. Android's pause menu turns it off live (Speed boost):
+    // Pokopia's game thread otherwise stands still for the replay's 20 ms, so a frame is the two added up
+    { static int w = -1; if (w < 0) { const char *ar = getenv("DM_NVN_ACQ_REPLAYED"); w = !(ar && !atoi(ar)); } if (w && !dm_replay_overlap() && nvn_async()) job_wait(g_job_enq, ~0ull); }
     if (s) { ((sync_t *)s)->fenced = 2; ((sync_t *)s)->fence = acq_now || *idx >= 4 ? nvn_fence_now() : o->done[*idx]; }
     SEQ("acquire %d sync %p", *idx, (void *)s);   // The swapchain texture becomes available once the commits before this point have completed
     if (!g_fs_start) { g_fs_start = now_ns(); g_fs_wait = pace_ns; dm_perf_frame_start(pace_ns, pq_ns); }   // the frame starts when the first acquire after a present returns: on a display-link tick when on time

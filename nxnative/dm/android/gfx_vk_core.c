@@ -13,10 +13,13 @@
 #include <android/hardware_buffer.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -285,6 +288,40 @@ static void swap_wait(void) { while (atomic_load(&g_swap_hi)) sched_yield(); }
 static int swap_fault(void *addr, int is_write, void *uc) { (void)uc; if (!is_write || !swap_has((uint64_t)(uintptr_t)addr)) return 0; swap_wait(); return 1; }
 static void swap_prep(void *addr, size_t len) { uint64_t a = (uint64_t)(uintptr_t)addr; if (atomic_load(&g_swap_hi) && a < atomic_load(&g_swap_hi) && a + len > atomic_load(&g_swap_lo)) swap_wait(); }
 static int pool_lazy_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_LAZY_POOLS"); on = e && atoi(e); if (on) { dm_fault_hook_register(swap_fault); dm_guest_write_prep_register(swap_prep); } } return on; }
+// DM_VK_POOL_FILE=1: a lazy pool's pages live in a deleted file of the app's own storage (DM_TEMP) rather than in anonymous memory. Swap on Android is RAM: texture data barely compresses, so
+// Pokopia's 3.7 GB in swap held about as much RAM (the log: 6.6 GB came back when it was killed, 2.8 GB of it outside swap), and Android killed it for low memory with 450 MB left. A file's
+// pages the system can simply drop and read again. What the GPU uses still moves to a hardware buffer (pool_zero_copy), and the file goes with the process, however it ends
+enum { PF_MAX = 32 };
+static struct { uint64_t lo, hi; int fd; } g_pf[PF_MAX]; static int g_npf; static uint64_t g_pf_bytes;
+void vk_pool_file(void *mem, uint64_t size) {
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_POOL_FILE"); on = e && atoi(e); }
+    uint64_t a = (uint64_t)(uintptr_t)mem; const char *dir = getenv("DM_TEMP");
+    if (!on || !pool_lazy_on() || !dir || size < (64ull << 20) || ((a | size) & 0xfff) || g_npf == PF_MAX) return;
+    for (int i = 0; i < g_npf; i++) if (a < g_pf[i].hi && a + size > g_pf[i].lo) return;   // the same memory made a pool again: it is in its file already
+    struct statvfs sv; if (statvfs(dir, &sv) || (uint64_t)sv.f_bavail * sv.f_frsize < size + (2ull << 30)) { VKLOG("[RED] memory pool %p +%#llx stays in memory: the device has too little free storage for its file", mem, (unsigned long long)size); return; }
+    char path[900]; snprintf(path, sizeof path, "%s/pool-%llx.tmp", dir, (unsigned long long)a);
+    uint64_t t0 = tnow(); int fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) { VKLOG("[RED] memory pool %p stays in memory: no file (errno %d)", mem, errno); return; }
+    unlink(path);
+    int rc = posix_fallocate(fd, 0, (off_t)size);   // the room is taken now: a full disk could otherwise only show as a crash at a later write
+    if (rc) { VKLOG("[RED] memory pool %p stays in memory: no room for its file (%d)", mem, rc); close(fd); return; }
+    pthread_rwlock_wrlock(&g_pool_mu);   // one chunk swap at a time (g_swap_lo): the same hold as a chunk that gets its hardware buffer
+    atomic_store(&g_swap_lo, a); atomic_store(&g_swap_hi, a + size);
+    int ok = !mprotect(mem, size, PROT_READ); uint64_t kept = 0;
+    for (uint64_t o = 0; ok && o < size; o += 1ull << 20) {   // what the pool already holds: the rest is zeros, and the file reads as zeros
+        uint64_t n = size - o < 1ull << 20 ? size - o : 1ull << 20; const uint64_t *q = (const uint64_t *)((const uint8_t *)mem + o); int used = 0;
+        for (uint64_t k = 0; k < n / 8 && !used; k++) used = q[k] != 0;
+        for (uint64_t at = 0; used && at < n;) { ssize_t w = pwrite(fd, (const uint8_t *)mem + o + at, n - at, (off_t)(o + at)); if (w <= 0) { ok = 0; break; } at += (uint64_t)w; }
+        if (used) kept += n;
+    }
+    if (ok && mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) != mem) die("[vk] memory pool %p: cannot map its file (errno %d)", mem, errno);
+    if (!ok) mprotect(mem, size, PROT_READ | PROT_WRITE);
+    atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
+    pthread_rwlock_unlock(&g_pool_mu);
+    if (!ok) { VKLOG("[RED] memory pool %p stays in memory: its file could not be written (errno %d)", mem, errno); close(fd); return; }
+    g_pf[g_npf].lo = a; g_pf[g_npf].hi = a + size; g_pf[g_npf].fd = fd; g_npf++; g_pf_bytes += size;
+    VKLOG("memory pool %p +%#llx kept in a file: %llu MB held already, %.0f ms (%llu MB in such files)", mem, (unsigned long long)size, (unsigned long long)(kept >> 20), (double)(tnow() - t0) / 1e6, (unsigned long long)(g_pf_bytes >> 20));
+}
 // Zero copy: the pages of [mem, mem+size) become an AHardwareBuffer's, imported as a VkBuffer. 0 on success. On a chunk already in use (p->lazy) the pages move last, once nothing can fail
 static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     AHardwareBuffer_Desc d = {(uint32_t)size, 1, 1, AHARDWAREBUFFER_FORMAT_BLOB,
@@ -425,10 +462,11 @@ void vk_mem_report(void) {
     char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
     FILE *f = fopen("/proc/self/status", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); for (int i = 0; i < 5; i++) { char *p = strstr(b, k[i]); if (p) v[i] = atol(p + strlen(k[i])); } }
+    static long last_maj; struct rusage ru; long maj = 0; if (!getrusage(RUSAGE_SELF, &ru)) { maj = ru.ru_majflt - last_maj; last_maj = ru.ru_majflt; }
     long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }
     VKLOG("shaders loaded %llu, reading raw memory %llu, with bindings not understood %llu; raw memory table %d chunks of %d", (unsigned long long)g_sh_loaded, (unsigned long long)g_sh_raw, (unsigned long long)g_sh_unknown, g_gmem_n, g_npool);
-    VKLOG("[mem] process %ld MB (anon %ld, file %ld, shared %ld, swapped %ld); hardware buffers made on first use %llu MB; system available %ld MB, swap free %ld MB", v[0] >> 10, v[1] >> 10, v[2] >> 10, v[3] >> 10, v[4] >> 10, (unsigned long long)g_lazy_mb, avail >> 10, swapf >> 10);
+    VKLOG("[mem] process %ld MB (anon %ld, file %ld, shared %ld, swapped %ld); hardware buffers made on first use %llu MB, pools in files %llu MB; system available %ld MB, swap free %ld MB; %ld waits for memory on disk or swap since the last line", v[0] >> 10, v[1] >> 10, v[2] >> 10, v[3] >> 10, v[4] >> 10, (unsigned long long)g_lazy_mb, (unsigned long long)(g_pf_bytes >> 20), avail >> 10, swapf >> 10, maj);
 }
 // The hardware buffer of a lazy chunk, made at the first lookup that finds it (vk_pool_of). Under the write lock: nothing else is finding pools, and an entry cannot move
 static vkpool_t *pool_materialize(uint64_t lo) {

@@ -56,6 +56,7 @@ static _Atomic int g_set_opacity = 60;   // the gamepad's opacity, percent (OV_O
 static _Atomic int g_set_grid;   // the layout editor's Snap to grid
 static _Atomic int g_disp[DISP_N] = {[DISP_SHARP] = 1}, g_disp_ver;   // the Display tab (overlay_layout.h dm_disp) and the floating sticks
 static int g_float_ptr[2] = {-1, -1}; static _Atomic int g_float_at[2][2];   // the finger on each floating stick, and where it went down, 1/10000 of the window
+int dm_replay_overlap(void) { return dm_disp(DISP_BOOST); }
 int dm_disp(int what) { return what >= 0 && what < DISP_N ? atomic_load(&g_disp[what]) : 0; }
 // the player's own layout (overlay_layout.h dm_overlay_custom): [0] the saved one (settings.txt ui= rows), [1] the layout editor's while it is open; per layout
 // and control: x + 1, y + 1 in 1/10000 of the window's width and height (0 = the layout's place), the size factor in 1/1000 (0 = 1)
@@ -84,6 +85,7 @@ static void settings_load(void) {
         else if (sscanf(line, "sharp=%d", &v) == 1 && v >= 0 && v < 4) atomic_store(&g_disp[DISP_SHARP], v);
         else if (sscanf(line, "framegen=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_FG], v);
         else if (sscanf(line, "shadows=%d", &v) == 1 && v >= 0 && v < 4) atomic_store(&g_disp[DISP_SHADOWS], v);
+        else if (sscanf(line, "boost=%d", &v) == 1 && (v == 0 || v == 1)) atomic_store(&g_disp[DISP_BOOST], v);
         else if (sscanf(line, "cap=%d", &v) == 1 && v >= 0 && v < 4) { atomic_store(&g_disp[DISP_CAP], v); dm_perf_fps_cap(CAP_FPS[v]); }
         else if (sscanf(line, "float=%d", &v) == 1) atomic_store(&g_disp[DISP_FLOAT], v != 0);
         else if (!strncmp(line, "ui=", 3)) {   // ui=<layout>,<control>,<x>,<y>,<size>: x, y in 1/10000 of the window (-1 the layout's place), size in 1/1000
@@ -104,7 +106,7 @@ static void settings_save(void) {
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\nopacity=%d\ngrid=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps),
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
     { const char *ep = getenv("DM_SETTINGS_EPOCH"); if (ep) fprintf(f, "epoch=%s\n", ep); }
-    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\ncap=%d\nshadows=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE), dm_disp(DISP_CAP), dm_disp(DISP_SHADOWS));
+    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\ncap=%d\nshadows=%d\nboost=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE), dm_disp(DISP_CAP), dm_disp(DISP_SHADOWS), dm_disp(DISP_BOOST));
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);
         if ((x && y) || z) fprintf(f, "ui=%s,%s,%d,%d,%d\n", LAYOUT_NAMES[l], OV_LAYOUTS[0][i].name, x && y ? x - 1 : -1, x && y ? y - 1 : -1, z ? z : 1000);
@@ -343,8 +345,8 @@ static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
-    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS) {
-        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : item == OVM_SHADOWS ? DISP_SHADOWS : DISP_SHARP;
+    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS || item == OVM_BOOST) {
+        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : item == OVM_BOOST ? DISP_BOOST : item == OVM_SHADOWS ? DISP_SHADOWS : DISP_SHARP;
         int n = item == OVM_ASPECT ? 5 : item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS ? 4 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
         atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); if (item == OVM_CAP) dm_perf_fps_cap(CAP_FPS[atomic_load(&g_disp[w])]); atomic_fetch_add(&g_disp_ver, 1); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
@@ -991,7 +993,15 @@ static int sync_begin(ANativeActivity *act) {   // 1: the builder app is serving
     return 1;
 }
 
-__attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActivity *act, void *saved, size_t saved_size) {
+__attribute__((visibility("default"))) // A run that ended in the crash report (host/crash.c), which is the end of its log
+static int log_crashed(const char *path) {
+    FILE *f = fopen(path, "rb"); if (!f) return 0;
+    static char b[1 << 18]; fseek(f, 0, SEEK_END); long n = ftell(f); if (n > (long)sizeof b - 1) fseek(f, n - (long)sizeof b + 1, SEEK_SET); else rewind(f);
+    size_t got = fread(b, 1, sizeof b - 1, f); fclose(f); b[got] = 0;
+    for (size_t i = 0; i + 10 < got; i++) if (b[i] == '[' && !memcmp(b + i, "[dm] CRASH", 10)) return 1;
+    return 0;
+}
+void ANativeActivity_onCreate(ANativeActivity *act, void *saved, size_t saved_size) {
     (void)saved; (void)saved_size;
     g_act = act;
     { AConfiguration *cfg = AConfiguration_new(); AConfiguration_fromAssetManager(cfg, act->assetManager); g_dpi = AConfiguration_getDensity(cfg); AConfiguration_delete(cfg); }
@@ -1003,7 +1013,9 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     static int started; if (started++) return;   // a second onCreate (configuration change) keeps the running game
     snprintf(g_root, sizeof g_root, "%s", act->externalDataPath ? act->externalDataPath : act->internalDataPath);
     char p[700];
-    snprintf(p, sizeof p, "%s/log.txt", g_root); char prev[720]; snprintf(prev, sizeof prev, "%s/log.prev.txt", g_root); rename(p, prev);
+    snprintf(p, sizeof p, "%s/log.txt", g_root); char prev[720]; snprintf(prev, sizeof prev, "%s/log.prev.txt", g_root);
+    if (log_crashed(p)) { snprintf(prev, sizeof prev, "%s/log.crash.txt", g_root); }   // the game log's only record of a crash: two more starts would otherwise roll it away
+    rename(p, prev);
     if (!freopen(p, "w", stderr)) __android_log_print(ANDROID_LOG_ERROR, "dmhost", "cannot write %s", p);
     setvbuf(stderr, NULL, _IOLBF, 0);
     if (sync_begin(act)) return;

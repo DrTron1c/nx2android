@@ -8,6 +8,7 @@ env	DM_VK_LAZY_POOLS=1
 env	DM_NVN_DROP_CODE=1
 # buffers and textures share pools: with small chunks the textures stay out of hardware buffers (gfx_vk_core.c lazy_chunk)
 env	DM_VK_POOL_CHUNK_MB=8
+env	DM_VK_POOL_FILE=1
 # the sun's shadow map: the stopgap for the stripes (gfx_vk_exec.c shadow_pass)
 env	DM_VK_SHADOW_BIAS=3,8
 # a compute pipeline can take the driver over a minute: built beside the frame, not in it (gfx_vk_exec.c compute_async)
@@ -27,12 +28,9 @@ env	DM_VK_THIN_COMPUTE=3:2118ab534fac88c6,d0c17f1fff8e5db5
 env	DM_NVN_ASYNC=1
 env	DM_PIN_REPLAY=prime
 # which passes the GPU's time goes to, for the next round of cuts: remove with them
-env	DM_VK_PASS_TIMES=1
-env	DM_VK_PASS_SPIKE=60
 # the frame's Vulkan calls on a thread of their own (gfx_vk_dq.c): replaying takes 14 to 19 ms of a 40 ms frame
 env	DM_VK_MT_REPLAY=1
 # one frame's passes in play, for the stripes on Ditto: remove with them
-env	DM_VK_PASSDUMP=5000
 # the gamepad as in the player's picture (themes/pokopia, devtools/pokopia_hud.py). L3 and R3 are not in it: size 0, no touch
 overlay	tablet zl 0.0781 0.1494 0.1660 0.1318
 overlay	tablet l 0.0781 0.2939 0.1660 0.1318
