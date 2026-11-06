@@ -121,6 +121,7 @@ __attribute__((weak)) void dm_overlay_redraw(void) {}   // the backend presents 
 static _Atomic int g_running, g_bg, g_menu;
 static pthread_mutex_t g_hold_mu = PTHREAD_MUTEX_INITIALIZER; static int g_held;
 static _Atomic int g_tx_on;   // text entry open (front_text_input): the game is held as by the menu
+int dm_game_held(void) { return atomic_load(&g_bg) || atomic_load(&g_menu) || atomic_load(&g_tx_on); }
 static void hold_sync(void) {
     pthread_mutex_lock(&g_hold_mu);
     int want = atomic_load(&g_bg) || atomic_load(&g_menu) || atomic_load(&g_tx_on);

@@ -20,10 +20,12 @@ static void hang_tasks(void) {
     }
     closedir(d);
 }
+__attribute__((weak)) int dm_game_held(void) { return 0; }   // front_android.c
 static void *hang_watch(void *arg) {
     (void)arg; int dumps = 0; uint64_t said = 0;
     for (;;) {
         sleep(3); uint64_t last = atomic_load(&g_hang_last), now = hang_now();
+        if (dm_game_held()) { atomic_store(&g_hang_last, now); dumps = 0; continue; }   // the pause menu or the background holds the game: no frames is what should happen, and the report stops threads in turn, which took Android's input past its 5 s limit (Pokopia: "not responding" while choosing a setting)
         if (now - last < 12) { dumps = 0; continue; }
         if (dumps >= 3 || now - said < 15) continue;
         dumps++; said = now; fprintf(stderr, "[dm] [hang] no frame for %llu s\n", (unsigned long long)(now - last));
