@@ -536,6 +536,29 @@ void vk_mem_report(void) {
         long v2[3] = {0, 0, 0}; static const char *const gp[3] = {"/sys/class/kgsl/kgsl-3d0/gpuclk", "/sys/class/kgsl/kgsl-3d0/max_gpuclk", "/sys/class/kgsl/kgsl-3d0/temp"};
         for (int i = 0; i < 3; i++) { FILE *gf = fopen(gp[i], "r"); if (gf) { if (fscanf(gf, "%ld", &v2[i]) != 1) v2[i] = 0; fclose(gf); } }
         VKLOG("[gpu] clock %ld MHz of at most %ld MHz, temperature %ld (0: not readable)", v2[0] / 1000000, v2[1] / 1000000, v2[2] > 1000 ? v2[2] / 1000 : v2[2]); }
+    {   // which threads wait for memory on disk or in swap (major faults since the last line), the five that waited most; and the swap's size, and what of it is on storage
+        // (zram's backing device: Xiaomi's Memory extension), since a wait there is a read from flash. Pokopia's replay took 4x as long in runs with 70-130 thousand of them per line
+        enum { NT = 256 }; static struct { int tid; unsigned long maj; } was[NT]; static int nwas; struct { int tid; unsigned long d; char nm[20]; } top[5]; int ntop = 0;
+        DIR *d = opendir("/proc/self/task"); struct dirent *de; int nnow = 0; static struct { int tid; unsigned long maj; } now[NT];
+        while (d && (de = readdir(d)) && nnow < NT) {
+            if (de->d_name[0] == '.') continue;
+            char p[80], b[512]; snprintf(p, sizeof p, "/proc/self/task/%s/stat", de->d_name); FILE *sf = fopen(p, "r"); if (!sf) continue;
+            size_t n = fread(b, 1, sizeof b - 1, sf); fclose(sf); b[n] = 0; char *l = strchr(b, '('), *r = strrchr(b, ')'); if (!l || !r) continue;
+            unsigned long mj = 0; if (sscanf(r + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %lu", &mj) != 1) continue;
+            int tid = atoi(de->d_name); now[nnow].tid = tid; now[nnow].maj = mj; nnow++;
+            unsigned long prev = 0; for (int i = 0; i < nwas; i++) if (was[i].tid == tid) { prev = was[i].maj; break; }
+            unsigned long dd = mj >= prev ? mj - prev : mj; if (!dd) continue;
+            int at = ntop < 5 ? ntop++ : 4; if (at == 4 && ntop == 5 && top[4].d >= dd) continue;
+            top[at].tid = tid; top[at].d = dd; *r = 0; snprintf(top[at].nm, sizeof top[at].nm, "%s", l + 1);
+            for (int i = at; i > 0 && top[i].d > top[i - 1].d; i--) { __typeof__(top[0]) x = top[i]; top[i] = top[i - 1]; top[i - 1] = x; }
+        }
+        if (d) closedir(d);
+        memcpy(was, now, sizeof *now * (size_t)nnow); nwas = nnow;
+        char line[600]; int o = snprintf(line, sizeof line, "[mem] waits for memory by thread:");
+        for (int i = 0; i < ntop && o < (int)sizeof line - 60; i++) o += snprintf(line + o, sizeof line - (size_t)o, " '%s' %lu;", top[i].nm, top[i].d);
+        long st = 0; char mb[4096]; FILE *mf = fopen("/proc/meminfo", "r"); if (mf) { size_t n = fread(mb, 1, sizeof mb - 1, mf); mb[n] = 0; fclose(mf); char *q = strstr(mb, "SwapTotal:"); if (q) st = atol(q + 10); }
+        char bd[96] = "not readable"; FILE *zf = fopen("/sys/block/zram0/backing_dev", "r"); if (zf) { if (!fgets(bd, sizeof bd, zf)) snprintf(bd, sizeof bd, "?"); fclose(zf); bd[strcspn(bd, "\n")] = 0; }
+        VKLOG("%s swap %ld MB in all, zram's storage backing: %s", line, st >> 10, bd); }
     static long last_maj; struct rusage ru; long maj = 0; if (!getrusage(RUSAGE_SELF, &ru)) { maj = ru.ru_majflt - last_maj; last_maj = ru.ru_majflt; }
     long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }
