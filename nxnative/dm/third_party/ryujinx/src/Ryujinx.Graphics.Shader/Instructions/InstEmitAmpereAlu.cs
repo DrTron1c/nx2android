@@ -546,11 +546,22 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
         // ---- moves ----
 
+        // MOV Rd, b: 72..76 are the lanes of its quad that write (normally all). Pokemon Pokopia's pixel shaders run a texture sample once per lane, each time with that lane's
+        // own derivatives, and keep each result with a MOV for that lane alone. From madebymochi/pokopia-android (MIT, Copyright (c) 2026 madebymochi)
         public static void AMov(EmitterContext context)
         {
             AmpereOp x = new(context.CurrOp);
+            Operand src = AGet(context, AOne(context, x, neg: false, abs: false));
+            int lanes = x.Bits(72, 76);
 
-            ASet(context, x, AGet(context, AOne(context, x, neg: false, abs: false)));
+            if (lanes != 0xf)
+            {
+                Operand bit = context.ShiftRightU32(Const(lanes), context.BitwiseAnd(ALaneId(context), Const(3)));
+
+                src = context.ConditionalSelect(context.ICompareNotEqual(context.BitwiseAnd(bit, Const(1)), Const(0)), src, AGpr(x.Rd));
+            }
+
+            ASet(context, x, src);
         }
 
         // UMOV URd, imm (form 4) or URb (form 6)
