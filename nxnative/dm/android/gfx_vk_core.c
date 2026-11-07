@@ -558,8 +558,31 @@ static void gpu_report(void) {
     VKLOG("[gpu] the driver counts %llu MB for this process (0: it does not say); images %llu MB, scratch %llu MB, %d descriptor pools, %d graphics and %d compute pipelines", (unsigned long long)(used >> 20), (unsigned long long)(g_gpu_img >> 20), (unsigned long long)(g_gpu_scratch >> 20), g_ndpools, gfx, comp);
 }
 static int g_nslot; static uint64_t g_slot_wait_ns, g_slot_waits;   // defined with the submission slots below
+// What the process's address space holds, by kind (a thread of its own: thousands of mappings): the GPU driver's own memory (its kgsl mappings), hardware buffers (dma-bufs), the pools'
+// files, the shader bundle, anonymous memory. The game log shows the device's account of the game (Android's 6-7 GB) only with Wireless debugging; the game's own figures
+// accounted for 3-4 GB of it, so this is the rest: mapped size, resident and swapped, from /proc/self/smaps
+static void *maps_report(void *arg) {
+    (void)arg; FILE *f = fopen("/proc/self/smaps", "r"); if (!f) return NULL;
+    enum { K_KGSL, K_DMABUF, K_POOLF, K_SHADERS, K_ANON, K_FILE, K_N }; static const char *const nm[K_N] = {"GPU driver (kgsl)", "hardware buffers", "pool files", "shader bundle", "anonymous", "other files"};
+    uint64_t sz[K_N] = {0}, rss[K_N] = {0}, swp[K_N] = {0}; long n = 0; int kind = K_ANON; char l[512];
+    while (fgets(l, sizeof l, f)) {
+        unsigned long lo, hi; char *p;
+        if (sscanf(l, "%lx-%lx ", &lo, &hi) == 2 && (p = strchr(l, ' '))) {
+            n++; const char *name = ""; int sp = 0; for (char *q = l; *q && *q != '\n'; q++) if (*q == ' ') { sp++; if (sp == 5) { while (q[1] == ' ') q++; name = q + 1; break; } }
+            kind = strstr(name, "kgsl") ? K_KGSL : strstr(name, "dmabuf") || strstr(name, "dma_buf") ? K_DMABUF : strstr(name, "/pool-") ? K_POOLF : strstr(name, "shaders.dmsv") ? K_SHADERS : *name == '/' ? K_FILE : K_ANON;
+            sz[kind] += hi - lo; continue;
+        }
+        long v; if (sscanf(l, "Rss: %ld kB", &v) == 1) rss[kind] += (uint64_t)v; else if (sscanf(l, "Swap: %ld kB", &v) == 1) swp[kind] += (uint64_t)v;
+    }
+    fclose(f);
+    char o[900]; int w = snprintf(o, sizeof o, "[mem] address space (%ld mappings), mapped / resident / swapped MB:", n);
+    for (int i = 0; i < K_N; i++) w += snprintf(o + w, sizeof o - (size_t)w, " %s %llu / %llu / %llu;", nm[i], (unsigned long long)(sz[i] >> 20), (unsigned long long)(rss[i] >> 10), (unsigned long long)(swp[i] >> 10));
+    VKLOG("%s", o);
+    return NULL;
+}
 void vk_mem_report(void) {
     gpu_report();
+    { static unsigned n; if (n++ % 3 == 0) { pthread_t th; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED); if (pthread_create(&th, &a, maps_report, NULL)) {} pthread_attr_destroy(&a); } }
     char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
     FILE *f = fopen("/proc/self/status", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); for (int i = 0; i < 5; i++) { char *p = strstr(b, k[i]); if (p) v[i] = atol(p + strlen(k[i])); } }
@@ -1301,7 +1324,9 @@ static void *completion_main(void *a) {
         }
         pthread_mutex_lock(&g_cmu); g_ch = c->next; if (!g_ch) g_ct = NULL; pthread_mutex_unlock(&g_cmu);
         if (g_prereset > 0 && c->rslot >= 0) { vksub_t *s = &g_slot[c->rslot];   // its command buffers reset here (slot_recycle); the slot is not taken before g_done passes this fence
-            if (s->fence == c->fence) { for (int i = 0; i < s->nmain_alloc; i++) vkResetCommandBuffer(s->mains[i], 0); for (int i = 0; i < s->nup_alloc; i++) vkResetCommandBuffer(s->ups[i], 0); } }
+            if (s->fence == c->fence) {   // every 64th turn of a slot its command buffers also give the driver's memory back: kept, each holds what its largest recording took
+                static unsigned turns[NSLOT]; VkCommandBufferResetFlags rf = ++turns[c->rslot] % 64 == 0 ? VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT : 0;
+                for (int i = 0; i < s->nmain_alloc; i++) vkResetCommandBuffer(s->mains[i], rf); for (int i = 0; i < s->nup_alloc; i++) vkResetCommandBuffer(s->ups[i], rf); } }
         pthread_mutex_lock(&g_done_mu); if (c->fence > g_done) __atomic_store_n(&g_done, c->fence, __ATOMIC_RELEASE); pthread_cond_broadcast(&g_done_cv); pthread_mutex_unlock(&g_done_mu);
         free(c->ops); free(c);
     }
