@@ -46,6 +46,9 @@ static int g_has_budget;
 // GPU sleeps, so it is sent again: Pokopia's GPU time went from 12 to 37 ms a frame after 15 minutes, with the work unchanged, on the tablet's Adreno 740. DM_VK_GPU_FLOOR=s (live):
 // s % of the highest clock (0: the driver's own governor); by default 100 with DM_GPU_TURBO=1, else 0
 static void *g_perf_hint;   // vkQueueSetPerfHintQCOM
+static VkShaderStageFlags g_sg_pin_stages;   // the stages whose subgroup size is pinned to 64 (vk_sg_pin)
+static const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo g_sg64 = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO, NULL, 64};
+const void *vk_sg_pin(VkShaderStageFlagBits stage) { return g_sg_pin_stages & stage ? &g_sg64 : NULL; }
 struct kgsl_dc { unsigned int type, context_id; void *data; size_t size; };
 struct kgsl_gp { unsigned int type; void *value; size_t sizebytes; };
 #define KGSL_IOCTL_SETPROPERTY_ _IOW(0x09, 0x32, struct kgsl_gp)
@@ -284,6 +287,15 @@ void vk_init(void) {
     float prio = 1;
     VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, NULL, 0, V.qf, 1, &prio};
     VkDeviceCreateInfo dci = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &enf, 0, 1, &qci, 0, NULL, non, on, NULL};
+    {   // subgroup size: the shader library is built for 64-lane subgroups (ballots and shuffles in 32-lane halves, right on 32 or 64 lanes). Mesa's Turnip runs up to 128 lanes
+        // unless a pipeline pins the size, and Banana Native found the walls black on it for that (dm/gfx/vk_android/vka_shader.c sg_plan, MIT): each stage it can pin is pinned to 64.
+        // Qualcomm's driver runs 64 lanes only, so nothing changes there. DM_VK_SG_PIN=0: not pinned
+        VkPhysicalDeviceSubgroupSizeControlProperties sc = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+        VkPhysicalDeviceSubgroupProperties sp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES, &sc};
+        VkPhysicalDeviceProperties2 p2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &sp}; vkGetPhysicalDeviceProperties2(V.pd, &p2);
+        const char *e = getenv("DM_VK_SG_PIN"); int ctl = v13 && f13.subgroupSizeControl;
+        if (!(e && !atoi(e)) && ctl && sc.minSubgroupSize <= 64 && sc.maxSubgroupSize >= 64 && (sc.maxSubgroupSize > 64 || sp.subgroupSize != 64)) g_sg_pin_stages = sc.requiredSubgroupSizeStages;
+        VKLOG("subgroups: %u lanes (%u-%u)%s; pinned to 64 in stages %#x", sp.subgroupSize, sc.minSubgroupSize, sc.maxSubgroupSize, ctl ? "" : ", no size control", g_sg_pin_stages); }
     kgsl_before(x_ph && fph.queuePerfHint);
     VKCHK(vkCreateDevice(V.pd, &dci, NULL, &V.dev));
     vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)p_vkGetInstanceProcAddr(V.inst, "vkGetDeviceProcAddr");

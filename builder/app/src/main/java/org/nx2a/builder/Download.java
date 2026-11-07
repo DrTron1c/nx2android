@@ -29,6 +29,26 @@ final class Download {
         } finally { c.disconnect(); }
     }
 
+    /** Any URL's body as text (a GitHub API answer). */
+    static String url(String url) throws IOException {
+        HttpURLConnection c = open(url, 0);
+        try (InputStream in = c.getInputStream(); java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream()) {
+            byte[] b = new byte[1 << 16]; for (int n; (n = in.read(b)) > 0; ) o.write(b, 0, n);
+            return new String(o.toByteArray(), StandardCharsets.UTF_8);
+        } finally { c.disconnect(); }
+    }
+    /** Any URL into a file (a driver's zip), whole or not at all. */
+    static void urlToFile(String url, File to, Progress p) throws IOException {
+        to.getParentFile().mkdirs(); File part = new File(to.getPath() + ".part");
+        HttpURLConnection c = open(url, 0);
+        try (InputStream in = c.getInputStream(); OutputStream o = new FileOutputStream(part)) {
+            long total = c.getContentLengthLong(), done = 0, last = 0; byte[] b = new byte[1 << 16];
+            for (int n; (n = in.read(b)) > 0; ) { o.write(b, 0, n); done += n; if (done - last > 1 << 20) { p.at("Downloading " + to.getName(), done, total); last = done; } }
+            if (total > 0 && done < total) throw new IOException("the connection ended early");
+        } finally { c.disconnect(); }
+        if (!part.renameTo(to)) throw new IOException("could not finish " + to);
+    }
+
     private static HttpURLConnection open(String url, long from) throws IOException {
         for (int hop = 0; hop < 6; hop++) {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();

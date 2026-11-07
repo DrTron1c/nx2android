@@ -30,6 +30,7 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -158,6 +159,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         LinearLayout driverRow = new LinearLayout(this);
         driverRow.addView(button("Choose driver", false, v -> { pickInto = "driver"; String was = prefs.getString("driver", null); pick(was != null ? new File(was) : new File(Environment.getExternalStorageDirectory(), "Download"), false); }));
         driverRow.addView(button("Use the system's", false, v -> { prefs.edit().remove("driver").apply(); refresh(); }));
+        driverRow.addView(button("Get Turnip", false, v -> getTurnip()));
         add(c5, driverRow, 6);
         add(c5, text("Lossless Scaling frame generation", 14, TEXT, true), 10);
         lsfgState = text("", 14, DIM, false); add(c5, lsfgState, 4);
@@ -220,6 +222,43 @@ public final class MainActivity extends Activity implements PortService.Listener
         adbState.setText(c != null ? "Last connected: " + c : "Not connected yet.");
     }
 
+    /** Mesa's Turnip, the open driver for Adreno GPUs, from the public releases of the projects that build it for Android (as Banana Native's DriverFetch lists them). Third-party
+     *  drivers, each under its own licence (Turnip is MIT): the person picks one, it is saved in this app's files and used from the next port. */
+    private static final String[] TURNIP_REPOS = {"K11MCH1/AdrenoToolsDrivers", "whitebelyash/freedreno_turnip-CI", "MrPurple666/purple-turnip"};
+    private void getTurnip() {
+        stepText.setText("Looking for Turnip drivers..."); stepText.setTextColor(TEXT);
+        bg(() -> {
+            java.util.List<String[]> got = new java.util.ArrayList<>(); StringBuilder failed = new StringBuilder();
+            for (String repo : TURNIP_REPOS) {
+                try {
+                    org.json.JSONArray rel = new org.json.JSONArray(Download.url("https://api.github.com/repos/" + repo + "/releases?per_page=4"));
+                    for (int i = 0; i < rel.length(); i++) {
+                        org.json.JSONObject r = rel.getJSONObject(i); org.json.JSONArray as = r.getJSONArray("assets");
+                        for (int k = 0; k < as.length(); k++) {
+                            org.json.JSONObject a = as.getJSONObject(k); String n = a.getString("name"), low = n.toLowerCase(java.util.Locale.ROOT);
+                            if (!low.endsWith(".zip") || !(low.contains("turnip") || repo.contains("turnip"))) continue;
+                            got.add(new String[]{repo.split("/")[0] + ": " + n + " (" + (a.getLong("size") >> 20) + " MB, " + r.optString("published_at", "").replaceAll("T.*", "") + ")", a.getString("browser_download_url"), n});
+                        }
+                    }
+                } catch (Exception e) { failed.append(repo).append(' '); }
+            }
+            post(() -> {
+                if (got.isEmpty()) { stepText.setText("No Turnip drivers found" + (failed.length() > 0 ? " (could not reach " + failed.toString().trim() + ")" : "") + "."); return; }
+                String[] names = new String[got.size()]; for (int i = 0; i < names.length; i++) names[i] = got.get(i)[0];
+                stepText.setText("");
+                new AlertDialog.Builder(this).setTitle("Turnip for the Adreno 740: pick one (newest first)").setItems(names, (x, w) -> {
+                    String[] g = got.get(w); File to = new File(getFilesDir(), "drivers/" + g[2]);
+                    stepText.setText("Downloading " + g[2] + "...");
+                    bg(() -> {
+                        try {
+                            Download.urlToFile(g[1], to, (what, done, total) -> post(() -> stepText.setText(what + (total > 0 ? " " + done * 100 / total + "%" : ""))));
+                            post(() -> { prefs.edit().putString("driver", to.getPath()).apply(); refresh(); stepText.setText(g[2] + " is ready: tap Port to use it. If the game then fails to open or draws wrongly, tap Use the system's and port again."); });
+                        } catch (IOException e) { post(() -> stepText.setText("The download failed: " + e.getMessage())); }
+                    });
+                }).setNegativeButton("Cancel", null).show();
+            });
+        });
+    }
     private void bg(Runnable r) { new Thread(r).start(); }
     private void post(Runnable r) { ui.post(r); }
 

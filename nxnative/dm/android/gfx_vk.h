@@ -85,6 +85,7 @@ typedef struct { VkFormat vk; VkComponentMapping swz; uint8_t kind; uint8_t dept
 const vkfmt_t *vk_fmt(int nvn_format);   // NULL when the format has no Vulkan counterpart on this device
 void vk_bc_decode(const vkfmt_t *f, const uint8_t *src, size_t pitch, uint32_t w, uint32_t h, uint32_t z, uint8_t *dst);   // (f->dec) gfx_vk_tex.c bc_decode
 typedef struct vkimg vkimg_t;
+const void *vk_sg_pin(VkShaderStageFlagBits stage);   // gfx_vk_core.c: a pipeline stage's pNext pinning its subgroup size to 64, or NULL
 struct vkimg {
     VkImageUsageFlags usage; VkImageCreateFlags cflags;   // as created (an imageless framebuffer names them)
     VkImage img; VkDeviceMemory mem; void *sub; VkFormat fmt; VkImageViewType vtype; VkImageAspectFlags aspect;
