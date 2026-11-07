@@ -544,6 +544,7 @@ static void gpu_report(void) {
     int vk_pipeline_counts(int *gfx);  int gfx = 0, comp = vk_pipeline_counts(&gfx);
     VKLOG("[gpu] the driver counts %llu MB for this process (0: it does not say); images %llu MB, scratch %llu MB, %d descriptor pools, %d graphics and %d compute pipelines", (unsigned long long)(used >> 20), (unsigned long long)(g_gpu_img >> 20), (unsigned long long)(g_gpu_scratch >> 20), g_ndpools, gfx, comp);
 }
+static int g_nslot; static uint64_t g_slot_wait_ns, g_slot_waits;   // defined with the submission slots below
 void vk_mem_report(void) {
     gpu_report();
     char b[4096]; long v[5] = {0}; static const char *k[] = {"VmRSS:", "RssAnon:", "RssFile:", "RssShmem:", "VmSwap:"};
@@ -575,7 +576,8 @@ void vk_mem_report(void) {
         for (int i = 0; i < ntop && o < (int)sizeof line - 60; i++) o += snprintf(line + o, sizeof line - (size_t)o, " '%s' %lu;", top[i].nm, top[i].d);
         long st = 0; char mb[4096]; FILE *mf = fopen("/proc/meminfo", "r"); if (mf) { size_t n = fread(mb, 1, sizeof mb - 1, mf); mb[n] = 0; fclose(mf); char *q = strstr(mb, "SwapTotal:"); if (q) st = atol(q + 10); }
         char bd[96] = "not readable"; FILE *zf = fopen("/sys/block/zram0/backing_dev", "r"); if (zf) { if (!fgets(bd, sizeof bd, zf)) snprintf(bd, sizeof bd, "?"); fclose(zf); bd[strcspn(bd, "\n")] = 0; }
-        VKLOG("%s swap %ld MB in all, zram's storage backing: %s", line, st >> 10, bd); }
+        VKLOG("%s swap %ld MB in all, zram's storage backing: %s", line, st >> 10, bd);
+        VKLOG("[vk] replay waited for a free submission slot %llu times, %.1f ms in all, since the last line (%d slots)", (unsigned long long)g_slot_waits, (double)g_slot_wait_ns / 1e6, g_nslot); g_slot_waits = 0; g_slot_wait_ns = 0; }
     static long last_maj; struct rusage ru; long maj = 0; if (!getrusage(RUSAGE_SELF, &ru)) { maj = ru.ru_majflt - last_maj; last_maj = ru.ru_majflt; }
     long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }
@@ -756,7 +758,10 @@ static void vk_pools_sync_(VkCommandBuffer cb) {
 struct vksub; static void pools_copy_back(const struct vksub *s);
 
 // ---------------- submission slots ----------------
-#define NSLOT 6
+#define NSLOT 16   // the most; DM_VK_SLOTS (start-up, 2-16, default 6) how many are used. A new submission waits for the GPU to finish the one its slot last held, so with
+// about 11 submissions a frame (Pokopia) 6 slots let the replay get only half a frame ahead of the GPU. madebymochi/pokopia-android (MIT) measured the same wait on its own
+// replay: 4 contexts against 16 took a frame from 48-61 ms to 25-30, the GPU busy 68% against 91%. Costs about one more frame of latency at most
+static int g_nslot = 6; static uint64_t g_slot_wait_ns, g_slot_waits;   // the replay's time waiting in slot_recycle, for the [mem] line
 #define MAIN_CBS 32   // (allocated as used: DM_VK_PASS_SPLIT cuts inside passes as well)
 // GPU time: a timestamp at the start and end of each submission's main command buffer (one queue: their sum is the time the GPU was busy)
 static VkQueryPool g_tsq; uint64_t g_gpu_ns;
@@ -826,7 +831,7 @@ void vk_pass_report(void) {   // the most expensive passes since the last report
 static pthread_mutex_t g_sub_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_fence;   // fence of the last commit
 static VkSemaphore g_timeline;   // submission f signals the value f (V.has_timeline), else g_fring[f % NFRING]
-#define NFRING 16   // more than the submissions in flight (NSLOT: mtl_sub_begin's slot_recycle waits for the slot's last one)
+#define NFRING 32   // more than the submissions in flight (NSLOT: mtl_sub_begin's slot_recycle waits for the slot's last one)
 static VkFence g_fring[NFRING];
 static pthread_mutex_t g_done_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_done_cv = PTHREAD_COND_INITIALIZER;
 static uint64_t g_done;
@@ -840,6 +845,7 @@ static void slots_init(void) {
     VkQueryPoolCreateInfo cqi = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, NULL, 0, VK_QUERY_TYPE_TIMESTAMP, NSLOT * CQ};
     if (!g_tsq || vkCreateQueryPool(V.dev, &cqi, NULL, &g_cq)) g_cq = VK_NULL_HANDLE;
     { const char *e = getenv("DM_VK_PASS_TIMES"); if (e && atoi(e)) { VkQueryPoolCreateInfo pq = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, NULL, 0, VK_QUERY_TYPE_TIMESTAMP, NSLOT * PASSQ * 2}; if (vkCreateQueryPool(V.dev, &pq, NULL, &g_pq)) g_pq = VK_NULL_HANDLE; } }
+    { const char *e = getenv("DM_VK_SLOTS"); int n = e ? atoi(e) : 6; g_nslot = n < 2 ? 2 : n > NSLOT ? NSLOT : n; VKLOG("submission slots: %d (DM_VK_SLOTS)", g_nslot); }
     for (int i = 0; i < NSLOT; i++) {
         // not TRANSIENT, and reset by command buffer (see slot_recycle)
         VkCommandPoolCreateInfo ci = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, NULL, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, V.qf};
@@ -1045,8 +1051,9 @@ void mtl_sub_begin(void) {
     pthread_mutex_lock(&g_sub_lock);
     // the next slot of the ring (g_cur is -1 between submissions, so it cannot say where the ring is: every submission took slot 0 and waited in slot_recycle
     // for the one before to finish on the GPU, which kept the replay of a frame from overlapping the GPU work of the last)
-    static int next; g_cur = next; next = (next + 1) % NSLOT; vksub_t *s = &g_slot[g_cur];
-    slot_recycle(s);
+    static int next; g_cur = next; next = (next + 1) % g_nslot; vksub_t *s = &g_slot[g_cur];
+    { struct timespec w0, w1; clock_gettime(CLOCK_MONOTONIC, &w0); slot_recycle(s); clock_gettime(CLOCK_MONOTONIC, &w1);
+      uint64_t d = (uint64_t)(w1.tv_sec - w0.tv_sec) * 1000000000ull + (uint64_t)(w1.tv_nsec - w0.tv_nsec); if (d > 200000) { g_slot_wait_ns += d; g_slot_waits++; } }
     s->npost = 0; s->up_used = 0; s->ngw = 0;
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     s->main = s->mains[0]; s->nmain_used = 1; s->cb_err = 0; s->up = s->ups[0]; s->nup_used = 1; s->nmain_sent = 0;
