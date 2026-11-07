@@ -122,10 +122,10 @@ jobs:
           unzip -q ndk.zip && rm ndk.zip
           python3 nxnative/dm/android/build.py --game 0400A3A01EE4C000 --ndk "$PWD/android-ndk-r27c" --out out/at --release --adrenotools --only-adrenotools
           ls -la out/at/lib*.so
-          rm -rf android-ndk-r27c
-      - name: The host must compile, or nothing is published
-        # the app builds the host on the device from the engine: a host that does not compile went out twice (builds 70 and 81), and every port made with it failed to open
-        run: python3 nxnative/dm/android/build.py --game 0400A3A01EE4C000 --ndk "$PWD/android-ndk-r27c" --out out/hostcheck --release --lib
+          # the host must compile, or nothing is published: the app builds it on the device from the engine, and a host that did not compile went out twice
+          # (builds 70 and 81), so every port made with it failed to open
+          python3 nxnative/dm/android/build.py --game 0400A3A01EE4C000 --ndk "$PWD/android-ndk-r27c" --out out/hostcheck --release --lib
+          rm -rf android-ndk-r27c out/hostcheck
       - name: The engine
         run: |
           mkdir -p eng/nx2android/nxnative
