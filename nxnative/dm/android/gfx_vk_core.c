@@ -900,7 +900,7 @@ static void slot_recycle(vksub_t *s) {   // the GPU has passed this slot's last 
     for (int i = s->nblk - 1; i >= 1; i--) {
         scratch_blk *b = &s->blk[i]; b->idle = b->used ? 0 : b->idle + 1;
         if (b->size > (g_scr_blk ? g_scr_blk : SCRATCH_BLOCK) || b->idle >= 30) {
-            vkDestroyBuffer(V.dev, b->b, NULL); vkUnmapMemory(V.dev, b->m); vkFreeMemory(V.dev, b->m, NULL);
+            vkDestroyBuffer(V.dev, b->b, NULL); vkFreeMemory(V.dev, b->m, NULL);   // (freeing unmaps it)
             __atomic_fetch_sub(&g_gpu_scratch, b->size, __ATOMIC_RELAXED);
             s->blk[i] = s->blk[--s->nblk];
         }
