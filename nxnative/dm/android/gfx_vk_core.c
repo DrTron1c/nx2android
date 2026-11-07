@@ -19,6 +19,7 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <linux/falloc.h>
 #include <sys/ioctl.h>
 #include <dirent.h>
 #include <sys/statvfs.h>
@@ -409,6 +410,17 @@ void vk_pool_file(void *mem, uint64_t size) {
     VKLOG("memory pool %p +%#llx kept in a file: %llu MB held already, %.0f ms (%llu MB in such files)", mem, (unsigned long long)size, (unsigned long long)(kept >> 20), (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6, (unsigned long long)(g_pf_bytes >> 20));
 }
 // Zero copy: the pages of [mem, mem+size) become an AHardwareBuffer's, imported as a VkBuffer. 0 on success. On a chunk already in use (p->lazy) the pages move last, once nothing can fail
+// [lo, lo+n) now lives in a hardware buffer: its pages in the pool's file (vk_pool_file) are a stale copy that only takes the system's memory (and, written by the game
+// before, would be written back to storage), so they are given back. Nothing maps that part of the file again
+static uint64_t g_pf_punched;
+static void pf_punch(uint64_t lo, uint64_t n) {
+    for (int i = 0; i < g_npf; i++) {
+        if (lo >= g_pf[i].hi || lo + n <= g_pf[i].lo) continue;
+        uint64_t a = lo > g_pf[i].lo ? lo : g_pf[i].lo, e = lo + n < g_pf[i].hi ? lo + n : g_pf[i].hi;
+        if (!fallocate(g_pf[i].fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t)(a - g_pf[i].lo), (off_t)(e - a))) g_pf_punched += e - a;
+        else { static int said; if (!said++) VKLOG("[RED] memory pool file: its pages could not be given back (errno %d)", errno); }
+    }
+}
 static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     AHardwareBuffer_Desc d = {(uint32_t)size, 1, 1, AHARDWAREBUFFER_FORMAT_BLOB,
         AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER, 0, 0, 0};
@@ -449,6 +461,7 @@ static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
         atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
         for (int i = 0; i < nfd; i++) close(fds[i]);
     }
+    pf_punch((uint64_t)(uintptr_t)mem, size);
     p->ahb = ahb; p->zero_copy = 1;
     return 0;
 }
@@ -582,7 +595,7 @@ void vk_mem_report(void) {
     long avail = 0, swapf = 0; f = fopen("/proc/meminfo", "r");
     if (f) { size_t n = fread(b, 1, sizeof b - 1, f); b[n] = 0; fclose(f); char *p = strstr(b, "MemAvailable:"); if (p) avail = atol(p + 13); p = strstr(b, "SwapFree:"); if (p) swapf = atol(p + 9); }
     VKLOG("shaders loaded %llu, reading raw memory %llu, with bindings not understood %llu; raw memory table %d chunks of %d", (unsigned long long)g_sh_loaded, (unsigned long long)g_sh_raw, (unsigned long long)g_sh_unknown, g_gmem_n, g_npool);
-    VKLOG("[mem] process %ld MB (anon %ld, file %ld, shared %ld, swapped %ld); hardware buffers made on first use %llu MB, pools in files %llu MB; system available %ld MB, swap free %ld MB; %ld waits for memory on disk or swap since the last line", v[0] >> 10, v[1] >> 10, v[2] >> 10, v[3] >> 10, v[4] >> 10, (unsigned long long)g_lazy_mb, (unsigned long long)(g_pf_bytes >> 20), avail >> 10, swapf >> 10, maj);
+    VKLOG("[mem] process %ld MB (anon %ld, file %ld, shared %ld, swapped %ld); hardware buffers made on first use %llu MB, pools in files %llu MB (%llu MB of them given back); system available %ld MB, swap free %ld MB; %ld waits for memory on disk or swap since the last line", v[0] >> 10, v[1] >> 10, v[2] >> 10, v[3] >> 10, v[4] >> 10, (unsigned long long)g_lazy_mb, (unsigned long long)(g_pf_bytes >> 20), (unsigned long long)(g_pf_punched >> 20), avail >> 10, swapf >> 10, maj);
 }
 // The hardware buffer of a lazy chunk, made at the first lookup that finds it (vk_pool_of). Under the write lock: nothing else is finding pools, and an entry cannot move
 static vkpool_t *pool_materialize(uint64_t lo) {
@@ -773,7 +786,8 @@ static VkQueryPool g_tsq; uint64_t g_gpu_ns;
 enum { CQ = 64 };
 static VkQueryPool g_cq;
 #define SCRATCH_BLOCK (8u << 20)
-typedef struct { VkBuffer b; VkDeviceMemory m; uint8_t *p; VkDeviceSize size, used; } scratch_blk;
+static VkDeviceSize g_scr_blk;   // the size of a scratch block (DM_VK_SCRATCH_MB), set at the first
+typedef struct { VkBuffer b; VkDeviceMemory m; uint8_t *p; VkDeviceSize size, used; uint32_t idle; } scratch_blk;
 typedef struct { int kind; void *a; void *b; } dfree_t;   // 0 buffer+memory, 1 image+memory, 2 view
 typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; int q; } post_op;   // q: a timestamp counter's query in g_cq, or -1
 struct vksub {
@@ -881,6 +895,16 @@ static void slot_recycle(vksub_t *s) {   // the GPU has passed this slot's last 
         else if (d->kind == 3) vkDestroyBufferView(V.dev, (VkBufferView)d->a, NULL);
     }
     s->ndf = 0;
+    // Scratch blocks: a slot kept every block it ever made, at its peak, so a load's uploads stayed in memory for good (Pokopia: 64 MB in play, 216 MB after loading,
+    // and 16 slots ran the tablet out of memory). Past the first, a block made for one large upload, or one unused for 30 of the slot's turns, is freed: the GPU is done with it
+    for (int i = s->nblk - 1; i >= 1; i--) {
+        scratch_blk *b = &s->blk[i]; b->idle = b->used ? 0 : b->idle + 1;
+        if (b->size > (g_scr_blk ? g_scr_blk : SCRATCH_BLOCK) || b->idle >= 30) {
+            vkDestroyBuffer(V.dev, b->b, NULL); vkUnmapMemory(V.dev, b->m); vkFreeMemory(V.dev, b->m, NULL);
+            __atomic_fetch_sub(&g_gpu_scratch, b->size, __ATOMIC_RELAXED);
+            s->blk[i] = s->blk[--s->nblk];
+        }
+    }
     for (int i = 0; i < s->nblk; i++) s->blk[i].used = 0;
     for (int i = 0; i < s->ndp; i++) vkResetDescriptorPool(V.dev, s->dp[i], 0);
     s->dp_cur = 0; s->dp_counted = -1;
@@ -939,7 +963,7 @@ void *vk_scratch(VkDeviceSize n, VkDeviceSize align, VkBuffer *buf, VkDeviceSize
     }
     if (s->nblk == s->capblk) { s->capblk = s->capblk ? 2 * s->capblk : 8; s->blk = realloc(s->blk, s->capblk * sizeof *s->blk); }
     scratch_blk *b = &s->blk[s->nblk++]; memset(b, 0, sizeof *b);
-    static VkDeviceSize blk = 0; if (!blk) { const char *e = getenv("DM_VK_SCRATCH_MB"); blk = e && atoi(e) > 0 ? (VkDeviceSize)atoi(e) << 20 : SCRATCH_BLOCK; }
+    VkDeviceSize blk = g_scr_blk; if (!blk) { const char *e = getenv("DM_VK_SCRATCH_MB"); g_scr_blk = blk = e && atoi(e) > 0 ? (VkDeviceSize)atoi(e) << 20 : SCRATCH_BLOCK; }
     b->size = n > blk ? (n + 0xffff) & ~0xffffull : blk;
     __atomic_fetch_add(&g_gpu_scratch, b->size, __ATOMIC_RELAXED);
     VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, b->size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
