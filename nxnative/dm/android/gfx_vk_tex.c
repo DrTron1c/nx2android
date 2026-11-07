@@ -181,7 +181,12 @@ static int ubwc_mode(void) { static int v = -1; if (v < 0) { const char *e = get
 // (no block-compressed format is drawn into), what is read back, or a texture with one level. Pokopia's textures took 580-690 MB of the tablet's memory
 static uint64_t g_half_n;
 static int tex_half(const nvn_texdesc *d, const vkfmt_t *f, const vkimg_t *im) {
-    static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_TEX_HALF"); on = e && atoi(e) > 0; if (on) VKLOG("textures: large ones at half size (DM_VK_TEX_HALF)"); }
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_TEX_HALF"); on = e ? atoi(e) : 0; if (on) VKLOG("textures: large ones at half size%s (DM_VK_TEX_HALF=%d)", on == 2 ? " while the system has under 1.5 GB free" : "", on); }
+    if (on == 2) {   // Auto: by the system's free memory, read at most once a second; the textures made meanwhile keep their size
+        static long kb; static struct timespec at; struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+        if (!kb || now.tv_sec - at.tv_sec >= 1) { at = now; char l[128]; FILE *mf = fopen("/proc/meminfo", "r"); while (mf && fgets(l, sizeof l, mf)) if (sscanf(l, "MemAvailable: %ld", &kb) == 1) break; if (mf) fclose(mf); }
+        if (kb >= 1536 * 1024) return 0;
+    }
     return on && f->compressed && !f->dec && (d->target == 1 || d->target == 4) && im->levels >= 2 && im->samples == 1 && im->w >= 512 && im->h >= 512 &&
            !(d->flags & (NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET | NVN_TEXTURE_FLAGS_COMPRESSIBLE | NVN_TEXTURE_FLAGS_SPARSE));
 }

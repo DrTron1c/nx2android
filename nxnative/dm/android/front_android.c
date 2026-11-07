@@ -68,7 +68,7 @@ void dm_perf_fps_cap(int fps);
 static const int CAP_FPS[4] = {0, 60, 40, 30};   // the FPS lock's values (gfx_vk_present.c OV_CAPS)
 static void settings_load(void) {
     { const char *e = getenv("DM_OV_FLOAT"); if (e) atomic_store(&g_disp[DISP_FLOAT], atoi(e) != 0); }   // the profile's default; the player's setting below wins
-    { const char *e = getenv("DM_VK_TEX_HALF"); if (e) atomic_store(&g_disp[DISP_TEXHALF], atoi(e) > 0); }
+    { const char *e = getenv("DM_VK_TEX_HALF"); if (e && atoi(e) >= 0 && atoi(e) <= 2) atomic_store(&g_disp[DISP_TEXHALF], atoi(e)); }
     char p[600]; snprintf(p, sizeof p, "%s/settings.txt", g_root); FILE *f = fopen(p, "r"); char line[128];
     if (!f) return;
     // DM_SETTINGS_EPOCH: a profile changed its mind about the mode, and settings saved before that do not choose it (Pokopia's Docked, chosen when Handheld did not exist yet, kept it docked)
@@ -87,7 +87,7 @@ static void settings_load(void) {
         else if (sscanf(line, "framegen=%d", &v) == 1 && v >= 0 && v < 5) atomic_store(&g_disp[DISP_FG], v);
         else if (sscanf(line, "shadows=%d", &v) == 1 && v >= 0 && v < 4) atomic_store(&g_disp[DISP_SHADOWS], v);
         else if (sscanf(line, "boost=%d", &v) == 1 && (v == 0 || v == 1)) atomic_store(&g_disp[DISP_BOOST], v);
-        else if (sscanf(line, "texhalf=%d", &v) == 1 && (v == 0 || v == 1)) { atomic_store(&g_disp[DISP_TEXHALF], v); setenv("DM_VK_TEX_HALF", v ? "1" : "0", 1); }   // read as images are made: from the next start
+        else if (sscanf(line, "texhalf=%d", &v) == 1 && v >= 0 && v <= 2) { atomic_store(&g_disp[DISP_TEXHALF], v); char s[4]; snprintf(s, sizeof s, "%d", v); setenv("DM_VK_TEX_HALF", s, 1); }   // read as images are made: from the next start
         else if (sscanf(line, "sound=%d", &v) == 1 && (v == 0 || v == 1)) { atomic_store(&g_disp[DISP_SOUND], v); setenv("DM_AUDIO_MEDIA", v ? "1" : "0", 1); }   // read when the sound opens: from the next start
         else if (sscanf(line, "cap=%d", &v) == 1 && v >= 0 && v < 4) { atomic_store(&g_disp[DISP_CAP], v); dm_perf_fps_cap(CAP_FPS[v]); }
         else if (sscanf(line, "float=%d", &v) == 1) atomic_store(&g_disp[DISP_FLOAT], v != 0);
@@ -351,7 +351,7 @@ static void menu_do(int item) {
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
     else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS || item == OVM_BOOST || item == OVM_SOUND || item == OVM_TEXHALF) {
         int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : item == OVM_BOOST ? DISP_BOOST : item == OVM_SOUND ? DISP_SOUND : item == OVM_TEXHALF ? DISP_TEXHALF : item == OVM_SHADOWS ? DISP_SHADOWS : DISP_SHARP;
-        int n = item == OVM_SHARP || item == OVM_SCALE ? 6 : item == OVM_ASPECT ? 5 : item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS ? 4 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
+        int n = item == OVM_SHARP || item == OVM_SCALE ? 6 : item == OVM_ASPECT ? 5 : item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS ? 4 : item == OVM_TEXHALF ? 3 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
         atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); if (item == OVM_CAP) dm_perf_fps_cap(CAP_FPS[atomic_load(&g_disp[w])]); atomic_fetch_add(&g_disp_ver, 1); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
     else if (item == OVM_TAB) { menu_tab(atomic_load(&g_menu_tab) + 1); return; }
