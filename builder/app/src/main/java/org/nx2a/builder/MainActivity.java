@@ -224,7 +224,7 @@ public final class MainActivity extends Activity implements PortService.Listener
 
     /** Mesa's Turnip, the open driver for Adreno GPUs, from the public releases of the projects that build it for Android (as Banana Native's DriverFetch lists them). Third-party
      *  drivers, each under its own licence (Turnip is MIT): the person picks one, it is saved in this app's files and used from the next port. */
-    private static final String[] TURNIP_REPOS = {"K11MCH1/AdrenoToolsDrivers", "whitebelyash/freedreno_turnip-CI", "MrPurple666/purple-turnip"};
+    private static final String[] TURNIP_REPOS = {"whitebelyash/freedreno_turnip-CI", "K11MCH1/AdrenoToolsDrivers", "MrPurple666/purple-turnip"};
     private void getTurnip() {
         stepText.setText("Looking for Turnip drivers..."); stepText.setTextColor(TEXT);
         bg(() -> {
@@ -246,16 +246,27 @@ public final class MainActivity extends Activity implements PortService.Listener
                 if (got.isEmpty()) { stepText.setText("No Turnip drivers found" + (failed.length() > 0 ? " (could not reach " + failed.toString().trim() + ")" : "") + "."); return; }
                 String[] names = new String[got.size()]; for (int i = 0; i < names.length; i++) names[i] = got.get(i)[0];
                 stepText.setText("");
-                new AlertDialog.Builder(this).setTitle("Turnip for the Adreno 740: pick one (newest first)").setItems(names, (x, w) -> {
+                // Pick for me: the newest build that is for every Adreno or for the 7xx (the tablet's 740), not one made for the 8xx / 8 Elite only; mainline Mesa's CI builds first,
+                // then K11MCH1's, then the purple fork, as the list was gathered (each repo's newest releases first)
+                int best = -1;
+                for (int i = 0; i < got.size() && best < 0; i++) {
+                    String n = got.get(i)[2].toLowerCase(java.util.Locale.ROOT);
+                    if (!n.matches(".*(a8[0-9]{2}|8.?elite|a8xx|gen ?4|8gen4|sm8750).*")) best = i;
+                }
+                final int pick = best;
+                java.util.function.IntConsumer take = w -> {
                     String[] g = got.get(w); File to = new File(getFilesDir(), "drivers/" + g[2]);
-                    stepText.setText("Downloading " + g[2] + "...");
+                    stepText.setText("Downloading " + g[0] + "...");
                     bg(() -> {
                         try {
                             Download.urlToFile(g[1], to, (what, done, total) -> post(() -> stepText.setText(what + (total > 0 ? " " + done * 100 / total + "%" : ""))));
                             post(() -> { prefs.edit().putString("driver", to.getPath()).apply(); refresh(); stepText.setText(g[2] + " is ready: tap Port to use it. If the game then fails to open or draws wrongly, tap Use the system's and port again."); });
                         } catch (IOException e) { post(() -> stepText.setText("The download failed: " + e.getMessage())); }
                     });
-                }).setNegativeButton("Cancel", null).show();
+                };
+                AlertDialog.Builder d = new AlertDialog.Builder(this).setTitle("Turnip for the Adreno 740: pick one (newest first)").setItems(names, (x, w) -> take.accept(w)).setNegativeButton("Cancel", null);
+                if (pick >= 0) d.setPositiveButton("Pick for me", (x, w) -> take.accept(pick));
+                d.show();
             });
         });
     }
