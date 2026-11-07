@@ -89,6 +89,7 @@ struct vkimg {
     VkImageUsageFlags usage; VkImageCreateFlags cflags;   // as created (an imageless framebuffer names them)
     VkImage img; VkDeviceMemory mem; void *sub; VkFormat fmt; VkImageViewType vtype; VkImageAspectFlags aspect;
     uint32_t w, h, d, layers, levels, samples; int target, nvn_format;
+    int half;                       // made a mip level short (gfx_vk_tex.c tex_half): the game's level L is the image's level L-1, its level 0 is not kept; w, h, levels are the image's
     VkImageLayout layout;           // version 1 keeps every image in GENERAL after its first use
     int packaged;                   // filled from guest memory (deswizzled upload), re-uploaded when its pages change
     uint64_t pkg_stamp; const void *pkg_span; uint64_t pkg_seen;

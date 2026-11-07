@@ -1877,8 +1877,10 @@ static void dispatch(const p_dispatch *d) {
 }
 
 // ---------------- copies and clears ----------------
+static int half_top(const vkimg_t *im, const view_t *v, int has_v) { return im->half && !(has_v && v->set_levels && v->base_level); }   // the level a half-size texture does not keep
 static VkImageSubresourceLayers sub_of(vkimg_t *im, const view_t *v, int has_v, int z) {
     uint32_t lv = has_v && v->set_levels ? v->base_level : 0, ly = has_v && v->set_layers ? v->min_layer : 0;
+    if (im->half && lv) lv--;
     int layered = im->layers > 1;
     return (VkImageSubresourceLayers){im->aspect & VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_ASPECT_COLOR_BIT : (im->aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_STENCIL_BIT), lv, ly + (layered ? (uint32_t)z : 0), 1};
 }
@@ -1888,6 +1890,7 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
     if (!im || !f) return;
     VkBuffer b; VkDeviceSize o;
     if (!vk_buf_at(c->src, 1, &b, &o)) { VKRED_ONCE(70, "buffer of a buffer ↔ texture copy outside the memory pools"); return; }
+    if (half_top(im, &c->view, c->has_view)) return;   // a level the half-size texture does not keep
     VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, im); vk_img_barrier_all(cb);
     unsigned bw = f->bw ? f->bw : 1, bh = f->bh ? f->bh : 1;
     uint32_t rowlen = S.row_stride > 0 && f->bpb ? (uint32_t)(S.row_stride / f->bpb) * bw : 0;
@@ -1975,6 +1978,7 @@ static void copy_t2t(const p_copy_t2t *c) {
     vk_end_pass();
     vkimg_t *s = vk_tex(c->src), *d = vk_tex(c->dst);
     if (!s || !d) return;
+    if (half_top(s, &c->sv, c->has_sv) || half_top(d, &c->dv, c->has_dv)) { VKRED_ONCE(77, "texture copy to or from the level a half-size texture does not keep: skipped"); return; }
     vk_watch(s, "copy source"); vk_watch(d, "copy destination");
     VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, s); vk_tex_prepare(cb, d); vk_img_barrier_all(cb);
     VkImageSubresourceLayers ss = sub_of(s, &c->sv, c->has_sv, c->sr.zoffset), ds = sub_of(d, &c->dv, c->has_dv, c->dr.zoffset);
