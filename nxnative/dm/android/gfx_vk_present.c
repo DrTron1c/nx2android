@@ -44,6 +44,7 @@ static void hang_watch_tick(void) {
 #include "overlay_layout.h"
 #include "font5x7.h"
 #include "font_ui.h"
+#include "font_fps.h"
 #include "overlay_vert.spv.h"
 #include "overlay_frag.spv.h"
 
@@ -164,13 +165,12 @@ static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImage
 // knob, drawn every frame where the finger holds it; the menu button, drawn on its own at OV_MENU_ALPHA whether the gamepad is shown or not; a white disc, the
 // glow over a pressed round button (a wider one glows in its own shape); a black block, the dimming behind the menu. sp: each sprite in the strip (centre x, y,
 // half width and height, texels; 0 = none). The panel is rasterized again whenever the menu's state (dm_menu_state) changes. Under the panel, the frame rate
-// counter's characters (OV_FPS_CHARS, gh rows: one cell each), from which the counter is put together on every present, so a changing number needs no upload.
+// counter's pieces (gh rows, at the screen's own scale: ov_fps_glyphs), from which the counter is put together on every present, so a changing number needs no upload.
 // With a theme in the APK (overlay_theme.c), the gamepad is its sprites instead: an atlas per layout in a texture of its own (g_tt), uploaded once, every
 // control drawn from it on each present; the procedural layer is then only the menu's panel, the dimming and the counter.
 enum { SP_DISC = OV_N, SP_BLACK, SP_WHITE, SP_ACCENT, SP_N };   // (black, white, accent: solid blocks, the dimming and the layout editor's frames)
-#define OV_FPS_CHARS "0123456789 FPS-"
 static struct { VkImage img; VkDeviceMemory mem; VkImageView view; VkSampler samp; VkDescriptorSetLayout dsl; VkPipelineLayout layout; VkDescriptorPool pool; VkDescriptorSet set;
-                VkPipeline pipe; VkFormat pfmt; uint32_t w, h, sh, pw, ph, gh, gs; VkBuffer up; VkDeviceMemory upm; uint8_t *px; int uploaded, panel, lay, cver; float sp[SP_N][4];
+                VkPipeline pipe; VkFormat pfmt; uint32_t w, h, sh, pw, ph, gh; VkBuffer up; VkDeviceMemory upm; uint8_t *px; int uploaded, panel, lay, cver; float sp[SP_N][4];
                 VkRenderPass rp; VkFramebuffer fb[8]; VkImageView fbview[8]; VkExtent2D fbext[8]; } g_ov;
 static struct { const ov_theme *t; VkImage img; VkDeviceMemory mem; VkImageView view; VkDescriptorSet set; VkBuffer up; VkDeviceMemory upm; uint32_t upk; int ready; } g_tt[2];   // per layout
 // Without dynamic rendering (a Vulkan 1.1 / 1.2 device, V.has_dynrender) the overlay draws in a render pass object over the swapchain image: one pass for the swapchain's
@@ -198,7 +198,7 @@ static VkFramebuffer ov_fb(uint32_t idx) {
     g_ov.fbview[idx] = g_sview[idx]; g_ov.fbext[idx] = g_sext;
     return g_ov.fb[idx];
 }
-static _Atomic uint64_t g_fps_frames;   // the game's frames shown (mtl_present), which the counter counts
+static _Atomic uint64_t g_fps_frames, g_fps_gen;   // the game's frames shown (mtl_present) and the frames frame generation added (present_thread), which the counter counts
 static int ov_round(const ov_ctl *c) { return c->w == c->h; }
 static uint32_t ov_layout_sprites(uint32_t w, uint32_t h) {   // places the sprites, returns the strip's height
     float x = 4, top = (float)h, mr = 0, disc = 0, b[4];
@@ -531,24 +531,64 @@ static float ov_glow(int64_t t, int64_t now) {   // a held button's glow: bright
     if (!t) return 0;
     float f = (float)(now - t) / OV_FLASH_NS; return f >= 1 ? 0.22f : 0.22f + 0.48f * (1 - f) * (1 - f);
 }
-// The frame rate counter: the game's frames shown per second, measured over half a second, in the window's top left corner on a dark block
-static float ov_fps_cell(void) { return 6.0f * g_ov.gs + 2; }   // a character cell's width in texels (a glyph of 5 columns, a gap, a clear texel each side)
-static void ov_fps_glyphs(void) {   // the characters into the rows under the panel
+// The frame rate counter (the pause menu's Show FPS), top left: the game's frames shown a second, measured over half a second, in the letters of the Pokopia theme's
+// letter badges: plum rounded letters (font_fps.h, M PLUS Rounded 1c ExtraBold) on a white pill with a plum ring. With frame generation on, the frames the screen
+// shows a second follow an arrow, BananaNative's way ("30 → 60 FPS": the game's frames, then those with the generated ones). Its pieces lie in the rows under the
+// panel at the screen's own scale (a texel a pixel, so they stay sharp; the rest of the texture is at half): a disc, whose halves are the pill's ends and whose middle
+// column is stretched between them, then a cell for each character. Letters 3.2% of the window's shorter side high (an em), the pill 1.32 em.
+static const uint8_t C_FPS_RIM[4] = {252, 251, 253, 255}, C_FPS_INK[4] = {92, 44, 76, 255};   // the badges' white and plum (devtools/pokopia_hud.py)
+static struct { float e, p; int ok, top, ch; uint32_t x[sizeof FPS_CHARS], w[sizeof FPS_CHARS]; } g_fpl;
+static void ov_fps_size(void) {   // the em and the pill's height in screen pixels (the pill even, so its ends are whole pixels), and the strip's rows
+    float e = fmaxf(12.0f, roundf(fminf((float)g_sext.width, (float)g_sext.height) * 0.032f));
+    g_fpl.e = e; g_fpl.p = 2 * roundf(e * 0.66f); g_ov.gh = (uint32_t)g_fpl.p + 4;
+}
+static float fps_cov(int g, float u, float v) {   // a letter's coverage at (u, v), in its bitmap's texels
+    int w = FPS_G[g].w, x = (int)floorf(u), y = (int)floorf(v); float fx = u - x, fy = v - y, t = 0; const uint8_t *a = FPS_A + FPS_G[g].off;
+    for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) { int X = x + i, Y = y + j; if (X < 0 || Y < 0 || X >= w || Y >= FPS_CELL) continue; t += a[Y * w + X] * (i ? fx : 1 - fx) * (j ? fy : 1 - fy); }
+    return t / 255;
+}
+static void ov_fps_glyphs(void) {   // the pieces into the rows under the panel
     ov_canvas cv = {g_ov.px, g_ov.w, 0, g_ov.h + g_ov.sh + g_ov.ph, g_ov.w, g_ov.gh};
-    for (int i = 0; OV_FPS_CHARS[i]; i++) { char one[2] = {OV_FPS_CHARS[i], 0}; cv_text(&cv, i * ov_fps_cell() + 1 + g_ov.gs * 0.5f, g_ov.gh / 2.0f, one, (int)g_ov.gs, C_WHITE); }
+    float P = g_fpl.p, r = P / 2, f = g_fpl.e / FPS_EM, cy = g_ov.gh / 2.0f, t = fmaxf(1.5f, P * 0.035f);
+    cv_disc(&cv, 1 + r, cy, r, C_FPS_RIM); cv_ring(&cv, 1 + r, cy, r - t, t, C_FPS_INK);   // a white rim, a plum ring, white inside: as a letter badge
+    int ss = (int)fminf(4, fmaxf(1, ceilf(1 / f)));   // samples a pixel each way when the letters are drawn smaller than their bitmaps
+    g_fpl.ch = (int)ceilf(FPS_CELL * f); g_fpl.top = (int)floorf(cy - FPS_CELL * f / 2 + 0.5f); g_fpl.ok = 1;
+    uint32_t x = (uint32_t)P + 4;
+    for (int i = 0; FPS_CHARS[i]; i++) {
+        uint32_t w = (uint32_t)ceilf(FPS_G[i].w * f) + 1;
+        if (x + w > g_ov.w) { g_fpl.ok = 0; break; }   // (a window too narrow for them: no counter)
+        g_fpl.x[i] = x; g_fpl.w[i] = w;
+        for (int dy = 0; dy < g_fpl.ch; dy++) for (uint32_t dx = 0; dx < w; dx++) {
+            float a = 0; for (int sy = 0; sy < ss; sy++) for (int sx = 0; sx < ss; sx++) a += fps_cov(i, (dx + (sx + 0.5f) / ss) / f - 0.5f, (dy + (sy + 0.5f) / ss) / f - 0.5f);
+            cv_blend(&cv, (int)(x + dx), g_fpl.top + dy, C_FPS_INK, a / (ss * ss));
+        }
+        x += w + 2;
+    }
 }
 static void ov_fps(VkCommandBuffer cb, int64_t now) {
-    static uint64_t n0; static int64_t t0; static int fps = -1;
-    uint64_t n = atomic_load(&g_fps_frames);
-    if (!t0 || now - t0 > 2000000000ll) { t0 = now; n0 = n; fps = -1; }   // the first frame, or after a pause in the presents (the menu, the background): measure anew
-    else if (now - t0 >= 500000000ll) { fps = (int)((double)(n - n0) * 1e9 / (double)(now - t0) + 0.5); t0 = now; n0 = n; }
-    char s[16]; if (fps < 0) snprintf(s, sizeof s, "-- FPS"); else snprintf(s, sizeof s, "%d FPS", fps > 999 ? 999 : fps);
-    float k = (float)g_sext.width / g_ov.w, cw = ov_fps_cell() * k, ch = (float)g_ov.gh * k, m = (float)g_sext.height * 0.02f, x = m + ch * 0.25f, pad = ch * 0.2f;
-    float bx = g_ov.sp[SP_BLACK][0], by = g_ov.sp[SP_BLACK][1], gy = (float)(g_ov.h + g_ov.sh + g_ov.ph);
-    ov_rect(cb, m, m, m + ch * 0.5f + strlen(s) * cw, m + ch + 2 * pad, bx - 2, by - 2, bx + 2, by + 2, 0.45f);
-    for (int i = 0; s[i]; i++, x += cw) {
-        const char *c = strchr(OV_FPS_CHARS, s[i]); if (!c || s[i] == ' ') continue;
-        float u = (float)(c - OV_FPS_CHARS) * ov_fps_cell(); ov_rect(cb, x, m + pad, x + cw, m + pad + ch, u, gy, u + ov_fps_cell(), gy + g_ov.gh, 1);
+    static uint64_t n0, g0; static int64_t t0; static int fps = -1, out = -1;
+    uint64_t n = atomic_load(&g_fps_frames), g = atomic_load(&g_fps_gen);
+    if (!t0 || now - t0 > 2000000000ll) { t0 = now; n0 = n; g0 = g; fps = out = -1; }   // the first frame, or after a pause in the presents (the menu, the background): measure anew
+    else if (now - t0 >= 500000000ll) { double sec = (double)(now - t0) / 1e9; fps = (int)((double)(n - n0) / sec + 0.5); out = (int)((double)(n - n0 + g - g0) / sec + 0.5); t0 = now; n0 = n; g0 = g; }
+    if (!g_fpl.ok) return;
+    char s[32]; int fg = dm_disp(DISP_FG) != 0;
+    if (fps < 0) snprintf(s, sizeof s, fg ? "-- > -- FPS" : "-- FPS");
+    else if (fg) snprintf(s, sizeof s, "%d > %d FPS", fps > 999 ? 999 : fps, out > 999 ? 999 : out);
+    else snprintf(s, sizeof s, "%d FPS", fps > 999 ? 999 : fps);
+    float P = g_fpl.p, r = P / 2, f = g_fpl.e / FPS_EM, tw = 0, A = 0.96f;
+    for (const char *c = s; *c; c++) { const char *q = *c == ' ' ? NULL : strchr(FPS_CHARS, *c); tw += (q ? FPS_G[q - FPS_CHARS].adv16 : FPS_SPACE16) / 16.0f * f; }
+    float m = roundf(fminf((float)g_sext.width, (float)g_sext.height) * 0.02f), x0 = m, y = m, x1 = roundf(x0 + fmaxf(P, tw + 2 * roundf(P * 0.42f)));
+    float gy = (float)(g_ov.h + g_ov.sh + g_ov.ph), dt = gy + (g_ov.gh - P) / 2;   // the disc's top row
+    ov_rect(cb, x0, y, x0 + r, y + P, 1, dt, 1 + r, dt + P, A);           // the left end
+    ov_rect(cb, x0 + r, y, x1 - r, y + P, 1 + r, dt, 1 + r, dt + P, A);   // the middle: the disc's middle column
+    ov_rect(cb, x1 - r, y, x1, y + P, 1 + r, dt, 1 + P, dt + P, A);       // the right end
+    float pen = x0 + (x1 - x0 - tw) / 2, ys = y + (float)g_fpl.top - (g_ov.gh - P) / 2;
+    for (const char *c = s; *c; c++) {
+        const char *q = *c == ' ' ? NULL : strchr(FPS_CHARS, *c);
+        if (!q) { pen += FPS_SPACE16 / 16.0f * f; continue; }
+        int i = (int)(q - FPS_CHARS); float X = roundf(pen + FPS_G[i].left * f);
+        ov_rect(cb, X, ys, X + g_fpl.w[i], ys + g_fpl.ch, g_fpl.x[i], gy + g_fpl.top, g_fpl.x[i] + g_fpl.w[i], gy + g_fpl.top + g_fpl.ch, A);
+        pen += FPS_G[i].adv16 / 16.0f * f;
     }
 }
 static void ov_theme_draw(VkCommandBuffer cb, const ov_theme *t, float alpha) {   // (alpha: the player's opacity; each control at its own size factor)
@@ -718,7 +758,7 @@ static int overlay_ready(VkCommandBuffer cb, uint32_t k, int menu) {   // k: thi
         if (g_ov.view) { vkDestroyImageView(V.dev, g_ov.view, NULL); vkDestroyImage(V.dev, g_ov.img, NULL); vkFreeMemory(V.dev, g_ov.mem, NULL); vkDestroyBuffer(V.dev, g_ov.up, NULL); vkFreeMemory(V.dev, g_ov.upm, NULL); }
         g_ov.lay = lay; uint32_t sh = ov_layout_sprites(w, h); float mr[4]; ov_menu_rect((float)g_sext.width, (float)g_sext.height, mr);
         g_ov.pw = (uint32_t)(mr[2] / 2) + 1; g_ov.ph = (uint32_t)(mr[3] / 2) + 1; if (g_ov.pw > w) g_ov.pw = w;
-        g_ov.gs = (uint32_t)fmaxf(2, roundf(h * 0.035f / 7)); g_ov.gh = 7 * g_ov.gs + 4;   // the counter's characters: 3.5% of the window's height
+        ov_fps_size();   // the counter's rows
         uint32_t th = h + sh + g_ov.ph + g_ov.gh;
         VkImageCreateInfo ic = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, NULL, 0, VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, {w, th, 1}, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0, NULL, VK_IMAGE_LAYOUT_UNDEFINED};
@@ -929,9 +969,9 @@ static void *present_thread(void *arg) {
             if (dm_disp(DISP_FG) >= 2 && gap > 8000000 && gap < 120000000) {   // LSFG: its frames at even steps through the gap, the game's own last
                 VkImage oi[3]; VkImageView ov[3]; uint32_t ow = 0, oh = 0; double hold; int ng = vk_lsfg_frame(e.im, e.has_crop ? e.crop : NULL, gap / 1e9, dm_disp(DISP_FG), oi, ov, &ow, &oh, &hold);
                 for (int g = 0; g < ng; g++) {
-                    pthread_mutex_lock(&g_present_mu); g_ls_img = oi[g]; g_ls_view = ov[g]; g_ls_w = ow; g_ls_h = oh; if (swap_make()) { present_window(e.im, NULL, -1, 0, 2); atomic_fetch_add(&g_fps_frames, 1); } pthread_mutex_unlock(&g_present_mu);
+                    pthread_mutex_lock(&g_present_mu); g_ls_img = oi[g]; g_ls_view = ov[g]; g_ls_w = ow; g_ls_h = oh; if (swap_make()) { present_window(e.im, NULL, -1, 0, 2); atomic_fetch_add(&g_fps_gen, 1); } pthread_mutex_unlock(&g_present_mu);
                     uint64_t at = (uint64_t)((g + 1) * hold * 1e9), spent = mono_ns() - t_now; if (spent < at) { uint64_t w = at - spent; struct timespec ts = {(time_t)(w / 1000000000), (long)(w % 1000000000)}; nanosleep(&ts, NULL); } } }
-            if (gen) { pthread_mutex_lock(&g_present_mu); if (swap_make()) { present_window(e.im, e.has_crop ? e.crop : NULL, -1, 0, 1); atomic_fetch_add(&g_fps_frames, 1); } pthread_mutex_unlock(&g_present_mu);
+            if (gen) { pthread_mutex_lock(&g_present_mu); if (swap_make()) { present_window(e.im, e.has_crop ? e.crop : NULL, -1, 0, 1); atomic_fetch_add(&g_fps_gen, 1); } pthread_mutex_unlock(&g_present_mu);
                 uint64_t spent = mono_ns() - t_now; if (spent < gap / 2) { uint64_t w = gap / 2 - spent; struct timespec ts = {0, (long)w}; nanosleep(&ts, NULL); } }
             last = e; pthread_mutex_lock(&g_present_mu); if (swap_make()) present_window(e.im, e.has_crop ? e.crop : NULL, e.period, e.n, 0); pthread_mutex_unlock(&g_present_mu); }
         pthread_mutex_lock(&g_pq_mu); g_pq_tail++; g_pq_done = e.n; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
