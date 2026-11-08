@@ -32,7 +32,7 @@ env	DM_PIN_REPLAY=prime
 # the frame's Vulkan calls on a thread of their own (gfx_vk_dq.c): replaying takes 14 to 19 ms of a 40 ms frame
 env	DM_VK_MT_REPLAY=1
 # one frame's passes in play, for the stripes on Ditto: remove with them
-# the gamepad as in the player's picture (themes/pokopia, devtools/pokopia_hud.py). L3 and R3 are not in it: size 0, no touch
+# the gamepad as in the player's picture (themes/pokopia, devtools/pokopia_hud.py); L3 and R3 added beside the sticks in its style
 overlay	tablet zl 0.0781 0.1494 0.1660 0.1318
 overlay	tablet l 0.0781 0.2939 0.1660 0.1318
 overlay	tablet zr 0.9128 0.1494 0.1660 0.1318
@@ -47,8 +47,8 @@ overlay	tablet stick_l 0.0944 0.8457 0.2441 0.2441
 overlay	tablet stick_r 0.9030 0.8496 0.2441 0.2441
 overlay	tablet dpad 0.1126 0.5186 0.2246 0.2246
 overlay	tablet menu 0.5000 0.0547 0.0898 0.0488
-overlay	tablet ls 0.5 0.5 0 0
-overlay	tablet rs 0.5 0.5 0 0
+overlay	tablet ls 0.2181 0.7812 0.0977 0.0977
+overlay	tablet rs 0.7715 0.7812 0.0977 0.0977
 overlay	phone zl 0.0528 0.1494 0.1660 0.1318
 overlay	phone l 0.0528 0.2939 0.1660 0.1318
 overlay	phone zr 0.9411 0.1494 0.1660 0.1318
@@ -63,5 +63,5 @@ overlay	phone stick_l 0.0638 0.8457 0.2441 0.2441
 overlay	phone stick_r 0.9345 0.8496 0.2441 0.2441
 overlay	phone dpad 0.0761 0.5186 0.2246 0.2246
 overlay	phone menu 0.5000 0.0547 0.0898 0.0488
-overlay	phone ls 0.5 0.5 0 0
-overlay	phone rs 0.5 0.5 0 0
+overlay	phone ls 0.1473 0.7812 0.0977 0.0977
+overlay	phone rs 0.8457 0.7812 0.0977 0.0977

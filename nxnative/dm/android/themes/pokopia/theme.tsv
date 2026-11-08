@@ -36,12 +36,12 @@ sprite	tablet	dpad	left	idle	1451	3470	289	289	-101.68	-48.24
 sprite	tablet	dpad	left	held	1741	3470	289	289	-101.68	-45.24
 sprite	tablet	dpad	right	idle	1	3760	289	289	5.20	-48.24
 sprite	tablet	dpad	right	held	291	3760	289	289	5.20	-45.24
-sprite	tablet	menu	-	idle	581	3760	333	244	-55.66	-40.82
-sprite	tablet	menu	-	held	915	3760	333	244	-55.66	-40.82
-sprite	tablet	ls	-	idle	1249	3760	2	2	0.00	0.00
-sprite	tablet	ls	-	held	1249	3760	2	2	0.00	0.00
-sprite	tablet	rs	-	idle	1249	3760	2	2	0.00	0.00
-sprite	tablet	rs	-	held	1249	3760	2	2	0.00	0.00
+sprite	tablet	menu	-	idle	1617	3760	333	244	-55.66	-40.82
+sprite	tablet	menu	-	held	1	4050	333	244	-55.66	-40.82
+sprite	tablet	ls	-	idle	581	3760	258	258	-43.05	-43.05
+sprite	tablet	ls	-	held	840	3760	258	258	-43.05	-40.05
+sprite	tablet	rs	-	idle	1099	3760	258	258	-43.05	-43.05
+sprite	tablet	rs	-	held	1358	3760	258	258	-43.05	-40.05
 layout	phone	915	412	phone.png	3	27
 sprite	phone	zl	-	idle	557	323	301	253	-50.29	-42.25
 sprite	phone	zl	-	held	859	323	301	253	-50.29	-39.25
@@ -78,9 +78,9 @@ sprite	phone	dpad	left	idle	1567	855	156	156	-55.12	-26.15
 sprite	phone	dpad	left	held	1724	855	156	156	-55.12	-23.15
 sprite	phone	dpad	right	idle	1881	855	156	156	2.82	-26.15
 sprite	phone	dpad	right	held	1	1097	156	156	2.82	-23.15
-sprite	phone	menu	-	idle	158	1097	181	132	-30.18	-22.13
-sprite	phone	menu	-	held	340	1097	181	132	-30.18	-22.13
-sprite	phone	ls	-	idle	522	1097	2	2	0.00	0.00
-sprite	phone	ls	-	held	522	1097	2	2	0.00	0.00
-sprite	phone	rs	-	idle	522	1097	2	2	0.00	0.00
-sprite	phone	rs	-	held	522	1097	2	2	0.00	0.00
+sprite	phone	menu	-	idle	722	1097	181	132	-30.18	-22.13
+sprite	phone	menu	-	held	904	1097	181	132	-30.18	-22.13
+sprite	phone	ls	-	idle	158	1097	140	140	-23.34	-23.34
+sprite	phone	ls	-	held	299	1097	140	140	-23.34	-20.34
+sprite	phone	rs	-	idle	440	1097	140	140	-23.34	-23.34
+sprite	phone	rs	-	held	581	1097	140	140	-23.34	-20.34
