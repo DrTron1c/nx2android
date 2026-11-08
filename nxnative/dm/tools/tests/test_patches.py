@@ -56,7 +56,8 @@ class Registry(unittest.TestCase):
                     self.assertTrue(isinstance(off, int) and HEX.match(ob) and HEX.match(nb) and len(ob) == len(nb) and len(ob) % 8 == 0 and why, f'{p} {bid} {off:#x}')
             for bid, gates in getattr(m, 'OBS', {}).items():
                 for off, oid, word, why in gates:
-                    self.assertTrue(isinstance(off, int) and isinstance(oid, int) and HEX.match(word) and len(word) == 8 and why, f'{p} {bid} {off:#x}')
+                    # a word of None: read at the rewrite (a profile written without the game's files), and the gate is left out if it cannot move
+                    self.assertTrue(isinstance(off, int) and isinstance(oid, int) and (word is None or HEX.match(word) and len(word) == 8) and why, f'{p} {bid} {off:#x}')
             for bid, fn in getattr(m, 'FRAME_STEP', {}).items():
                 self.assertTrue(callable(fn), f'{p} {bid}')
             for bid, names in getattr(m, 'CAPABILITIES', {}).items():

@@ -27,6 +27,10 @@ A Switch 2 game: update v655360 (the title screen says Ver. 2.0.1), SDK 20.5.25 
 - The lit HDR target is RG11B10, exposure a 2x1 RGBA32F image, tone map `075fd7285c64b798` with a 32³ LUT, final `ed5f4c6386ca621d`, the luminance histogram compute `2118ab534fac88c6`.
 - `texraw` pads rows: an RG11B10 dump has a 16-byte stride with 4-byte pixels at the head of each row. It returns one slice of a 3D texture, and serials shift between runs.
 
+## Game speed (Android)
+
+- The main loop scales each update by a frame multiplier in 60 Hz units, frame time x 60 clamped to [1, 3]: under 20 fps every frame lost what went past 50 ms (slow motion). Two observation gates in [`patches.py`](patches.py) (addresses from pp-native's notes of the same build; words read at the rewrite) let [`speed_android.c`](../../android/speed_android.c) give frames up to 1/15 s all their time, hold back what a longer hitch still lacks (up to 1/3 s) and give it back at most a quarter more a frame, and give slow frames of the fixed-step mode their measured rate. The pause menu's **Game speed fix** (Saves tab) switches it; `[speed]` lines in the log count what was lost and given back. Not yet run on the tablet.
+
 ## Driving it on the Mac
 
 The first boot shows the language list: `A`, `LUp`, `A` picks English. The character choice takes `LLeft` before `A`. From a warm cache, `A A LLeft A A Plus` reaches walking in about 300 s. On later boots, `A` at the title screen a few times continues the save and reaches walking in about 110 s. The work folder has `run/boot.sh`, `run/hdrive.sh` (no window, timed control lines) and `run/spam.sh`.

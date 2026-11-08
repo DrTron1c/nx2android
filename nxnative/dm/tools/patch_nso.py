@@ -79,7 +79,8 @@ else:
 # A file may define:
 #   CUTS = {build ID: [(offset, original bytes, new bytes, reason)]}: before rewriting, the original bytes are asserted one by one and any mismatch aborts (listed in <name>.cuts.tsv)
 #   OBS = {build ID: [(offset, number, original instruction word, reason)]}: observation gates. Numbers match OBS_* in the host's hle.h; the original instruction must be position
-#     independent (no PC-relative / branch / anything involving x18 or tpidr), asserted offline; when the host has no callback attached the gate block goes in and out once and returns
+#     independent (no PC-relative load / branch / anything involving x18 or tpidr; adr / adrp are rebuilt), asserted offline; when the host has no callback attached the gate block goes in
+#     and out once and returns. A word of None (a profile written without the game's files) is read at the rewrite, and a gate whose instruction cannot move is left out, logged
 #   FRAME_STEP = {build ID: function(ctx)}: the frame step stubs of a main ("Frame step in whole vsyncs" below)
 #   DM_PATCHES_EXTRA (os.pathsep-separated files outside the repository): CUTS only, added after the registered ones of the same build (an Android port's 60 fps code bytes from a
 #     FPSLocker config, porter/fpslocker.py); an overlap with a registered cut fails that cut's original-bytes assert
@@ -426,20 +427,33 @@ def site_gate(ins, kind, arg):
     gates.append((ret, kind, arg, ins.address))
     return start
 
+def obs_unmovable(ins):
+    """Why site_obs cannot move this instruction into its gate block (None: it can). adr / adrp move with their target (the patch area reaches the module within ±4 GB)"""
+    m = ins.mnemonic
+    if has18(ins): return 'it uses x18'
+    if m in ('b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz', 'eret', 'svc') or m.startswith('b.'): return f'a branch ({m})'
+    if (m.startswith('ldr') or m == 'prfm') and '[' not in ins.op_str: return 'a PC-relative load'
+    if m.startswith('mrs') or m.startswith('msr'): return 'a system register access'
+    return None
+
 def site_obs(off, oid, word):
     """Observation gate: original entry instruction → enter the host gate (arg = observation number) → restore x29/x30 → execute the original instruction → jump back to off+4.
         The first half of the gate block is word-for-word isomorphic with site_gate; dm_gate saves x0–x28 and the flags in its frame and restores them, so a register keeps its value unless the callback writes it
-        (OBS_STDALLOC_INIT's x2, OBS_UE_REGION's size). Any instruction that can be relocated takes one"""
+        (OBS_STDALLOC_INIT's x2, OBS_UE_REGION's size; q0–q31 too: OBS_FRAME_MULT's multiplier). Any instruction that can be relocated takes one; an adr / adrp is rebuilt for the block's address"""
     ins = dis(word, off)
-    assert ins.mnemonic not in ('adr', 'adrp', 'b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') and not ins.mnemonic.startswith('b.') \
-        and not (ins.mnemonic.startswith('ldr') and '[' not in ins.op_str) and not has18(ins), f'observation gate original instruction cannot be relocated {off:#x} {ins.mnemonic} {ins.op_str}'
+    why_not = obs_unmovable(ins)
+    assert not why_not, f'observation gate original instruction cannot be relocated {off:#x} {ins.mnemonic} {ins.op_str}: {why_not}'
     start = here()
     emit(STP_PRE(29, 30, 31, -16))
     emit_gate_call()
     emit(BLR(30))
     ret = here()
     emit(LDP_POST(29, 30, 31, 16))
-    emit(word)
+    if ins.mnemonic in ('adr', 'adrp'):
+        rd, tgt = num(ins.reg_name(ins.operands[0].reg)), ins.operands[1].imm
+        emit(ADRP(rd, here(), tgt))
+        if ins.mnemonic == 'adr': emit(ADDI(rd, rd, tgt & 0xFFF))
+    else: emit(word)
     emit(B(here(), off + 4))
     gates.append((ret, 'obs', oid, off))
     return start
@@ -1329,13 +1343,23 @@ for a in sorted(kinds):
         struct.pack_into('<I', IMG, a, 0xD2A00080 | arg); stat(k); continue
     put_branch(a, st)
 
-obs = list(PATCHES['OBS'].get(BUILD_ID, []))
-for off, oid, ow, why in obs:
+obs, obs_listed = [], list(PATCHES['OBS'].get(BUILD_ID, []))
+def obs_conflict(off): return off in kinds or any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)])
+for off, oid, ow, why in obs_listed:
+    # An original word of None: the profile was written without the game's files (addresses from another project's notes of the same build). The word is read here, and the
+    # gate goes on only where site_obs can move it and nothing else rewrites it; otherwise the code stays as it is, and the port goes on without that gate (logged)
+    if ow is None:
+        l = list(md.disasm(bytes(IMG[off:off + 4]), off)) if 0 <= off and off + 4 <= TEXT_END else []
+        no = 'outside the text' if not (0 <= off and off + 4 <= TEXT_END) else 'not an instruction' if len(l) != 1 else obs_unmovable(l[0]) or ('a rewrite site' if obs_conflict(off) else None)
+        if no: print(f'{NAME}: observation gate {oid & 0xff} at {off:#x} left out: {l[0].mnemonic + " " + l[0].op_str + " is " if len(l) == 1 else ""}{no} ({why})'); continue
+        ow = f'{struct.unpack_from("<I", IMG, off)[0]:08x}'
+        print(f'{NAME}: observation gate {oid & 0xff} at {off:#x} on {l[0].mnemonic} {l[0].op_str} ({ow}): {why}')
+    obs.append((off, oid, ow, why))
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'observation gate original instruction mismatch {off:#x}: {w:08x}'
     # Any instruction site_obs can relocate: the gate frame saves x0–x28 and the flags and restores them (dm/host/entry.S), so the code around it sees its registers as they were
     # unless the callback writes one
-    assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
+    assert off < TEXT_END and not obs_conflict(off), f'observation gate conflicts with a rewrite site {off:#x}'
     use_area(off); put_branch(off, site_obs(off, oid, w)); stat('obs')
 
 # ---- Address regions (every module that defines the SDK's VammManager: sdk) ----
