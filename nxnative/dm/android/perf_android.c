@@ -157,13 +157,16 @@ static int64_t work_pct(int q) {   // the q-th percentile of the last 64 frames'
 static int64_t work_p95(void) { return work_pct(95); }
 uint64_t dm_present_period_adapt(uint64_t period) {
     if (g_adapt < 0) { const char *e = getenv("DM_ADAPTIVE_FPS"); g_adapt = !(e && !atoi(e)); }
-    if (!g_adapt || !period) return period;
+    if (!period) return period;
+    { int c = cap_custom(); if (c) { int64_t want = 1000000000ll / c; g_game_period = period; return (uint64_t)want > period ? (uint64_t)want : period; } }   // a typed lock: that period, never faster than the game asks
+    if (!g_adapt) return period;
     g_game_period = period;
     int64_t want = STEPS[g_step];
     return (uint64_t)want > period ? (uint64_t)want : period;   // never faster than the game asks
 }
 static volatile int g_fps_cap;
-void dm_perf_fps_cap(int fps) { g_fps_cap = fps; }   // the pause menu's FPS lock: 60, 40, 30, or 0 for the adaptive rate
+void dm_perf_fps_cap(int fps) { g_fps_cap = fps; }   // the pause menu's FPS lock: 60, 40, 30, a number the player typed (10-120), or 0 for the adaptive rate
+static int cap_custom(void) { int v = g_fps_cap; return v >= 10 && v <= 120 && v != 60 && v != 40 && v != 30 ? v : 0; }   // a lock that is none of the steps
 static int fps_pin(void) {   // a DM_CTL "env DM_FPS_PIN=40" line holds that step (60, 40 or 30; anything else lets the rate adapt again): tests
     static unsigned k; static int pin = -1; if (k++ % 30) return pin;
     const char *e = getenv("DM_FPS_PIN"); int v = g_fps_cap ? g_fps_cap : e ? atoi(e) : 0, st = v == 60 ? 0 : v == 40 ? 1 : v == 30 ? 2 : -1;
@@ -225,6 +228,7 @@ static void adapt_frame(int64_t work, int64_t now) {
     if (!g_adapt) return;
     g_work_hist[g_nwork++ % 64] = work;
     { static unsigned k; if (++k % 600 == 0) LOG("[perf] adaptive frame rate: %.0f fps, frame work p50 %.1f / p90 %.1f / p95 %.1f ms (last %.1f ms); late on screen %d of 64, step-downs held back %u", 1e9 / STEPS[g_step], work_pct(50) / 1e6, work_pct(90) / 1e6, work_p95() / 1e6, work / 1e6, shown_late(), g_held_back); }
+    if (cap_custom()) return;   // a typed lock holds its own period: the steps do not move
     int pin = fps_pin(); if (pin >= 0) { if (g_step != pin) { g_step = pin; g_last_change = now; g_nshown = 0; } return; }
     // Judged on the 90th percentile of the last 64 frames' work, from 4 s after a change: the GPU and CPU clocks take a few seconds to rise for a shorter
     // period, and with the 95th percentile against 95% of the period NEO's crowd fell back from 40 to 30 fps within 2 s every time, though pinned at
