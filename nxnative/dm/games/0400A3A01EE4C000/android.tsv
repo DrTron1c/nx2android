@@ -9,6 +9,7 @@ env	DM_NVN_DROP_CODE=1
 # buffers and textures share pools: with small chunks the textures stay out of hardware buffers (gfx_vk_core.c lazy_chunk)
 env	DM_VK_POOL_CHUNK_MB=8
 env	DM_VK_POOL_FILE=1
+env	DM_LOW_LATENCY=1
 env	DM_VK_TEX_HALF=1
 # the sun's shadow map: the stopgap for the stripes (gfx_vk_exec.c shadow_pass)
 env	DM_VK_SHADOW_BIAS=3,8
