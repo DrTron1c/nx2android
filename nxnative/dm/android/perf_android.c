@@ -146,6 +146,9 @@ static int64_t g_work_start;
 // (60 → 40 → 30 fps; 40 asks the display for 120 Hz), and back when they fit the shorter one with room; a steady rate instead of alternating
 // one-vsync and two-vsync frames. DM_ADAPTIVE_FPS=0 keeps the game's own period.
 static const int64_t STEPS[] = {16666667, 25000000, 33333333};   // 60, 40, 30 fps
+static volatile int g_fps_cap;
+void dm_perf_fps_cap(int fps) { g_fps_cap = fps; }   // the pause menu's FPS lock: 60, 40, 30, a number the player typed (10-120), or 0 for the adaptive rate
+static int cap_custom(void) { int v = g_fps_cap; return v >= 10 && v <= 120 && v != 60 && v != 40 && v != 30 ? v : 0; }   // a lock that is none of the steps
 static int g_step = 0, g_adapt = -1; static int64_t g_work_hist[64]; static int g_nwork;
 static int64_t g_last_change, g_last_up, g_up_hold = 2000000000; static int g_ok_frames; static uint64_t g_game_period;   // the period the game asks for, before the adaptive step
 static int64_t work_pct(int q) {   // the q-th percentile of the last 64 frames' work
@@ -164,9 +167,6 @@ uint64_t dm_present_period_adapt(uint64_t period) {
     int64_t want = STEPS[g_step];
     return (uint64_t)want > period ? (uint64_t)want : period;   // never faster than the game asks
 }
-static volatile int g_fps_cap;
-void dm_perf_fps_cap(int fps) { g_fps_cap = fps; }   // the pause menu's FPS lock: 60, 40, 30, a number the player typed (10-120), or 0 for the adaptive rate
-static int cap_custom(void) { int v = g_fps_cap; return v >= 10 && v <= 120 && v != 60 && v != 40 && v != 30 ? v : 0; }   // a lock that is none of the steps
 static int fps_pin(void) {   // a DM_CTL "env DM_FPS_PIN=40" line holds that step (60, 40 or 30; anything else lets the rate adapt again): tests
     static unsigned k; static int pin = -1; if (k++ % 30) return pin;
     const char *e = getenv("DM_FPS_PIN"); int v = g_fps_cap ? g_fps_cap : e ? atoi(e) : 0, st = v == 60 ? 0 : v == 40 ? 1 : v == 30 ? 2 : -1;
