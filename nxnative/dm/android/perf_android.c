@@ -128,8 +128,9 @@ static void hint_threads_scan(int32_t self) {
 // DM_PIN_REPLAY (start-up): the replay thread (DM_NVN_ASYNC, hle_nvn.c replay_main) kept to the fastest cores. prime: the cores of the highest maximum clock
 // (a Snapdragon 8+ Gen 1's Cortex-X2), big: every core above the lowest maximum clock. Left to the scheduler, Unicorn Overlord's battle map replay took
 // 13 to 20 ms a frame from run to run with the same ~3,500 draws
+void dm_perf_fast_cores(pid_t replay, const cpu_set_t *rset, int prime_only);
 void dm_perf_replay_thread(void) {
-    const char *e = getenv("DM_PIN_REPLAY"); if (!e || !*e || !strcmp(e, "0")) return;
+    const char *e = getenv("DM_PIN_REPLAY"); if (!e || !*e || !strcmp(e, "0")) { dm_perf_fast_cores(0, NULL, 0); return; }
     int prime = !strcmp(e, "prime"); long n = sysconf(_SC_NPROCESSORS_CONF); if (n > 32) n = 32;
     long mhz[32] = {0}, hi = 0, lo = 0;
     for (long c = 0; c < n; c++) { char p[96]; snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_max_freq", c); FILE *f = fopen(p, "r");
@@ -139,6 +140,50 @@ void dm_perf_replay_thread(void) {
     for (long c = 0; c < n; c++) if (prime ? mhz[c] == hi : mhz[c] > lo) { CPU_SET(c, &set); o += snprintf(l + o, sizeof l - o, " %ld", c); }
     if (sched_setaffinity(0, sizeof set, &set)) { LOG("[perf] DM_PIN_REPLAY: sched_setaffinity refused"); return; }
     LOG("[perf] replay thread on CPUs%s (%s, up to %ld MHz)", l, prime ? "prime" : "big", hi);
+    dm_perf_fast_cores((pid_t)syscall(SYS_gettid), &set, prime);
+}
+
+// Use fast cores (DM_FAST_CORES, start-up, default on; 0 = off): BananaNative's thread placement (f9b1433 "Android: Use fast cores", MIT, adapted). Every 5 s the game's own
+// threads (hle_thread.c names them "0x<handle> <name>") are kept to the cores at 75% of the top clock or more (a Snapdragon 8 Gen 2's four 2.8 GHz cores), never the
+// small ones (2.0 GHz, about a third of a big core's speed), and the replay thread to its DM_PIN_REPLAY cores again: Android puts every thread back on all cores when the
+// app goes to the background and returns, which undid the start-up pin for the rest of the session. With the replay on the prime core alone, the game's threads keep off
+// it (the replay has it to itself, as BananaNative does); otherwise they may use it too. Without the cores' clocks (no cpufreq) nothing is placed. A placement can fail
+// while a core is parked (core control at low load): the next pass places it
+static pid_t g_fc_replay; static cpu_set_t g_fc_rset, g_fc_game; static int g_fc_ok;
+static void *fast_cores_main(void *arg) {
+    (void)arg; pthread_setname_np(pthread_self(), "fast cores");
+    for (unsigned pass = 0;; pass++) {
+        DIR *d = opendir("/proc/self/task"); int placed = 0, game = 0; struct dirent *e;
+        while (d && (e = readdir(d))) {
+            int tid = atoi(e->d_name); if (tid <= 0) continue;
+            char path[64], name[32] = ""; snprintf(path, sizeof path, "/proc/self/task/%d/comm", tid);
+            FILE *f = fopen(path, "r"); if (!f) continue; if (!fgets(name, sizeof name, f)) name[0] = 0; fclose(f);
+            const cpu_set_t *to = tid == g_fc_replay ? &g_fc_rset : !strncmp(name, "0x", 2) ? &g_fc_game : NULL; if (!to) continue;
+            game += to == &g_fc_game; cpu_set_t cur;
+            if (!sched_getaffinity(tid, sizeof cur, &cur) && CPU_EQUAL(&cur, to)) continue;
+            if (!sched_setaffinity(tid, sizeof *to, to)) placed++;
+        }
+        if (d) closedir(d);
+        if (pass < 3 || (placed && pass % 12 == 0)) { static int n; if (n++ < 8) LOG("[perf] fast cores: %d thread%s placed (%d of the game's)", placed, placed == 1 ? "" : "s", game); }
+        sleep(5);
+    }
+    return NULL;
+}
+void dm_perf_fast_cores(pid_t replay, const cpu_set_t *rset, int prime_only) {
+    const char *e = getenv("DM_FAST_CORES"); if ((e && !atoi(e)) || g_fc_ok) return;
+    long n = sysconf(_SC_NPROCESSORS_CONF); if (n > 32) n = 32; long khz[32] = {0}, top = 0;
+    for (long c = 0; c < n; c++) { char p[96]; snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_max_freq", c); FILE *f = fopen(p, "r");
+        if (f) { if (fscanf(f, "%ld", &khz[c]) != 1) khz[c] = 0; fclose(f); } if (khz[c] > top) top = khz[c]; }
+    if (!top) { LOG("[perf] fast cores: the cores' clocks are unknown, threads left to the scheduler"); return; }
+    cpu_set_t mid, fast; CPU_ZERO(&mid); CPU_ZERO(&fast); char l[96]; size_t o = 0;
+    for (long c = 0; c < n; c++) { if (khz[c] == top) CPU_SET(c, &fast); else if (khz[c] * 4 >= top * 3) CPU_SET(c, &mid); }
+    g_fc_game = mid; if (!prime_only || !CPU_COUNT(&mid)) CPU_OR(&g_fc_game, &g_fc_game, &fast);   // the prime core too, unless the replay has it alone
+    for (long c = 0; c < n; c++) if (CPU_ISSET(c, &g_fc_game)) o += snprintf(l + o, sizeof l - o, " %ld", c);
+    g_fc_replay = replay; if (rset) g_fc_rset = *rset; g_fc_ok = 1;   // (no replay pin: the replay thread is left to the scheduler)
+    LOG("[perf] fast cores: the game's threads on CPUs%s (at least 75%% of %ld MHz), the replay thread kept on its own (DM_FAST_CORES)", l, top / 1000);
+    pthread_t t; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &a, fast_cores_main, NULL)) LOG("[perf] fast cores: no thread");
+    pthread_attr_destroy(&a);
 }
 
 static int64_t g_work_start;
