@@ -39,13 +39,13 @@ class SpeedFix(unittest.TestCase):
 
     def test_menu_row_and_setting(self):
         lay = (NX / 'android/overlay_layout.h').read_text(encoding='utf-8')
-        tabs = re.search(r'OVM_TAB_ITEMS\[OVM_TABS\]\[OVM_PER_TAB\] = \{(.*?)\};', lay).group(1)
+        tabs = re.search(r'OVM_TAB_ITEMS\[OVM_TABS\]\[OVM_PER_TAB\] = \{(.*?)\};', lay, re.S).group(1)
         self.assertIn('OVM_SPEED', tabs)
         self.assertRegex(lay, r'DISP_SPEED, (DISP_\w+, )*DISP_N \}')
         front = (NX / 'android/front_android.c').read_text(encoding='utf-8')
         self.assertIn('"speed=%d"', front)
         self.assertIn('speed=%d\\n', front)
-        self.assertIn('item == OVM_SPEED ? DISP_SPEED', front)
+        self.assertIn('case OVM_SPEED: return DISP_SPEED;', front)
         present = (NX / 'android/gfx_vk_present.c').read_text(encoding='utf-8')
         labels = re.search(r'OVM_LABELS\[OVM_N\] = \{(.*?)\};', present).group(1)
         enum = re.search(r'enum \{ (OVM_OVERLAY.*?), OVM_N \};', lay).group(1).split(', ')

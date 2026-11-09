@@ -27,11 +27,11 @@ class GpuSaver(unittest.TestCase):
     def test_menu_and_settings(self):
         lay = (AND / 'overlay_layout.h').read_text(encoding='utf-8')
         self.assertIn('#define OVM_PER_TAB 7', lay)
-        tabs = re.search(r'OVM_TAB_ITEMS\[OVM_TABS\]\[OVM_PER_TAB\] = \{(.*?)\};', lay).group(1)
+        tabs = re.search(r'OVM_TAB_ITEMS\[OVM_TABS\]\[OVM_PER_TAB\] = \{(.*?)\};', lay, re.S).group(1)
         for row in re.findall(r'\{([^{}]*)\}', tabs): self.assertEqual(len(row.split(',')), 7, row)
-        self.assertIn('OVM_ANISO}', tabs); self.assertIn('OVM_VRS}', tabs)
+        self.assertIn('{OVM_PRESET, OVM_AUTORES, OVM_SHADOWRES, OVM_VRS, OVM_ANISO, OVM_BOOST, -1}', tabs)   # the Speed tab
         front = (AND / 'front_android.c').read_text(encoding='utf-8')
-        for k in ('"vrs=%d"', '"aniso=%d"', 'setenv("DM_VK_VRS"', 'setenv("DM_VK_ANISO"', 'item == OVM_VRS ? 3'): self.assertIn(k, front)
+        for k in ('"vrs=%d"', '"aniso=%d"', 'setenv("DM_VK_VRS"', 'setenv("DM_VK_ANISO"', 'case OVM_VRS: case OVM_TEXHALF: case OVM_LOWLAT: case OVM_SHADOWRES: return 3;'): self.assertIn(k, front)
 
 
 if __name__ == '__main__':

@@ -31,6 +31,10 @@ A Switch 2 game: update v655360 (the title screen says Ver. 2.0.1), SDK 20.5.25 
 
 - The main loop scales each update by a frame multiplier in 60 Hz units, frame time x 60 clamped to [1, 3]: under 20 fps every frame lost what went past 50 ms (slow motion). Two observation gates in [`patches.py`](patches.py) (addresses from pp-native's notes of the same build; words read at the rewrite) let [`speed_android.c`](../../android/speed_android.c) give frames up to 1/15 s all their time, hold back what a longer hitch still lacks (up to 1/3 s) and give it back at most a quarter more a frame, and give slow frames of the fixed-step mode their measured rate. The pause menu's **Game speed fix** (Saves tab) switches it; `[speed]` lines in the log count what was lost and given back. Not yet run on the tablet.
 
+## Speed tab (Android)
+
+- The pause menu's Speed tab: **Preset** (Quality, Balanced, Performance, Max FPS: the rows below and Resolution and Textures at once), **Auto resolution** (the level lists of `DM_RES_LEVELS` rewritten while the game runs, by the GPU's frame time: `autores_android.c`, `[autores]` lines), **Shadow resolution** (the sun's 2048x2048 D16 map made 1024 or 512: `gfx_vk_tex.c` shadow_shrink), **GPU saver** (variable rate shading of the passes with depth and colour) and **Texture filtering** (the anisotropy cap). Not yet run on the tablet.
+
 ## Driving it on the Mac
 
 The first boot shows the language list: `A`, `LUp`, `A` picks English. The character choice takes `LLeft` before `A`. From a warm cache, `A A LLeft A A Plus` reaches walking in about 300 s. On later boots, `A` at the title screen a few times continues the save and reaches walking in about 110 s. The work folder has `run/boot.sh`, `run/hdrive.sh` (no window, timed control lines) and `run/spam.sh`.

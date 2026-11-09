@@ -34,9 +34,9 @@ class FpsCounter(unittest.TestCase):
 
     def test_frame_generation_quality(self):   # the Display tab's Frame gen quality: LSFG's motion scale and basic frame generation's field density
         lay = (AND / 'overlay_layout.h').read_text(encoding='utf-8')
-        self.assertIn('{OVM_ASPECT, OVM_FSR, OVM_SHARP, OVM_FG, OVM_SCALE, OVM_FGQ, OVM_VRS}', lay)
+        self.assertIn('{OVM_ASPECT, OVM_FSR, OVM_SHARP, OVM_FG, OVM_FGQ, OVM_SCALE, -1}', lay)
         front = (AND / 'front_android.c').read_text(encoding='utf-8')
-        self.assertIn('"fgq=%d"', front); self.assertIn('item == OVM_FGQ ? DISP_FGQ', front)
+        self.assertIn('"fgq=%d"', front); self.assertIn('case OVM_FGQ: return DISP_FGQ;', front)
         self.assertIn('F.flow != flow', (AND / 'gfx_vk_lsfg.c').read_text(encoding='utf-8'))   # LSFG's chain made again when the quality changes
         self.assertIn('FD[dm_disp(DISP_FGQ) & 3]', (AND / 'gfx_vk_fx.h').read_text(encoding='utf-8'))
         src = (AND / 'gfx_vk_present.c').read_text(encoding='utf-8')

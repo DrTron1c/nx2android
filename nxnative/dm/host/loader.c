@@ -726,11 +726,15 @@ static uint8_t *slurp(const char *path, size_t *n) {
 // operation mode and graphics scale, stepping down the list when the GPU runs late. Each list that starts above the cap is rewritten to start at the largest level that fits. The table
 // stays: render targets keep their size and the game draws into part of them, as its own dynamic resolution does (lowering the table too broke Pokopia's terrain). Fixed offsets run only on
 // the build they were found in, and the table and the lists are checked first. Read-only data is still writable here
+// The lists as levels_apply left them, for Auto resolution (dm_res_levels_set, Android autores_android.c): the game's level lists are rewritten while it runs, as
+// levels_apply does at load, to start at the level the GPU's frame time allows; the game's own stepping down the list from there still works
+static struct { int ok, top, n, nl; uint8_t *base; const uint32_t *tw, *th; struct { unsigned long long off; unsigned len; } l[12]; uint8_t saved[12][32]; } g_lv;
 static void levels_apply(module_t *m) {
     if (strcmp(m->name, "main")) return;
-    const char *e = getenv("DM_RES_LEVELS"), *w = getenv("DM_WINDOW_SIZE"); unsigned cw, ch; char x;
-    if (!e || !*e || !w || !*w || !strcmp(w, "original")) return;
-    if (sscanf(w, "%ux%u%c", &cw, &ch, &x) != 2 || !cw || !ch) { LOG("[RED] DM_WINDOW_SIZE=%s: must be <width>x<height> or original; the resolution stays the game's", w); return; }
+    const char *e = getenv("DM_RES_LEVELS"), *w = getenv("DM_WINDOW_SIZE"); unsigned cw = 0, ch = 0; char x;
+    if (!e || !*e) return;
+    int cap = w && *w && strcmp(w, "original");
+    if (cap && (sscanf(w, "%ux%u%c", &cw, &ch, &x) != 2 || !cw || !ch)) { LOG("[RED] DM_WINDOW_SIZE=%s: must be <width>x<height> or original; the resolution stays the game's", w); cap = 0; }
     char build[40]; unsigned long long table; unsigned n; int at = 0;
     if (sscanf(e, "%39[^,],%llx,%u%n", build, &table, &n, &at) != 3 || n < 2 || n > 255) { LOG("[RED] DM_RES_LEVELS=%s: not understood", e); return; }
     if (strcmp(build, m->build_id)) { LOG("[RED] DM_RES_LEVELS: main is build %s, not %s; the resolution stays the game's", m->build_id, build); return; }
@@ -740,21 +744,53 @@ static void levels_apply(module_t *m) {
     const uint32_t *tw = (const uint32_t *)(m->base + table), *th = tw + n;
     for (unsigned i = 0; i < n; i++) if (!tw[i] || !th[i] || (i && (tw[i] < tw[i - 1] || th[i] < th[i - 1]))) { LOG("[RED] DM_RES_LEVELS: the size table at main+%#llx does not grow at level %u (%ux%u)", table, i, tw[i], th[i]); return; }
     for (unsigned k = 0; k < nl; k++) {
-        if (l[k].off + l[k].len > m->size) { LOG("[RED] DM_RES_LEVELS: list main+%#llx is outside main", l[k].off); return; }
+        if (l[k].off + l[k].len > m->size || l[k].len > 32) { LOG("[RED] DM_RES_LEVELS: list main+%#llx is outside main", l[k].off); return; }
         for (unsigned i = 0; i < l[k].len; i++) if (m->base[l[k].off + i] >= n) { LOG("[RED] DM_RES_LEVELS: list main+%#llx holds %u, not a level", l[k].off, m->base[l[k].off + i]); return; }
     }
     int top = 0, changed = 0;
-    uint32_t *lw = (uint32_t *)(uintptr_t)tw, *lh = lw + n;
-    if (cw < tw[0] && ch < th[0] && cw >= 320 && ch >= 180 && n > 1) {   // below the game's smallest size (Pokopia: 960x540): level 0 becomes the cap. Only level 0, which the game's own lists
-        LOG("resolution: the game's smallest size %ux%u becomes %ux%u", tw[0], th[0], cw, ch); lw[0] = cw; lh[0] = ch; }   // never reach, so the maximum and the targets stay the game's
-    for (unsigned i = 0; i < n; i++) if (tw[i] <= cw && th[i] <= ch) top = (int)i;
-    for (unsigned k = 0; k < nl; k++) {
-        uint8_t *p = m->base + l[k].off;
-        if (p[0] <= top) continue;
-        for (unsigned i = 0; i < l[k].len; i++) p[i] = (uint8_t)(top > (int)i ? top - (int)i : 0);
-        changed++;
+    if (cap) {
+        uint32_t *lw = (uint32_t *)(uintptr_t)tw, *lh = lw + n;
+        if (cw < tw[0] && ch < th[0] && cw >= 320 && ch >= 180 && n > 1) {   // below the game's smallest size (Pokopia: 960x540): level 0 becomes the cap. Only level 0, which the game's own lists
+            LOG("resolution: the game's smallest size %ux%u becomes %ux%u", tw[0], th[0], cw, ch); lw[0] = cw; lh[0] = ch; }   // never reach, so the maximum and the targets stay the game's
+        for (unsigned i = 0; i < n; i++) if (tw[i] <= cw && th[i] <= ch) top = (int)i;
+        for (unsigned k = 0; k < nl; k++) {
+            uint8_t *p = m->base + l[k].off;
+            if (p[0] <= top) continue;
+            for (unsigned i = 0; i < l[k].len; i++) p[i] = (uint8_t)(top > (int)i ? top - (int)i : 0);
+            changed++;
+        }
+        LOG("resolution: at most %ux%u (level %d of the game's %u): %d of %u level lists lowered", tw[top], th[top], top, n, changed, nl);
+    } else for (unsigned k = 0; k < nl; k++) if (m->base[l[k].off] > top) top = m->base[l[k].off];   // the game's own: the highest any list starts at
+    g_lv.base = m->base; g_lv.tw = tw; g_lv.th = th; g_lv.n = (int)n; g_lv.nl = (int)nl; g_lv.top = top;
+    for (unsigned k = 0; k < nl; k++) { g_lv.l[k].off = l[k].off; g_lv.l[k].len = l[k].len; memcpy(g_lv.saved[k], m->base + l[k].off, l[k].len); }
+    g_lv.ok = 1;
+}
+int dm_res_levels(int *top, int *n, const uint32_t **w, const uint32_t **h) {   // the size table and the highest level the lists start at; 0 = no lists (DM_RES_LEVELS)
+    if (!g_lv.ok) return 0;
+    *top = g_lv.top; *n = g_lv.n; *w = g_lv.tw; *h = g_lv.th; return 1;
+}
+// Each list starts at level (never above where levels_apply left it) and steps down one level a place, as levels_apply writes them; -1: the lists as levels_apply left
+// them. The lists are in main's read-only data: a page that is not writable now is made writable for the write and put back as it was (/proc/self/maps), and a page
+// that is executable is left alone. Returns the lists rewritten
+int dm_res_levels_set(int level) {
+    if (!g_lv.ok) return 0;
+    int done = 0;
+    for (int k = 0; k < g_lv.nl; k++) {
+        uint8_t *p = g_lv.base + g_lv.l[k].off, want[32]; unsigned len = g_lv.l[k].len;
+        int start = level < 0 ? -1 : level < g_lv.saved[k][0] ? level : g_lv.saved[k][0];
+        for (unsigned i = 0; i < len; i++) want[i] = start < 0 ? g_lv.saved[k][i] : (uint8_t)(start > (int)i ? start - (int)i : 0);
+        if (!memcmp(p, want, len)) continue;
+        uintptr_t lo = (uintptr_t)p & ~(uintptr_t)0xfff, hi = ((uintptr_t)p + len + 0xfff) & ~(uintptr_t)0xfff; int prot = -1;
+        FILE *f = fopen("/proc/self/maps", "r"); char line[256];
+        while (f && fgets(line, sizeof line, f)) { unsigned long a, b; char r[5]; if (sscanf(line, "%lx-%lx %4s", &a, &b, r) == 3 && a <= lo && hi <= b) { prot = (r[0] == 'r' ? PROT_READ : 0) | (r[1] == 'w' ? PROT_WRITE : 0) | (r[2] == 'x' ? PROT_EXEC : 0); break; } }
+        if (f) fclose(f);
+        if (prot < 0 || (prot & PROT_EXEC)) { static int n; if (n++ < 3) LOG("[RED] auto resolution: the level list at main+%#llx is %s: left as it is", g_lv.l[k].off, prot < 0 ? "in no single mapping" : "in executable memory"); continue; }
+        if (!(prot & PROT_WRITE) && mprotect((void *)lo, hi - lo, prot | PROT_WRITE)) { static int n; if (n++ < 3) LOG("[RED] auto resolution: mprotect failed for main+%#llx", g_lv.l[k].off); continue; }
+        for (unsigned i = 0; i < len; i++) __atomic_store_n(&p[i], want[i], __ATOMIC_RELAXED);
+        if (!(prot & PROT_WRITE)) mprotect((void *)lo, hi - lo, prot);
+        done++;
     }
-    LOG("resolution: at most %ux%u (level %d of the game's %u): %d of %u level lists lowered", tw[top], th[top], top, n, changed, nl);
+    return done;
 }
 
 // Seal the code area immediately after copying into anonymous pages (16 KB pages): [0, text_end) and the patch area are read-only+execute, and from then on any write to the code area crashes on the spot;

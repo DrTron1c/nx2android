@@ -72,11 +72,13 @@ static int cap_fps(int i) { return CAP_FPS[i] < 0 ? atomic_load(&g_cap_custom) :
 static void settings_load(void) {
     { const char *e = getenv("DM_OV_FLOAT"); if (e) atomic_store(&g_disp[DISP_FLOAT], atoi(e) != 0); }   // the profile's default; the player's setting below wins
     atomic_store(&g_disp[DISP_PREWARM], !getenv("DM_VK_NOPREWARM"));
-    { const char *e = getenv("DM_SPEED_FIX"); atomic_store(&g_disp[DISP_SPEED], e ? atoi(e) != 0 : 1); }
+    { const char *e = getenv("DM_SPEED_FIX"); atomic_store(&g_disp[DISP_SPEED], e ? atoi(e) != 0 : 1); }   // the game speed fix (speed_android.c): on unless the profile says otherwise
     { const char *e = getenv("DM_VK_VRS"); atomic_store(&g_disp[DISP_VRS], e && atoi(e) >= 0 && atoi(e) <= 2 ? atoi(e) : 0); }   // GPU saver (gfx_vk_exec.c vrs_pass)
     { const char *e = getenv("DM_VK_ANISO"); atomic_store(&g_disp[DISP_ANISO], e && atoi(e) >= 0 && atoi(e) <= 3 ? atoi(e) : 0); }   // Texture filtering (gfx_vk_tex.c)
-    { const char *e = getenv("DM_LSFG_FLOW"); int f = e ? atoi(e) : 50; atomic_store(&g_disp[DISP_FGQ], f <= 37 ? 0 : f <= 62 ? 1 : f <= 87 ? 2 : 3); }   // frame generation's quality: LSFG's motion at 25, 50, 75, 100%   // the game speed fix (speed_android.c): on unless the profile says otherwise
-    { const char *e = getenv("DM_LOW_LATENCY"); int v = e ? atoi(e) : 0; atomic_store(&g_disp[DISP_LOWLAT], v < 0 ? 0 : v > 2 ? 2 : v); }   // the profile's default   // on unless the profile says otherwise
+    { const char *e = getenv("DM_LSFG_FLOW"); int f = e ? atoi(e) : 50; atomic_store(&g_disp[DISP_FGQ], f <= 37 ? 0 : f <= 62 ? 1 : f <= 87 ? 2 : 3); }   // frame generation's quality: LSFG's motion at 25, 50, 75, 100%
+    { const char *e = getenv("DM_LOW_LATENCY"); int v = e ? atoi(e) : 0; atomic_store(&g_disp[DISP_LOWLAT], v < 0 ? 0 : v > 2 ? 2 : v); }   // the profile's default
+    { const char *e = getenv("DM_AUTORES"); atomic_store(&g_disp[DISP_AUTORES], e && atoi(e) > 0); }   // Auto resolution (autores_android.c)
+    { const char *e = getenv("DM_VK_SHADOW_RES"); atomic_store(&g_disp[DISP_SHADOWRES], e && atoi(e) >= 0 && atoi(e) <= 2 ? atoi(e) : 0); }   // Shadow resolution (gfx_vk_tex.c shadow_shrink)
     { const char *e = getenv("DM_VK_TEX_HALF"); if (e && atoi(e) >= 0 && atoi(e) <= 2) atomic_store(&g_disp[DISP_TEXHALF], atoi(e)); }
     char p[600]; snprintf(p, sizeof p, "%s/settings.txt", g_root); FILE *f = fopen(p, "r"); char line[128];
     if (!f) return;
@@ -100,6 +102,9 @@ static void settings_load(void) {
         else if (sscanf(line, "speed=%d", &v) == 1 && v >= 0 && v <= 1) atomic_store(&g_disp[DISP_SPEED], v);
         else if (sscanf(line, "fgq=%d", &v) == 1 && v >= 0 && v <= 3) atomic_store(&g_disp[DISP_FGQ], v);
         else if (sscanf(line, "vrs=%d", &v) == 1 && v >= 0 && v <= 2) { atomic_store(&g_disp[DISP_VRS], v); char s[4]; snprintf(s, sizeof s, "%d", v); setenv("DM_VK_VRS", s, 1); }   // read when the device is made
+        else if (sscanf(line, "preset=%d", &v) == 1 && v >= 0 && v < PRESETS) atomic_store(&g_disp[DISP_PRESET], v);
+        else if (sscanf(line, "autores=%d", &v) == 1 && (v == 0 || v == 1)) atomic_store(&g_disp[DISP_AUTORES], v);
+        else if (sscanf(line, "shadowres=%d", &v) == 1 && v >= 0 && v <= 2) { atomic_store(&g_disp[DISP_SHADOWRES], v); char s[4]; snprintf(s, sizeof s, "%d", v); setenv("DM_VK_SHADOW_RES", s, 1); }   // read as images are made
         else if (sscanf(line, "aniso=%d", &v) == 1 && v >= 0 && v <= 3) { atomic_store(&g_disp[DISP_ANISO], v); char s[4]; snprintf(s, sizeof s, "%d", v); setenv("DM_VK_ANISO", s, 1); }   // read at the first sampler
         else if (sscanf(line, "prewarm=%d", &v) == 1 && (v == 0 || v == 1)) { atomic_store(&g_disp[DISP_PREWARM], v); if (v) unsetenv("DM_VK_NOPREWARM"); else setenv("DM_VK_NOPREWARM", "1", 1); }   // from the next start
         else if (sscanf(line, "texhalf=%d", &v) == 1 && v >= 0 && v <= 2) { atomic_store(&g_disp[DISP_TEXHALF], v); char s[4]; snprintf(s, sizeof s, "%d", v); setenv("DM_VK_TEX_HALF", s, 1); }   // read as images are made: from the next start
@@ -126,7 +131,7 @@ static void settings_save(void) {
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
     { const char *ep = getenv("DM_SETTINGS_EPOCH"); if (ep) fprintf(f, "epoch=%s\n", ep); }
     fprintf(f, "capn=%d\n", atomic_load(&g_cap_custom));
-    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\ncap=%d\nshadows=%d\nboost=%d\nsound=%d\ntexhalf=%d\nprewarm=%d\nlowlat=%d\nspeed=%d\nfgq=%d\nvrs=%d\naniso=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE), dm_disp(DISP_CAP), dm_disp(DISP_SHADOWS), dm_disp(DISP_BOOST), dm_disp(DISP_SOUND), dm_disp(DISP_TEXHALF), dm_disp(DISP_PREWARM), dm_disp(DISP_LOWLAT), dm_disp(DISP_SPEED), dm_disp(DISP_FGQ), dm_disp(DISP_VRS), dm_disp(DISP_ANISO));
+    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\ncap=%d\nshadows=%d\nboost=%d\nsound=%d\ntexhalf=%d\nprewarm=%d\nlowlat=%d\nspeed=%d\nfgq=%d\nvrs=%d\naniso=%d\npreset=%d\nautores=%d\nshadowres=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE), dm_disp(DISP_CAP), dm_disp(DISP_SHADOWS), dm_disp(DISP_BOOST), dm_disp(DISP_SOUND), dm_disp(DISP_TEXHALF), dm_disp(DISP_PREWARM), dm_disp(DISP_LOWLAT), dm_disp(DISP_SPEED), dm_disp(DISP_FGQ), dm_disp(DISP_VRS), dm_disp(DISP_ANISO), dm_disp(DISP_PRESET), dm_disp(DISP_AUTORES), dm_disp(DISP_SHADOWRES));
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);
         if ((x && y) || z) fprintf(f, "ui=%s,%s,%d,%d,%d\n", LAYOUT_NAMES[l], OV_LAYOUTS[0][i].name, x && y ? x - 1 : -1, x && y ? y - 1 : -1, z ? z : 1000);
@@ -330,7 +335,7 @@ int dm_menu_state(void) {
     if (atomic_load(&g_edit)) return OVE_ST | atomic_load(&g_ed_st);
     if (atomic_load(&g_sp_on)) return OVS_ST | (atomic_load(&g_sp_hi) + 1) << 4 | (atomic_load(&g_sp_ver) & 255) << 20;
     return atomic_load(&g_set_overlay) | atomic_load(&g_set_rumble) << 1 | (dm_opmode() != 0) << 2 | atomic_load(&g_set_fps) << 3 | (atomic_load(&g_menu_hi) + 1) << 4 |
-           (atomic_load(&g_menu_tab) & 1) << 8 | atomic_load(&g_set_opacity) << 9 | atomic_load(&g_sv_st) << 20 | (atomic_load(&g_sv_n) & 15) << 24 | (atomic_load(&g_menu_tab) >> 1) << 28 | (atomic_load(&g_disp_ver) & 3) << 29;
+           (atomic_load(&g_menu_tab) & 1) << 8 | atomic_load(&g_set_opacity) << 9 | atomic_load(&g_sv_st) << 20 | (atomic_load(&g_sv_n) & 15) << 24 | (atomic_load(&g_menu_tab) >> 1 & 1) << 28 | (atomic_load(&g_menu_tab) >> 2 & 1) << 19 | (atomic_load(&g_disp_ver) & 3) << 29;
 }
 int dm_overlay_fps(void) { return atomic_load(&g_set_fps) && !atomic_load(&g_menu); }   // gfx_vk_present.c draws the counter (not while the menu holds the game)
 static void menu_open(int hi) {
@@ -375,13 +380,53 @@ static void *cap_ask(void *arg) {
     LOG("[perf] FPS lock: %d", cap_fps(atomic_load(&g_disp[DISP_CAP])));
     return NULL;
 }
+// The menu's value rows: the setting each one steps (a tap takes the next value) and how many values it has (frame generation: off, basic, LSFG 2x to 4x when the port
+// brought a Lossless.dll)
+static int item_disp(int item) {
+    switch (item) {
+    case OVM_FLOAT: return DISP_FLOAT; case OVM_FSR: return DISP_FSR; case OVM_FG: return DISP_FG; case OVM_ASPECT: return DISP_ASPECT; case OVM_SHARP: return DISP_SHARP;
+    case OVM_SCALE: return DISP_SCALE; case OVM_CAP: return DISP_CAP; case OVM_SHADOWS: return DISP_SHADOWS; case OVM_BOOST: return DISP_BOOST; case OVM_SOUND: return DISP_SOUND;
+    case OVM_TEXHALF: return DISP_TEXHALF; case OVM_PREWARM: return DISP_PREWARM; case OVM_LOWLAT: return DISP_LOWLAT; case OVM_SPEED: return DISP_SPEED; case OVM_FGQ: return DISP_FGQ;
+    case OVM_VRS: return DISP_VRS; case OVM_ANISO: return DISP_ANISO; case OVM_AUTORES: return DISP_AUTORES; case OVM_SHADOWRES: return DISP_SHADOWRES;
+    default: return -1;
+    }
+}
+static int item_values(int item) {
+    switch (item) {
+    case OVM_SHARP: case OVM_SCALE: return 6;
+    case OVM_ASPECT: case OVM_CAP: return 5;
+    case OVM_SHADOWS: case OVM_FGQ: case OVM_ANISO: return 4;
+    case OVM_VRS: case OVM_TEXHALF: case OVM_LOWLAT: case OVM_SHADOWRES: return 3;
+    case OVM_FG: return getenv("DM_LSFG_DLL") ? 5 : 2;
+    default: return 2;
+    }
+}
+// Presets (the Speed tab's Preset; settings.txt preset=, 0 Custom): each sets the rows below at once. Most take effect at the next start (the row says restart); a row
+// changed by hand afterwards makes the preset Custom. Quality keeps the picture (720p, the game's filtering); Balanced lets the resolution follow the GPU and holds
+// filtering to 4x; Performance and Max FPS also lower the shadow maps, shade the 3D scene in blocks (the GPU saver) and start lower
+enum { PR_SCALE, PR_AUTORES, PR_SHADOWRES, PR_VRS, PR_ANISO, PR_TEXHALF, PR_N };
+static const int PR_DISP[PR_N] = {DISP_SCALE, DISP_AUTORES, DISP_SHADOWRES, DISP_VRS, DISP_ANISO, DISP_TEXHALF};
+static const int PR_VAL[PRESETS][PR_N] = {
+    {0},                      // Custom: nothing set
+    {0, 0, 0, 0, 0, 2},       // Quality: 720p, Auto resolution off, shadows full, GPU saver off, filtering as the game asks, textures Auto
+    {0, 1, 0, 0, 1, 2},       // Balanced: 720p, Auto resolution on, shadows full, GPU saver off, filtering 4x, textures Auto
+    {1, 1, 1, 1, 2, 2},       // Performance: 630p, Auto resolution on, shadows half, GPU saver Light, filtering 2x, textures Auto
+    {2, 1, 2, 2, 3, 1},       // Max FPS: 540p, Auto resolution on, shadows a quarter, GPU saver Max, filtering off, textures Half
+};
+static void preset_apply(int p) {
+    for (int i = 0; i < PR_N; i++) atomic_store(&g_disp[PR_DISP[i]], PR_VAL[p][i]);
+    atomic_store(&g_disp[DISP_PRESET], p); atomic_fetch_add(&g_disp_ver, 1); settings_save();
+    static const char *const nm[PRESETS] = {"Custom", "Quality", "Balanced", "Performance", "Max FPS"};
+    LOG("[perf] preset %s: resolution %d, auto resolution %d, shadows %d, GPU saver %d, filtering %d, textures %d (most from the next start)", nm[p], PR_VAL[p][0], PR_VAL[p][1], PR_VAL[p][2], PR_VAL[p][3], PR_VAL[p][4], PR_VAL[p][5]);
+}
 static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
-    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS || item == OVM_BOOST || item == OVM_SOUND || item == OVM_TEXHALF || item == OVM_PREWARM || item == OVM_LOWLAT || item == OVM_SPEED || item == OVM_FGQ || item == OVM_VRS || item == OVM_ANISO) {
-        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : item == OVM_BOOST ? DISP_BOOST : item == OVM_SOUND ? DISP_SOUND : item == OVM_TEXHALF ? DISP_TEXHALF : item == OVM_PREWARM ? DISP_PREWARM : item == OVM_LOWLAT ? DISP_LOWLAT : item == OVM_SPEED ? DISP_SPEED : item == OVM_FGQ ? DISP_FGQ : item == OVM_VRS ? DISP_VRS : item == OVM_ANISO ? DISP_ANISO : item == OVM_SHADOWS ? DISP_SHADOWS : DISP_SHARP;
-        int n = item == OVM_SHARP || item == OVM_SCALE ? 6 : item == OVM_ASPECT ? 5 : item == OVM_CAP ? 5 : item == OVM_SHADOWS || item == OVM_FGQ || item == OVM_ANISO ? 4 : item == OVM_VRS ? 3 : item == OVM_TEXHALF || item == OVM_LOWLAT ? 3 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
+    else if (item == OVM_PRESET) preset_apply(atomic_load(&g_disp[DISP_PRESET]) % (PRESETS - 1) + 1);   // Quality, Balanced, Performance, Max FPS, Quality...
+    else if (item_disp(item) >= 0) {
+        int w = item_disp(item), n = item_values(item);
+        for (int k = 0; k < PR_N; k++) if (PR_DISP[k] == w && atomic_load(&g_disp[DISP_PRESET])) { atomic_store(&g_disp[DISP_PRESET], 0); break; }   // a preset's row changed by hand: Custom
         atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); if (item == OVM_CAP) dm_perf_fps_cap(cap_fps(atomic_load(&g_disp[w]))); atomic_fetch_add(&g_disp_ver, 1); settings_save();
         if (item == OVM_CAP && atomic_load(&g_disp[w]) == 4) { pthread_t th; if (!pthread_create(&th, NULL, cap_ask, NULL)) pthread_detach(th); } }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on

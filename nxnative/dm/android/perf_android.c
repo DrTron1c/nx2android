@@ -337,3 +337,5 @@ void dm_perf_window(ANativeWindow *w, double fps) {
     LOG("[perf] window frame rate %.0f fps%s", fps, r ? " refused" : "");
 }
 
+// The frame rate presentation aims at now (Auto resolution's budget, autores_android.c): the pause menu's FPS lock, else the adaptive rate's step (60, 40 or 30)
+int dm_perf_target_fps(void) { int v = g_fps_cap; if (v > 0) return v; static const int F[3] = {60, 40, 30}; return g_step >= 0 && g_step < 3 ? F[g_step] : 30; }

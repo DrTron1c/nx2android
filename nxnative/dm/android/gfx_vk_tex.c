@@ -191,6 +191,15 @@ static int tex_half(const nvn_texdesc *d, const vkfmt_t *f, const vkimg_t *im) {
            !(d->flags & (NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET | NVN_TEXTURE_FLAGS_COMPRESSIBLE | NVN_TEXTURE_FLAGS_SPARSE));
 }
 uint64_t vk_tex_half_count(void) { return g_half_n; }
+// Shadow resolution (the pause menu's Speed tab, settings.txt shadowres=, DM_VK_SHADOW_RES 1 half, 2 a quarter; read as images are made: restart): a shadow map is made at
+// half or a quarter of its width and height, a quarter or a sixteenth of the pixels the GPU draws and filters. A shadow map here: a 2D (array) texture of one level in
+// D16, 1024x1024 or larger, single-sampled: Pokopia's sun map (2048x2048 D16). The passes that draw it (depth only) scale their viewports and scissors to it
+// (gfx_vk_exec.c pass_shrink); the shaders read it at normalised coordinates, so the same places, with fewer texels between them. Copies to and from it are skipped
+static uint64_t g_shrink_n;
+static int shadow_shrink(const nvn_texdesc *d, const vkfmt_t *f, const vkimg_t *im) {
+    static int s = -1; if (s < 0) { const char *e = getenv("DM_VK_SHADOW_RES"); s = e && atoi(e) >= 1 && atoi(e) <= 2 ? atoi(e) : 0; if (s) VKLOG("shadow maps at %s size (DM_VK_SHADOW_RES=%d)", s == 1 ? "half" : "a quarter of their", s); }
+    return s && f->vk == VK_FORMAT_D16_UNORM && (d->target == 1 || d->target == 4) && im->levels == 1 && im->samples == 1 && im->w >= 1024 && im->h >= 1024 ? s : 0;
+}
 static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
     vkimg_t *im = calloc(1, sizeof *im);
     const nvn_texdesc *d = &t->d;
@@ -199,6 +208,7 @@ static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
     im->levels = d->levels ? d->levels : 1; im->samples = d->samples > 1 ? d->samples : 1; im->target = d->target; im->nvn_format = d->format;
     im->fmt = f->vk; im->vtype = vtype_of(d->target); im->aspect = aspect_of(f);
     if (tex_half(d, f, im)) { im->w >>= 1; im->h >>= 1; im->levels--; im->half = 1; g_half_n++; }
+    { int s = shadow_shrink(d, f, im); if (s) { im->w >>= s; im->h >>= s; im->shrink = s; if (g_shrink_n++ < 4) VKLOG("shadow map %ux%u made %ux%u", im->w << s, im->h << s, im->w, im->h); } }
     VkFormatProperties fp; vkGetPhysicalDeviceFormatProperties(V.pd, f->vk, &fp);
     VkImageUsageFlags u = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) u |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -799,6 +809,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
     if (!im || !f) { mtl_sub_commit(); for (size_t z = 0; z < depth; z++) for (int y = 0; y < r->height; y++) memset(dst + z * img + (size_t)y * row, 0, row); return; }
     if (f->dec) { VKRED_ONCE(17, "ReadTexels of a BC texture decoded on the CPU: zeros returned"); mtl_sub_commit(); for (size_t z = 0; z < depth; z++) for (int y = 0; y < (r->height + 3) / 4; y++) memset(dst + z * img + (size_t)y * row, 0, row); return; }
     unsigned bw = f->bw ? f->bw : 1, bh = f->bh ? f->bh : 1;
+    if (im->shrink) { VKRED_ONCE(19, "ReadTexels of a smaller shadow map (DM_VK_SHADOW_RES): zeros returned"); mtl_sub_commit(); for (size_t z = 0; z < depth; z++) for (int y = 0; y < r->height; y++) memset(dst + z * img + (size_t)y * row, 0, row); return; }
     if (im->half) { if (!level) { VKRED_ONCE(18, "ReadTexels of the level a half-size texture does not keep: zeros returned"); mtl_sub_commit(); for (size_t z = 0; z < depth; z++) for (int y = 0; y < (r->height + 3) / 4; y++) memset(dst + z * img + (size_t)y * row, 0, row); return; } level--; }
     size_t pitch = (size_t)((r->width + bw - 1) / bw) * f->bpb, rows = (r->height + bh - 1) / bh;
     VkBuffer sb; VkDeviceSize so; uint8_t *p = vk_scratch(pitch * rows * depth, 16, &sb, &so);

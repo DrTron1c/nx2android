@@ -10,6 +10,7 @@ DM_AUDIO	switch	`1` plays audio through Core Audio, `0` uses the silent sink; re
 DM_AUDIO_DUMP	diagnostic	`=<file>` writes every PCM block the game appends as is (16-bit, 48 kHz, channel count as in the OpenAudioOut log), to judge whether a sound played
 DM_AUDIO_MUTE	switch	`=1` runs the real Core Audio output path (callback pacing, background take-over) with the output silenced, for lifecycle tests on the Mac without noise
 DM_AUDREN_TRACE	diagnostic	When set, the CPU audio renderer logs every update with the number of frames rendered since the previous one
+DM_AUTORES	player	`1` starts Auto resolution on (Android `autores_android.c`; the pause menu's Speed tab, settings.txt `autores=`, live): a game's DM_RES_LEVELS lists rewritten as it runs to the level the GPU's frame time allows
 DM_AV1_DAV1D	switch	`=1` decodes AV1 movies with dav1d even where VideoToolbox decodes AV1 (Apple M3 and A17 Pro on), to compare the two or to check the path older chips take (`hle_movie_av1.c`)
 DM_BOOTPROF	diagnostic	When set, logs boot timing: the loader's breakdown (mapping, relocation, probes), Metal library loading, pipeline creation, texture uploads and the first present
 DM_BUNDLE_ID	switch	Overrides the iOS app's bundle ID in `build_ipa.sh` (default `org.nxnative.<title ID in lowercase>`)
@@ -335,6 +336,7 @@ DM_UPSCALER	player	`metalfx` draws the game's own upscaler shaders (agl's NDSR n
 DM_VK_ANISO	player	`1` 4x, `2` 2x, `3` off (start-up; the pause menu's Texture filtering, settings.txt `aniso=`): the game's anisotropic filtering held to that (Android `gfx_vk_tex.c`)
 DM_VK_CAPTURE	path	`=<dir>` (Mac) writes every SPIR-V module the game creates to `<dir>/<key>.spv`; the NSP script's Vulkan shader capture stage sets it
 DM_VK_LOG	diagnostic	`=1` logs Vulkan object creation in the Vulkan-on-Metal layer
+DM_VK_SHADOW_RES	player	`1` half, `2` a quarter (start-up; the pause menu's Shadow resolution, settings.txt `shadowres=`): D16 shadow maps of 1024x1024 or more made that much smaller, their passes' viewports and scissors scaled (Android `gfx_vk_tex.c` shadow_shrink)
 DM_VK_VRS	player	`1` Light, `2` Max (start-up; the pause menu's GPU saver, settings.txt `vrs=`): variable rate shading of the 3D scene's passes (VK_KHR_fragment_shading_rate), blocks of 2x1 or 2x2 pixels per fragment shader run (Android `gfx_vk_exec.c` vrs_pass); 0 or unset: the device and pipelines as before
 DM_VSYNC_HZ	switch	`=<Hz>`: rate at which a host thread fires the vi vsync event when the display link does not drive it (default 60)
 DM_WATCH	diagnostic	`=<s>` dumps all threads after that many seconds (SIGALRM) and turns on the stall watchdog; off unless set

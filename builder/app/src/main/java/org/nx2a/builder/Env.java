@@ -64,9 +64,25 @@ final class Env {
         return process(c.toArray(new String[0]));
     }
 
-    /** python -m porter ..., which first prints "@pid <its process ID>": pausing and stopping a port signal it and everything it started. */
+    /** The cores at 75 % of the top clock or more (a Snapdragon 8 Gen 2's five fast ones), as a taskset mask in hex, or null when the clocks are unknown or all alike.
+     *  The port's shader translation ran on the small cores too, at about a third of a fast core's speed (BananaNative pins its packer the same way). */
+    static String fastCoreMask() {
+        long[] khz = new long[64]; int n = 0; long top = 0;
+        for (; n < 64 && new File("/sys/devices/system/cpu/cpu" + n).isDirectory(); n++) {
+            try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader("/sys/devices/system/cpu/cpu" + n + "/cpufreq/cpuinfo_max_freq"))) { khz[n] = Long.parseLong(r.readLine().trim()); }
+            catch (Exception e) { khz[n] = 0; }
+            if (khz[n] > top) top = khz[n];
+        }
+        if (top <= 0) return null;
+        long mask = 0; for (int c = 0; c < n; c++) if (khz[c] * 4 >= top * 3) mask |= 1L << c;
+        return mask == 0 || Long.bitCount(mask) == n ? null : Long.toHexString(mask);
+    }
+
+    /** python -m porter ..., which first prints "@pid <its process ID>": pausing and stopping a port signal it and everything it started. The shell puts itself on the
+     *  fast cores first (taskset; a refusal changes nothing), and the port and every tool it starts inherit them. */
     ProcessBuilder porterWithPid(List<String> args) {
-        List<String> c = new ArrayList<>(Arrays.asList("/system/bin/sh", "-c", "echo \"@pid $$\"; exec \"$0\" \"$@\"", new File(usr, "bin/python3").getPath(), "-m", "porter"));
+        String mask = fastCoreMask(), pin = mask == null ? "" : "/system/bin/taskset -p " + mask + " $$ >/dev/null 2>&1; ";
+        List<String> c = new ArrayList<>(Arrays.asList("/system/bin/sh", "-c", "echo \"@pid $$\"; " + pin + "exec \"$0\" \"$@\"", new File(usr, "bin/python3").getPath(), "-m", "porter"));
         c.addAll(args);
         return process(c.toArray(new String[0]));
     }

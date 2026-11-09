@@ -34,6 +34,7 @@ static struct {
     // the open render pass
     int pass_open; uint32_t pass_w, pass_h; VkFormat cfmt[8], dfmt; VkImageAspectFlags daspect; uint32_t samples; int ncol;
     VkPipeline bound_pipe; int rp_pass;   // rp_pass: the open pass began with vkCmdBeginRenderPass
+    int pass_shrink;   // the pass draws a shadow map made smaller (gfx_vk_tex.c shadow_shrink): viewports and scissors >> this
 } S;
 static p_tf_bind g_tf[4]; static uint64_t g_tf_off[4]; static int g_tf_on, g_tf_in_pass; static uint32_t g_tf_verts;   // transform feedback: buffers, bytes written into each, capture on, a capture in the open pass (xfb_begin), vertices captured since Begin
 static int g_depth_zero = 1, g_lower_left;
@@ -624,12 +625,15 @@ static int begin_pass(void) {
     P_ri = (VkRenderingInfo){VK_STRUCTURE_TYPE_RENDERING_INFO, NULL, 0, {{0, 0}, {w, h}}, layers, 0, (uint32_t)ncol, P_ca,
                              (S.daspect & VK_IMAGE_ASPECT_DEPTH_BIT) ? &P_da : NULL, (S.daspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? &P_sa : NULL};
     S.pass_open = 2; S.pass_w = w; S.pass_h = h; S.samples = samples; S.ncol = ncol; S.bound_pipe = VK_NULL_HANDLE;
+    S.pass_shrink = dim && dim->shrink ? dim->shrink : 0;
+    if (S.pass_shrink && ncol) VKRED_ONCE(126, "a smaller shadow map (DM_VK_SHADOW_RES) drawn with colour targets: the pass is sized to the map, the colour drawn too small");
     return 1;
 }
 static VkRect2D scissor_rect(void) {
     int32_t x = 0, y = 0; int64_t x1 = S.pass_w, y1 = S.pass_h;
     if (S.sc_set) {
         int64_t sx = S.sc.x, sy = S.sc.y, sx1 = (int64_t)S.sc.x + S.sc.w, sy1 = (int64_t)S.sc.y + S.sc.h;
+        if (S.pass_shrink) { int s = S.pass_shrink; sx >>= s; sy >>= s; sx1 = (sx1 + (1 << s) - 1) >> s; sy1 = (sy1 + (1 << s) - 1) >> s; }   // a smaller shadow map
         if (g_lower_left && !g_flipy) { int64_t t = (int64_t)S.pass_h - sy1; sy1 = (int64_t)S.pass_h - sy; sy = t; }
         if (sx > x) x = (int32_t)sx; if (sy > y) y = (int32_t)sy; if (sx1 < x1) x1 = sx1; if (sy1 < y1) y1 = sy1;
     }
@@ -1354,6 +1358,7 @@ static void bc_index(VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, VkIndexType
 static void set_dynamic(VkCommandBuffer cb) {
     int fresh = bc_fresh();
     float x = S.vp[0][0], y = S.vp[0][1], w = S.vp[0][2], h = S.vp[0][3];
+    if (S.pass_shrink) { float k = 1.0f / (float)(1 << S.pass_shrink); x *= k; y *= k; w *= k; h *= k; }   // a smaller shadow map: the game's viewport on it
     if (w == 0 && h == 0) { w = (float)S.pass_w; h = (float)S.pass_h; }
     VkViewport vp = {x, y, w, h, S.dnear, S.dfar};
     if (g_lower_left && !g_flipy) { vp.y = (float)S.pass_h - y; vp.height = -h; }   // lower-left viewports count y from the bottom
@@ -1916,6 +1921,7 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
     VkBuffer b; VkDeviceSize o;
     if (!vk_buf_at(c->src, 1, &b, &o)) { VKRED_ONCE(70, "buffer of a buffer ↔ texture copy outside the memory pools"); return; }
     if (half_top(im, &c->view, c->has_view)) return;   // a level the half-size texture does not keep
+    if (im->shrink) { VKRED_ONCE(127, "a buffer copy to or from a smaller shadow map (DM_VK_SHADOW_RES): skipped"); return; }
     VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, im); vk_img_barrier_all(cb);
     unsigned bw = f->bw ? f->bw : 1, bh = f->bh ? f->bh : 1;
     uint32_t rowlen = S.row_stride > 0 && f->bpb ? (uint32_t)(S.row_stride / f->bpb) * bw : 0;
@@ -2004,6 +2010,7 @@ static void copy_t2t(const p_copy_t2t *c) {
     vkimg_t *s = vk_tex(c->src), *d = vk_tex(c->dst);
     if (!s || !d) return;
     if (half_top(s, &c->sv, c->has_sv) || half_top(d, &c->dv, c->has_dv)) { VKRED_ONCE(77, "texture copy to or from the level a half-size texture does not keep: skipped"); return; }
+    if (s->shrink || d->shrink) { VKRED_ONCE(128, "texture copy to or from a smaller shadow map (DM_VK_SHADOW_RES): skipped"); return; }
     vk_watch(s, "copy source"); vk_watch(d, "copy destination");
     VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, s); vk_tex_prepare(cb, d); vk_img_barrier_all(cb);
     VkImageSubresourceLayers ss = sub_of(s, &c->sv, c->has_sv, c->sr.zoffset), ds = sub_of(d, &c->dv, c->has_dv, c->dr.zoffset);
