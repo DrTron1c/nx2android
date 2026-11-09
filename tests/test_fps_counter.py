@@ -32,6 +32,16 @@ class FpsCounter(unittest.TestCase):
         self.assertEqual(src.count('atomic_fetch_add(&g_fps_frames, 1)'), 1)   # the game's own, in mtl_present
         self.assertIn('"%d > %d FPS"', src)
 
+    def test_frame_generation_quality(self):   # the Display tab's Frame gen quality: LSFG's motion scale and basic frame generation's field density
+        lay = (AND / 'overlay_layout.h').read_text(encoding='utf-8')
+        self.assertIn('{OVM_ASPECT, OVM_FSR, OVM_SHARP, OVM_FG, OVM_SCALE, OVM_FGQ}', lay)
+        front = (AND / 'front_android.c').read_text(encoding='utf-8')
+        self.assertIn('"fgq=%d"', front); self.assertIn('item == OVM_FGQ ? DISP_FGQ', front)
+        self.assertIn('F.flow != flow', (AND / 'gfx_vk_lsfg.c').read_text(encoding='utf-8'))   # LSFG's chain made again when the quality changes
+        self.assertIn('FD[dm_disp(DISP_FGQ) & 3]', (AND / 'gfx_vk_fx.h').read_text(encoding='utf-8'))
+        src = (AND / 'gfx_vk_present.c').read_text(encoding='utf-8')
+        self.assertEqual(src.count('fg_wait_ns('), 3)   # its definition, LSFG's waits and basic frame generation's
+
 
 if __name__ == '__main__':
     unittest.main()

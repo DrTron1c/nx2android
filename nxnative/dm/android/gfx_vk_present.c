@@ -364,7 +364,7 @@ static void cv_panel(const ov_canvas *cv, float x0, float y0, float x1, float y1
 }
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
-static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "FPS lock", "Delete save", "Shadows", "Speed boost", "Speaker sound (restart)", "Textures (restart)", "Prebuild effects (restart)", "Low latency", "Game speed fix", "Resume", ""};
+static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Resolution", "Export save", "Import save", "Floating sticks", "Aspect ratio", "FSR upscaling", "Sharpening", "Frame generation", "Render size (restart)", "FPS lock", "Delete save", "Shadows", "Speed boost", "Speaker sound (restart)", "Textures (restart)", "Prebuild effects (restart)", "Low latency", "Game speed fix", "Frame gen quality", "Resume", ""};
 static const char *const OV_ASPECTS[5] = {"16:9", "16:10", "3:2", "4:3", "Stretch"}, *const OV_SHARPS[6] = {"Low", "Medium", "High", "Max", "Ultra", "Extreme"}, *const OV_SCALES[6] = {"720p", "630p", "540p", "Full", "468p", "360p"}, *const OV_FGS[5] = {"Off", "Basic", "LSFG 2x", "LSFG 3x", "LSFG 4x"}, *const OV_CAPS[5] = {"Auto", "60", "40", "30", "Custom"}, *const OV_SHADOWS[4] = {"Normal", "Strong", "Plain", "Off"};
 static const char *cap_label(void) { static char b[24]; int i = dm_disp(DISP_CAP); if (i != 4) return OV_CAPS[i < 0 || i > 4 ? 0 : i]; snprintf(b, sizeof b, "Custom: %d", dm_cap_custom()); return b; }
 static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import", [OVM_DELSAVE] = "Delete"};   // the rows that are a button: its word
@@ -409,8 +409,8 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
             snprintf(v, sizeof v, "%s", x == OVX_BUSY ? "Exporting..." : x == OVX_DONE ? nm : x == OVX_NOSAVE ? "No save yet" : "Failed");
             while (vs > 1 && cv_text_w(v, vs) > rw - cv_text_w(OVM_LABELS[it], is) - gap - rh * 0.3f) vs--;
             cv_text(cv, x1 - cv_text_w(v, vs), cy, v, vs, x == OVX_FAILED ? C_ACCENT : C_WHITE);
-        } else if (it == OVM_ASPECT || it == OVM_SHARP || it == OVM_SCALE || it == OVM_FG || it == OVM_CAP || it == OVM_SHADOWS || it == OVM_BOOST || it == OVM_SOUND || it == OVM_TEXHALF || it == OVM_PREWARM || it == OVM_LOWLAT || it == OVM_SPEED) {   // a value: a tap takes the next
-            const char *w = it == OVM_ASPECT ? OV_ASPECTS[dm_disp(DISP_ASPECT)] : it == OVM_SCALE ? OV_SCALES[dm_disp(DISP_SCALE)] : it == OVM_FG ? OV_FGS[dm_disp(DISP_FG)] : it == OVM_CAP ? cap_label() : it == OVM_SHADOWS ? OV_SHADOWS[dm_disp(DISP_SHADOWS)] : it == OVM_BOOST ? (dm_disp(DISP_BOOST) ? "On" : "Off") : it == OVM_SOUND ? (dm_disp(DISP_SOUND) ? "Full" : "Fast") : it == OVM_PREWARM ? (dm_disp(DISP_PREWARM) ? "On" : "Off") : it == OVM_SPEED ? (dm_disp(DISP_SPEED) ? "On" : "Off") : it == OVM_LOWLAT ? (dm_disp(DISP_LOWLAT) == 2 ? "Max" : dm_disp(DISP_LOWLAT) ? "On" : "Off") : it == OVM_TEXHALF ? (dm_disp(DISP_TEXHALF) == 2 ? "Auto" : dm_disp(DISP_TEXHALF) ? "Half" : "Full") : OV_SHARPS[dm_disp(DISP_SHARP)]; float bw = cv_text_w("LSFG 4x", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, w, 1, 0);
+        } else if (it == OVM_ASPECT || it == OVM_SHARP || it == OVM_SCALE || it == OVM_FG || it == OVM_CAP || it == OVM_SHADOWS || it == OVM_BOOST || it == OVM_SOUND || it == OVM_TEXHALF || it == OVM_PREWARM || it == OVM_LOWLAT || it == OVM_SPEED || it == OVM_FGQ) {   // a value: a tap takes the next
+            const char *w = it == OVM_ASPECT ? OV_ASPECTS[dm_disp(DISP_ASPECT)] : it == OVM_SCALE ? OV_SCALES[dm_disp(DISP_SCALE)] : it == OVM_FG ? OV_FGS[dm_disp(DISP_FG)] : it == OVM_CAP ? cap_label() : it == OVM_SHADOWS ? OV_SHADOWS[dm_disp(DISP_SHADOWS)] : it == OVM_BOOST ? (dm_disp(DISP_BOOST) ? "On" : "Off") : it == OVM_SOUND ? (dm_disp(DISP_SOUND) ? "Full" : "Fast") : it == OVM_PREWARM ? (dm_disp(DISP_PREWARM) ? "On" : "Off") : it == OVM_SPEED ? (dm_disp(DISP_SPEED) ? "On" : "Off") : it == OVM_FGQ ? OV_SHARPS[dm_disp(DISP_FGQ) & 3] : it == OVM_LOWLAT ? (dm_disp(DISP_LOWLAT) == 2 ? "Max" : dm_disp(DISP_LOWLAT) ? "On" : "Off") : it == OVM_TEXHALF ? (dm_disp(DISP_TEXHALF) == 2 ? "Auto" : dm_disp(DISP_TEXHALF) ? "Half" : "Full") : OV_SHARPS[dm_disp(DISP_SHARP)]; float bw = cv_text_w("LSFG 4x", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, w, 1, 0);
         } else if (OVM_BUTTONS[it]) {   // a button
             const char *bl = it == OVM_DELSAVE && dm_disp(DISP_DELSAVE) ? "Tap to confirm" : OVM_BUTTONS[it]; float bw = cv_text_w(bl, is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, bl, 0, 0);
         } else if (it == OVM_MODE) {   // two segments, the current one filled: handheld (performance) | docked (resolution)
@@ -947,6 +947,16 @@ static struct { vkimg_t *im; int crop[4], has_crop; uint64_t n; double period; }
 static uint64_t g_pq_head, g_pq_tail, g_pq_done, g_pq_last;   // queued [tail, head), presents up to ticket g_pq_done are blitted; g_pq_last the newest queued
 static pthread_mutex_t g_pq_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_pq_cv = PTHREAD_COND_INITIALIZER;
 // While the game is held (the pause menu) no frame comes: dm_overlay_redraw presents the last one again with what the overlay now shows.
+// Frame generation's frames in step with the panel (BananaNative 0.2.1's "frames are timed a refresh apart"): the wait before the next image is a whole number of
+// refreshes, the nearest below unless it is two thirds of the way to the next, and at least one. Measured gaps jitter by a few ms around the panel's refreshes, so a wait
+// of exactly the gap's share shows the next image one refresh early on some frames and late on others (judder); a whole number of refreshes keeps the same rhythm.
+// Without the display's refresh (no VK_GOOGLE_display_timing times yet: vk_refresh_ms 0) the waits stay the gap's share
+double vk_refresh_ms(void);
+static uint64_t fg_wait_ns(uint64_t ns) {
+    double r = vk_refresh_ms() * 1e6; if (r <= 0) return ns;
+    double k = floor((double)ns / r + 1.0 / 3); if (k < 1) k = 1;
+    return (uint64_t)(k * r);
+}
 static _Atomic int g_redraw;
 void dm_overlay_redraw(void) { atomic_store(&g_redraw, 1); pthread_mutex_lock(&g_pq_mu); pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu); }
 static void *present_thread(void *arg) {
@@ -970,9 +980,10 @@ static void *present_thread(void *arg) {
                 VkImage oi[3]; VkImageView ov[3]; uint32_t ow = 0, oh = 0; double hold; int ng = vk_lsfg_frame(e.im, e.has_crop ? e.crop : NULL, gap / 1e9, dm_disp(DISP_FG), oi, ov, &ow, &oh, &hold);
                 for (int g = 0; g < ng; g++) {
                     pthread_mutex_lock(&g_present_mu); g_ls_img = oi[g]; g_ls_view = ov[g]; g_ls_w = ow; g_ls_h = oh; if (swap_make()) { present_window(e.im, NULL, -1, 0, 2); atomic_fetch_add(&g_fps_gen, 1); } pthread_mutex_unlock(&g_present_mu);
-                    uint64_t at = (uint64_t)((g + 1) * hold * 1e9), spent = mono_ns() - t_now; if (spent < at) { uint64_t w = at - spent; struct timespec ts = {(time_t)(w / 1000000000), (long)(w % 1000000000)}; nanosleep(&ts, NULL); } } }
+                    uint64_t at = (uint64_t)(g + 1) * fg_wait_ns((uint64_t)(hold * 1e9)), spent = mono_ns() - t_now; if (spent < at) { uint64_t w = at - spent; struct timespec ts = {(time_t)(w / 1000000000), (long)(w % 1000000000)}; nanosleep(&ts, NULL); } } }
             if (gen) { pthread_mutex_lock(&g_present_mu); if (swap_make()) { present_window(e.im, e.has_crop ? e.crop : NULL, -1, 0, 1); atomic_fetch_add(&g_fps_gen, 1); } pthread_mutex_unlock(&g_present_mu);
-                uint64_t spent = mono_ns() - t_now; if (spent < gap / 2) { uint64_t w = gap / 2 - spent; struct timespec ts = {0, (long)w}; nanosleep(&ts, NULL); } }
+                uint64_t spent = mono_ns() - t_now, half = fg_wait_ns(gap / 2); if (half > gap * 3 / 4) half = gap / 2;   // (never so long that the game's frame waits past its turn)
+                if (spent < half) { uint64_t w = half - spent; struct timespec ts = {(time_t)(w / 1000000000), (long)(w % 1000000000)}; nanosleep(&ts, NULL); } }
             last = e; pthread_mutex_lock(&g_present_mu); if (swap_make()) present_window(e.im, e.has_crop ? e.crop : NULL, e.period, e.n, 0); pthread_mutex_unlock(&g_present_mu); }
         pthread_mutex_lock(&g_pq_mu); g_pq_tail++; g_pq_done = e.n; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
     }

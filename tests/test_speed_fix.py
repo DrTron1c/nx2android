@@ -41,7 +41,7 @@ class SpeedFix(unittest.TestCase):
         lay = (NX / 'android/overlay_layout.h').read_text(encoding='utf-8')
         tabs = re.search(r'OVM_TAB_ITEMS\[OVM_TABS\]\[OVM_PER_TAB\] = \{(.*?)\};', lay).group(1)
         self.assertIn('OVM_SPEED', tabs)
-        self.assertIn('DISP_SPEED, DISP_N', lay)
+        self.assertRegex(lay, r'DISP_SPEED, (DISP_\w+, )*DISP_N \}')
         front = (NX / 'android/front_android.c').read_text(encoding='utf-8')
         self.assertIn('"speed=%d"', front)
         self.assertIn('speed=%d\\n', front)

@@ -112,8 +112,11 @@ static void fx_begin(VkCommandBuffer cb, VkImageView v, VkImageLayout lay, int x
     VkViewport vp = {(float)x, (float)y, (float)w, (float)h, 0, 1}; VkRect2D sc = {{x, y}, {w, h}}; vkCmdSetViewport(cb, 0, 1, &vp); vkCmdSetScissor(cb, 0, 1, &sc);
 }
 // The frame half way from the last one to this: small copies, the flow between them, then both frames moved half way into g_fx.mid. 1 when mid holds it
+// The pause menu's Frame gen quality sets the motion field's density: a vector for every 16, 8 (Medium, as before), 6 or 4 pixels each way (the search itself runs on the
+// quarter-size copies at every quality, so its reach stays the same); a denser field follows smaller moving things, for more GPU time (the flow pass grows with it)
 static int fg_make(VkCommandBuffer cb, uint32_t k, vkimg_t *im) {
-    uint32_t w = im->w, h = im->h, sw = w / 4, sh = h / 4, fw = w / 8, fh = h / 8;
+    static const uint32_t FD[4] = {16, 8, 6, 4}; uint32_t fd = FD[dm_disp(DISP_FGQ) & 3];
+    uint32_t w = im->w, h = im->h, sw = w / 4, sh = h / 4, fw = (w + fd - 1) / fd, fh = (h + fd - 1) / fd;
     if (!fx_init() || !fx_warp(im->fmt)) return 0;
     int first = !g_fx.older.i || g_fx.older.w != w || g_fx.older.h != h || g_fx.older.f != im->fmt;
     fx_img_make(&g_fx.older, w, h, im->fmt); fx_img_make(&g_fx.mid, w, h, im->fmt); fx_img_make(&g_fx.small[0], sw, sh, VK_FORMAT_R8G8B8A8_UNORM); fx_img_make(&g_fx.small[1], sw, sh, VK_FORMAT_R8G8B8A8_UNORM); fx_img_make(&g_fx.fl, fw, fh, VK_FORMAT_R16G16_SFLOAT);

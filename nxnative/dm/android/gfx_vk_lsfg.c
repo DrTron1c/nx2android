@@ -8,6 +8,7 @@
 // Native's vka_framegen.c, itself from Eden, for this backend. The shaders are read at run time from the player's own Lossless.dll, which the port puts in the game's files (DM_LSFG_DLL), and
 // are never in this repository or the APK. A window image is copied in byte for byte and the outputs are images of its own format, so an sRGB picture stays as it was
 #include "gfx_vk.h"
+#include "overlay_layout.h"
 #include "lsfg/lsfg.h"
 #include <stdlib.h>
 #include <string.h>
@@ -84,8 +85,8 @@ int vk_lsfg_frame(vkimg_t *im, const int *crop, double period, int mult, VkImage
     if (!load()) return 0;
     if (im->fmt != VK_FORMAT_R8G8B8A8_SRGB && im->fmt != VK_FORMAT_R8G8B8A8_UNORM) { VKRED_ONCE(120, "frame generation: a window image of format %d cannot be copied in", im->fmt); return 0; }
     int cx = crop ? crop[0] : 0, cy = crop ? crop[1] : 0, cw = crop && crop[2] ? crop[2] : (int)im->w, ch = crop && crop[3] ? crop[3] : (int)im->h;
-    static int flow = -1; if (flow < 0) { const char *e = getenv("DM_LSFG_FLOW"); flow = e && atoi(e) >= 25 && atoi(e) <= 100 ? atoi(e) : 50; }
-    if (!F.chain || F.w != (uint32_t)cw || F.h != (uint32_t)ch || F.fmt != im->fmt) {
+    int flow = 25 * ((dm_disp(DISP_FGQ) & 3) + 1);   // the pause menu's Frame gen quality (settings.txt fgq=, DM_LSFG_FLOW): the motion found at 25 to 100% of the frame's size
+    if (!F.chain || F.w != (uint32_t)cw || F.h != (uint32_t)ch || F.fmt != im->fmt || F.flow != flow) {
         if (!rebuild((uint32_t)cw, (uint32_t)ch, im->fmt, flow)) return off("the chain could not be made (see the [RED] lines)", NULL);
     }
     lsfg_plan plan = lsfg_pacer_plan(&F.pacer, LSFG_MAX_GENERATIONS, mult, 0, mono_s());

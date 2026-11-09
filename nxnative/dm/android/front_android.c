@@ -72,7 +72,8 @@ static int cap_fps(int i) { return CAP_FPS[i] < 0 ? atomic_load(&g_cap_custom) :
 static void settings_load(void) {
     { const char *e = getenv("DM_OV_FLOAT"); if (e) atomic_store(&g_disp[DISP_FLOAT], atoi(e) != 0); }   // the profile's default; the player's setting below wins
     atomic_store(&g_disp[DISP_PREWARM], !getenv("DM_VK_NOPREWARM"));
-    { const char *e = getenv("DM_SPEED_FIX"); atomic_store(&g_disp[DISP_SPEED], e ? atoi(e) != 0 : 1); }   // the game speed fix (speed_android.c): on unless the profile says otherwise
+    { const char *e = getenv("DM_SPEED_FIX"); atomic_store(&g_disp[DISP_SPEED], e ? atoi(e) != 0 : 1); }
+    { const char *e = getenv("DM_LSFG_FLOW"); int f = e ? atoi(e) : 50; atomic_store(&g_disp[DISP_FGQ], f <= 37 ? 0 : f <= 62 ? 1 : f <= 87 ? 2 : 3); }   // frame generation's quality: LSFG's motion at 25, 50, 75, 100%   // the game speed fix (speed_android.c): on unless the profile says otherwise
     { const char *e = getenv("DM_LOW_LATENCY"); int v = e ? atoi(e) : 0; atomic_store(&g_disp[DISP_LOWLAT], v < 0 ? 0 : v > 2 ? 2 : v); }   // the profile's default   // on unless the profile says otherwise
     { const char *e = getenv("DM_VK_TEX_HALF"); if (e && atoi(e) >= 0 && atoi(e) <= 2) atomic_store(&g_disp[DISP_TEXHALF], atoi(e)); }
     char p[600]; snprintf(p, sizeof p, "%s/settings.txt", g_root); FILE *f = fopen(p, "r"); char line[128];
@@ -95,6 +96,7 @@ static void settings_load(void) {
         else if (sscanf(line, "boost=%d", &v) == 1 && (v == 0 || v == 1)) atomic_store(&g_disp[DISP_BOOST], v);
         else if (sscanf(line, "lowlat=%d", &v) == 1 && v >= 0 && v <= 2) atomic_store(&g_disp[DISP_LOWLAT], v);
         else if (sscanf(line, "speed=%d", &v) == 1 && v >= 0 && v <= 1) atomic_store(&g_disp[DISP_SPEED], v);
+        else if (sscanf(line, "fgq=%d", &v) == 1 && v >= 0 && v <= 3) atomic_store(&g_disp[DISP_FGQ], v);
         else if (sscanf(line, "prewarm=%d", &v) == 1 && (v == 0 || v == 1)) { atomic_store(&g_disp[DISP_PREWARM], v); if (v) unsetenv("DM_VK_NOPREWARM"); else setenv("DM_VK_NOPREWARM", "1", 1); }   // from the next start
         else if (sscanf(line, "texhalf=%d", &v) == 1 && v >= 0 && v <= 2) { atomic_store(&g_disp[DISP_TEXHALF], v); char s[4]; snprintf(s, sizeof s, "%d", v); setenv("DM_VK_TEX_HALF", s, 1); }   // read as images are made: from the next start
         else if (sscanf(line, "sound=%d", &v) == 1 && (v == 0 || v == 1)) { atomic_store(&g_disp[DISP_SOUND], v); setenv("DM_AUDIO_MEDIA", v ? "1" : "0", 1); }   // read when the sound opens: from the next start
@@ -120,7 +122,7 @@ static void settings_save(void) {
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
     { const char *ep = getenv("DM_SETTINGS_EPOCH"); if (ep) fprintf(f, "epoch=%s\n", ep); }
     fprintf(f, "capn=%d\n", atomic_load(&g_cap_custom));
-    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\ncap=%d\nshadows=%d\nboost=%d\nsound=%d\ntexhalf=%d\nprewarm=%d\nlowlat=%d\nspeed=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE), dm_disp(DISP_CAP), dm_disp(DISP_SHADOWS), dm_disp(DISP_BOOST), dm_disp(DISP_SOUND), dm_disp(DISP_TEXHALF), dm_disp(DISP_PREWARM), dm_disp(DISP_LOWLAT), dm_disp(DISP_SPEED));
+    fprintf(f, "aspect=%d\nfsr=%d\nsharp=%d\nframegen=%d\nfloat=%d\nscale=%d\ncap=%d\nshadows=%d\nboost=%d\nsound=%d\ntexhalf=%d\nprewarm=%d\nlowlat=%d\nspeed=%d\nfgq=%d\n", dm_disp(DISP_ASPECT), dm_disp(DISP_FSR), dm_disp(DISP_SHARP), dm_disp(DISP_FG), dm_disp(DISP_FLOAT), dm_disp(DISP_SCALE), dm_disp(DISP_CAP), dm_disp(DISP_SHADOWS), dm_disp(DISP_BOOST), dm_disp(DISP_SOUND), dm_disp(DISP_TEXHALF), dm_disp(DISP_PREWARM), dm_disp(DISP_LOWLAT), dm_disp(DISP_SPEED), dm_disp(DISP_FGQ));
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);
         if ((x && y) || z) fprintf(f, "ui=%s,%s,%d,%d,%d\n", LAYOUT_NAMES[l], OV_LAYOUTS[0][i].name, x && y ? x - 1 : -1, x && y ? y - 1 : -1, z ? z : 1000);
@@ -373,9 +375,9 @@ static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
-    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS || item == OVM_BOOST || item == OVM_SOUND || item == OVM_TEXHALF || item == OVM_PREWARM || item == OVM_LOWLAT || item == OVM_SPEED) {
-        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : item == OVM_BOOST ? DISP_BOOST : item == OVM_SOUND ? DISP_SOUND : item == OVM_TEXHALF ? DISP_TEXHALF : item == OVM_PREWARM ? DISP_PREWARM : item == OVM_LOWLAT ? DISP_LOWLAT : item == OVM_SPEED ? DISP_SPEED : item == OVM_SHADOWS ? DISP_SHADOWS : DISP_SHARP;
-        int n = item == OVM_SHARP || item == OVM_SCALE ? 6 : item == OVM_ASPECT ? 5 : item == OVM_CAP ? 5 : item == OVM_SHADOWS ? 4 : item == OVM_TEXHALF || item == OVM_LOWLAT ? 3 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
+    else if (item == OVM_FLOAT || item == OVM_FSR || item == OVM_FG || item == OVM_ASPECT || item == OVM_SHARP || item == OVM_SCALE || item == OVM_CAP || item == OVM_SHADOWS || item == OVM_BOOST || item == OVM_SOUND || item == OVM_TEXHALF || item == OVM_PREWARM || item == OVM_LOWLAT || item == OVM_SPEED || item == OVM_FGQ) {
+        int w = item == OVM_FLOAT ? DISP_FLOAT : item == OVM_FSR ? DISP_FSR : item == OVM_FG ? DISP_FG : item == OVM_ASPECT ? DISP_ASPECT : item == OVM_SCALE ? DISP_SCALE : item == OVM_CAP ? DISP_CAP : item == OVM_BOOST ? DISP_BOOST : item == OVM_SOUND ? DISP_SOUND : item == OVM_TEXHALF ? DISP_TEXHALF : item == OVM_PREWARM ? DISP_PREWARM : item == OVM_LOWLAT ? DISP_LOWLAT : item == OVM_SPEED ? DISP_SPEED : item == OVM_FGQ ? DISP_FGQ : item == OVM_SHADOWS ? DISP_SHADOWS : DISP_SHARP;
+        int n = item == OVM_SHARP || item == OVM_SCALE ? 6 : item == OVM_ASPECT ? 5 : item == OVM_CAP ? 5 : item == OVM_SHADOWS || item == OVM_FGQ ? 4 : item == OVM_TEXHALF || item == OVM_LOWLAT ? 3 : item == OVM_FG ? (getenv("DM_LSFG_DLL") ? 5 : 2) : 2;   // frame generation: off, basic, LSFG 2x to 4x when the port brought a Lossless.dll
         atomic_store(&g_disp[w], (atomic_load(&g_disp[w]) + 1) % n); if (item == OVM_CAP) dm_perf_fps_cap(cap_fps(atomic_load(&g_disp[w]))); atomic_fetch_add(&g_disp_ver, 1); settings_save();
         if (item == OVM_CAP && atomic_load(&g_disp[w]) == 4) { pthread_t th; if (!pthread_create(&th, NULL, cap_ask, NULL)) pthread_detach(th); } }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
