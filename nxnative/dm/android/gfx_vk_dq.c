@@ -298,6 +298,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_vkQueuePresentKHR(VkQueue q, const VkPre
 static VKAPI_ATTR VkResult VKAPI_CALL w_vkQueueWaitIdle(VkQueue q) { vk_dq_drain(); return r_vkQueueWaitIdle(q); }
 static VKAPI_ATTR VkResult VKAPI_CALL w_vkDeviceWaitIdle(VkDevice d) { vk_dq_drain(); return r_vkDeviceWaitIdle(d); }
 
+int vk_dq_active(void) { return g_ring != NULL; }
 void vk_dq_init(void) {   // vk_init, after the device's entry points are loaded
     const char *e = getenv("DM_VK_MT_REPLAY"); if (!(e && atoi(e) > 0)) return;
     pthread_spin_init(&g_pl, PTHREAD_PROCESS_PRIVATE);

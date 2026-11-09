@@ -4,6 +4,7 @@
 // buffers) and the draw. Render passes open lazily at the first draw or clear after SetRenderTargets and close before anything that is not drawing.
 // Version 1 orders everything with whole-pipeline barriers around passes, copies and dispatches.
 #include "gfx_vk.h"
+#include "overlay_layout.h"   // DISP_VRS (vrs_pass)
 #include "nvn_hmap.h"
 #include <math.h>
 #include <string.h>
@@ -268,6 +269,28 @@ static void lrz_touch(vkimg_t *im, int write) {
 static vkimg_t *g_lrz_prev;
 void vk_lrz_forget(vkimg_t *im) { if (g_lrz_prev == im) g_lrz_prev = NULL; }   // an image dropped (gfx_vk_tex.c img_drop)
 // 0: no pass could be begun (no render pass or framebuffer, and no dynamic rendering to fall back on): the caller records nothing that needs one
+// The GPU saver (the pause menu's, settings.txt vrs=; DM_VK_VRS at the start makes the device and pipelines ready: gfx_vk_core.c): variable rate shading of the 3D scene.
+// A pass with a depth buffer and colour targets of 320x180 or more gets the rate the menu holds now: blocks of 2x1 (Light) or 2x2 pixels (Max) share one run of the
+// fragment shader, while depth, coverage and so the edges stay per pixel; shadow maps (no colour), post effects and the interface (no depth) keep 1x1. A fragment shader
+// that writes depth or the sample mask runs at 1x1 whatever the rate, unless the driver says it can do more (the extension's rules). Every pass sets a rate, since
+// every pipeline has it as dynamic state; with the two-stage replay the queued calls are made first (vk_dq_drain), so the rate lands in order
+static PFN_vkCmdSetFragmentShadingRateKHR g_set_vrs;
+static uint64_t g_vrs_passes[2];   // passes at 1x1, at a coarser rate
+static void vrs_pass(uint32_t ncol, int depth, uint32_t w, uint32_t h) {
+    if (!V.has_vrs) return;
+    static int ok = -1; int vk_dq_active(void); void vk_dq_drain(void);
+    if (ok < 0) { g_set_vrs = (PFN_vkCmdSetFragmentShadingRateKHR)vkGetDeviceProcAddr(V.dev, "vkCmdSetFragmentShadingRateKHR"); ok = g_set_vrs != NULL;
+                  if (!ok) VKLOG("[RED] GPU saver: vkCmdSetFragmentShadingRateKHR missing: the passes' rate is not set"); }
+    if (!ok) return;
+    int m = dm_disp(DISP_VRS); VkExtent2D r = {1, 1};
+    if (m && ncol && depth && w >= 320 && h >= 180) r = (VkExtent2D){2, m == 2 ? 2 : 1};
+    VkFragmentShadingRateCombinerOpKHR ops[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+    if (vk_dq_active()) vk_dq_drain();
+    g_set_vrs(vk_cmd(), &r, ops);
+    uint64_t c = ++g_vrs_passes[r.width > 1];
+    if (r.width > 1 && (c == 1 || c == 1000 || c % 100000 == 0)) VKLOG("GPU saver: %llu passes shaded in %ux%u blocks so far (this one %ux%u, %u colour target%s), %llu at 1x1",
+        (unsigned long long)c, r.width, r.height, w, h, ncol, ncol == 1 ? "" : "s", (unsigned long long)g_vrs_passes[0]);
+}
 static int pass_commit(void) {
     if (S.pass_open != 2) return S.pass_open == 1;
     vkimg_t *dim = S.daspect ? P_att[8].im : NULL;
@@ -297,6 +320,7 @@ static int pass_commit(void) {
         else { VKRED_ONCE(76, "render pass or framebuffer failed without dynamic rendering: pass skipped"); return 0; }   // (still pass_open 2: vk_end_pass drops it)
     } else { vkCmdBeginRendering(vk_cmd(), &P_ri); S.rp_pass = 0; }
     S.pass_open = 1; g_vkst.passes++; g_sub_pass++;
+    vrs_pass(P_ri.colorAttachmentCount, P_ri.pDepthAttachment != NULL, P_ri.renderArea.extent.width, P_ri.renderArea.extent.height);
     for (int i = 0; i < 9; i++) { vkimg_t *a = P_att[i].im; if (a && a->rt_last != g_tex_frame + 1) { a->rt_frames = a->rt_last == g_tex_frame ? a->rt_frames + 1 : 1; a->rt_last = g_tex_frame + 1; } }   // (async_pipe)
     { extern uint64_t g_cmd_gen; g_cmd_gen++; }   // the bind cache starts empty in each pass: Adreno does not keep the state a pass's draws set for the next pass (XC3 drew its lighting black)
     if (g_x_tracepass == -2) { g_x_listpasses = 1; VKLOG("--- pass %d: %ux%u, colour formats %d %d, depth format %d", g_sub_pass - 1, S.pass_w, S.pass_h, S.cfmt[0], S.cfmt[1], S.dfmt); }
@@ -967,8 +991,9 @@ static VkPipeline build_pipeline(const pkey *k, VkPipelineLayout layout, vkshade
         bfac(k->bl[i].srca), bfac(k->bl[i].dsta), bop(k->bl[i].eqa), k->wmask[i]};
     VkPipelineColorBlendStateCreateInfo cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, NULL, 0, k->logic_en, (VkLogicOp)k->logic_op, k->ncol, cba, {0, 0, 0, 0}};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
-                            VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_DEPTH_BIAS, VK_DYNAMIC_STATE_LINE_WIDTH};
-    VkPipelineDynamicStateCreateInfo dy = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, NULL, 0, sizeof dyn / sizeof *dyn, dyn};
+                            VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_DEPTH_BIAS, VK_DYNAMIC_STATE_LINE_WIDTH,
+                            VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR};   // (the last only with the GPU saver: vrs_pass)
+    VkPipelineDynamicStateCreateInfo dy = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, NULL, 0, sizeof dyn / sizeof *dyn - (V.has_vrs ? 0 : 1), dyn};
     VkFormat cf[8]; for (uint32_t i = 0; i < k->ncol; i++) cf[i] = (VkFormat)k->cfmt[i];
     VkFormat df = (VkFormat)k->dfmt;
     int has_stencil = df == VK_FORMAT_D24_UNORM_S8_UINT || df == VK_FORMAT_D32_SFLOAT_S8_UINT || df == VK_FORMAT_S8_UINT;

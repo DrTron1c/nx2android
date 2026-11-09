@@ -200,6 +200,16 @@ void vk_init(void) {
                           "VK_GOOGLE_display_timing"};
     const char *on[64]; uint32_t non = 0;
     for (unsigned i = 0; i < sizeof want / sizeof *want; i++) if (has_ext(ex, ne, want[i])) on[non++] = want[i]; else VKLOG("device has no %s", want[i]);
+    // The GPU saver (the pause menu's, settings.txt vrs=, DM_VK_VRS; start-up): variable rate shading, VK_KHR_fragment_shading_rate's pipeline rate. Enabled only when the
+    // saver is on at the start, so with it off the device and every pipeline are as before (gfx_vk_exec.c vrs_pass sets the rate of each pass)
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR fvrs = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+    { const char *e = getenv("DM_VK_VRS");
+      if (e && atoi(e) > 0) {
+          if (!has_ext(ex, ne, "VK_KHR_fragment_shading_rate")) VKLOG("GPU saver: the device has no VK_KHR_fragment_shading_rate: off");
+          else { VkPhysicalDeviceFeatures2 q = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &fvrs}; vkGetPhysicalDeviceFeatures2(V.pd, &q);
+                 if (!fvrs.pipelineFragmentShadingRate) VKLOG("GPU saver: the driver has no per-draw shading rate (pipelineFragmentShadingRate): off");
+                 else if (non < 64) { on[non++] = "VK_KHR_fragment_shading_rate"; V.has_vrs = 1; } }
+      } }
     int x_ph = has_ext(ex, ne, "VK_QCOM_queue_perf_hint"); if (x_ph && non < 64) on[non++] = "VK_QCOM_queue_perf_hint";   // the GPU clock floor (vk_gpu_floor)
     if (has_ext(ex, ne, "VK_EXT_memory_budget") && non < 64) { on[non++] = "VK_EXT_memory_budget"; g_has_budget = 1; }   // vk_mem_report: what the driver holds for this process, which no process count shows
     // A Vulkan 1.1 or 1.2 device (Legion Y700 2023, Adreno 730: its stock driver reports 1.1) has what the replay uses from 1.2 / 1.3 as extensions: they are enabled
@@ -296,8 +306,12 @@ void vk_init(void) {
         const char *e = getenv("DM_VK_SG_PIN"); int ctl = v13 && f13.subgroupSizeControl;
         if (!(e && !atoi(e)) && ctl && sc.minSubgroupSize <= 64 && sc.maxSubgroupSize >= 64 && (sc.maxSubgroupSize > 64 || sp.subgroupSize != 64)) g_sg_pin_stages = sc.requiredSubgroupSizeStages;
         VKLOG("subgroups: %u lanes (%u-%u)%s; pinned to 64 in stages %#x", sp.subgroupSize, sc.minSubgroupSize, sc.maxSubgroupSize, ctl ? "" : ", no size control", g_sg_pin_stages); }
+    if (V.has_vrs) {   // the pipeline rate alone: the primitive's and an attachment's stay off (their combiners KEEP)
+        fvrs.pNext = NULL; fvrs.primitiveFragmentShadingRate = 0; fvrs.attachmentFragmentShadingRate = 0;
+        VkBaseOutStructure *c = (VkBaseOutStructure *)enf.pNext; if (!c) enf.pNext = &fvrs; else { while (c->pNext) c = c->pNext; c->pNext = (VkBaseOutStructure *)&fvrs; } }
     kgsl_before(x_ph && fph.queuePerfHint);
     VKCHK(vkCreateDevice(V.pd, &dci, NULL, &V.dev));
+    if (V.has_vrs) VKLOG("GPU saver: variable rate shading on (VK_KHR_fragment_shading_rate): the 3D scene's passes shaded in blocks of 2x1 (Light) or 2x2 pixels (Max)");
     vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)p_vkGetInstanceProcAddr(V.inst, "vkGetDeviceProcAddr");
     if (x_ph && fph.queuePerfHint) g_perf_hint = (void *)vkGetDeviceProcAddr(V.dev, "vkQueueSetPerfHintQCOM");
     VKLOG("GPU clock floor (VK_QCOM_queue_perf_hint): %s", g_perf_hint ? "available" : x_ph ? "extension without the feature" : "not on this device");

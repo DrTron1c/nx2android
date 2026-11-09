@@ -639,7 +639,13 @@ static VkSampler make_sampler(const samp_par *p) {
     ci.mipmapMode = p->minf == 4 || p->minf == 5 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
     ci.addressModeU = wrap(p->ws); ci.addressModeV = wrap(p->wt); ci.addressModeW = wrap(p->wr);
     ci.mipLodBias = p->lod_bias;
-    ci.anisotropyEnable = p->aniso > 1.0f; ci.maxAnisotropy = p->aniso > V.max_aniso ? V.max_aniso : p->aniso;
+    // Texture filtering (the pause menu's, settings.txt aniso=, DM_VK_ANISO, read at the first sampler: restart): the game's anisotropic filtering held to 4x, 2x or off,
+    // which saves texture reads on surfaces seen at a slant (the ground into the distance), for a blurrier far ground
+    static int aniso_cap = -1;
+    if (aniso_cap < 0) { const char *e = getenv("DM_VK_ANISO"); int v = e ? atoi(e) : 0; aniso_cap = v == 1 ? 4 : v == 2 ? 2 : v == 3 ? 1 : 0;
+                         if (aniso_cap) VKLOG("texture filtering: anisotropic filtering held to %s (DM_VK_ANISO)", aniso_cap == 4 ? "4x" : aniso_cap == 2 ? "2x" : "off"); }
+    float an = aniso_cap && p->aniso > (float)aniso_cap ? (float)aniso_cap : p->aniso;
+    ci.anisotropyEnable = an > 1.0f; ci.maxAnisotropy = an > V.max_aniso ? V.max_aniso : an;
     ci.compareEnable = p->cmp_mode == 1; ci.compareOp = cmp_op(p->cmp_func);
     ci.minLod = p->lod_min; ci.maxLod = p->minf <= 1 ? 0.25f : p->lod_max;   // no mipmap filter: level 0 only (GL's rule)
     int border = ci.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER || ci.addressModeV == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER || ci.addressModeW == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
