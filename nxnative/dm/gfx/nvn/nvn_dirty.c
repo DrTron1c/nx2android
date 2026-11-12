@@ -59,6 +59,9 @@ static int mp(uintptr_t a, size_t len, int prot) {
     return rc;
 }
 
+// The generation of a page whose write protection failed: writable, so no write to it can be seen. Above every stamp, so each texture over it counts as written at every check
+// (uploaded again, as an untracked texture is) until a later protection of the page succeeds and stamps it (Banana Native c017e7b)
+#define GEN_UNPROT UINT64_MAX
 static mach_timebase_info_data_t g_tb;   // obtained when the first pool is registered (the fault path only multiplies and divides)
 static _Atomic int g_busy_red;
 // Wait for this page to leave BUSY. Returns 1 = it has left; 0 = waited past the limit (reported red once). Usable in a signal handler: only atomic reads, mach_absolute_time and sched_yield
@@ -286,7 +289,25 @@ void nvn_dirty_protect(const void *addr, size_t len) {
         uint8_t st = PG_NONE;
         int took = i <= q && atomic_compare_exchange_strong(&r->state[i], &st, PG_BUSY);
         if (took && !open) { run = i; open = 1; }
-        if (!took && open) { atomic_fetch_add(&r->nmp, 1); mp(r->base + (run << g_shift), (i - run) << g_shift, PROT_READ); for (uintptr_t k = run; k < i; k++) { atomic_store(&r->span[k], (uint32_t)p + 1); atomic_store(&r->state[k], PG_PROT); } open = 0; }
+        if (!took && open) {
+            atomic_fetch_add(&r->nmp, 1);
+            uintptr_t ra = r->base + (run << g_shift); size_t rn = (i - run) << g_shift;
+            if (!mp(ra, rn, PROT_READ)) {
+                for (uintptr_t k = run; k < i; k++) { if (atomic_load(&r->gen[k]) == GEN_UNPROT) stamp_page(r, k); atomic_store(&r->span[k], (uint32_t)p + 1); atomic_store(&r->state[k], PG_PROT); }
+            } else {
+                // The protection failed (the process's mapping limit, ENOMEM): the run is made writable again and its pages stay NONE at GEN_UNPROT, so the textures over them
+                // count as written at every check instead of keeping their first upload. Marked PROT, as before, a page left writable never faulted and every later CPU write
+                // into it was missed (Banana Native c017e7b: the long-session slowdowns and stale pictures, Pokopia among them). Linux changes protection mapping by mapping,
+                // so part of the run may be read-only: a page that cannot be made writable again stays PROT (at GEN_UNPROT too), and its first write faults into unprotect_page
+                int rerr = mp(ra, rn, PROT_READ | PROT_WRITE);
+                for (uintptr_t k = run; k < i; k++) {
+                    int w = !rerr || !mp(r->base + (k << g_shift), g_pg, PROT_READ | PROT_WRITE);
+                    atomic_store(&r->gen[k], GEN_UNPROT); atomic_store(&r->state[k], w ? PG_NONE : PG_PROT);
+                }
+                atomic_store(&r->last, GEN_UNPROT); atomic_fetch_add(&g_now, 1);
+            }
+            open = 0;
+        }
         if (!took && i <= q && st == PG_BUSY && busy_wait(r, i)) i--;   // this page again
     }
     pthread_mutex_unlock(&g_slot_mu);
