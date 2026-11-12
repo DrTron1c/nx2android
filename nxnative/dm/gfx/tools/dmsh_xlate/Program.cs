@@ -153,8 +153,10 @@ static class SwshXlate
             Array32<AttributeType> attr = default; Array8<AttributeType> fout = default;
             if (_job["attr"] is JsonObject a) foreach (var kv in a) attr[int.Parse(kv.Key)] = Attr((string)kv.Value);
             if (_job["fout"] is JsonObject f) foreach (var kv in f) fout[int.Parse(kv.Key)] = Attr((string)kv.Value);
-            bool earlyZ = _job["early_fragment_tests"] is JsonNode ez && (bool)ez;   // control +0x718 (dmsh_build.py job_for): [[early_fragment_tests]] in the MSL
-            return new GpuGraphicsState(earlyZ, _job["geometry_topology"] is JsonNode gt ? (InputTopology)(int)gt : InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
+            // early_fragment_tests (dmsh_build.py job_for) or early_z (shader_vk.py job_for), both from control +0x718: the fragment shader's layout(early_fragment_tests), as NVN sets
+            // FORCE_EARLY_FRAGMENT_TESTS for it. gs_input (shader_vk.py): a geometry shader's variant for that input primitive
+            bool earlyZ = (_job["early_fragment_tests"] is JsonNode ez && (bool)ez) || (_job["early_z"] is JsonNode ez2 && (bool)ez2);
+            return new GpuGraphicsState(earlyZ, _job["geometry_topology"] is JsonNode gt ? (InputTopology)(int)gt : _job["gs_input"] is JsonNode gi ? (InputTopology)(int)gi : InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
                 false, false, false, false /* depth not rewritten: dmsh_build.py adds the GL entry point (see the file header) */, false, 1f, AlphaTestOp.Always, 0f, attr, false, fout, false,
                 false /* no Y flip */, true /* origin upper-left */, false);
         }

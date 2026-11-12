@@ -12,6 +12,9 @@
 // Keys of a package: nx_extract <prod.keys> --keys <NSP, NSZ, XCI or XCZ>... checks that the keys open every NCA (an NCZ by its header, which nsz keeps as it was) without extracting anything.
 //   Keys older than a game (a prod.keys dumped from a console on older firmware) lack the newer master key and every key derived from it; the newest key missing is named with the firmware
 //   it came with, exit code 6. Extraction, --aoc and --contents run the same check before reading the NCAs it covers (LibHac would stop on the first such NCA with an unhandled MissingKeyException).
+// System data: nx_extract <prod.keys> --sysdata <firmware dir> <title ID hex> <output dir> writes the RomFS of that title's data NCA, found among the .nca files of a firmware dump
+// (a console's NAND SYSTEM Contents/registered, as DBI's MTP mode shows it): Mario Kart 8 Deluxe builds its Mii heads from MiiModel, 0100000000000802.
+// System NCAs carry their keys in the key area (no ticket).
 // Title keys come from the common tickets (.tik) inside the NSPs, so only prod.keys is needed; key values are never printed.
 // The base game may also be a cartridge dump (.xci, Monster Hunter Rise): its secure partition holds the NCAs, which carry their keys in the key area (no ticket).
 //   When the cartridge also carries an update (1G+1U), only the base game's NCAs (those its Application content meta lists) are read; the update comes from the update NSP.
@@ -53,9 +56,10 @@ static class P {
         if (a.Length == 3 && a[1] == "--title") return Title(ExternalKeyReader.ReadKeyFile(a[0]), a[2]);
         if (a.Length == 3 && a[1] == "--contents") return Contents(ExternalKeyReader.ReadKeyFile(a[0]), a[2]);
         if (a.Length >= 3 && a[1] == "--keys") return Keys(ExternalKeyReader.ReadKeyFile(a[0]), a[2..]);
-        if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--app <title ID>] [--romfs-image|--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir or image> [<DLC title ID>] [--romfs-image]\n       nx_extract <prod.keys> --title <nsp|nsz|xci|xcz>\n       nx_extract <prod.keys> --contents <nsp|nsz|xci|xcz>\n       nx_extract <prod.keys> --keys <nsp|nsz|xci|xcz>..."); return 2; }
+        if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--app <title ID>] [--romfs-image|--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir or image> [<DLC title ID>] [--romfs-image]\n       nx_extract <prod.keys> --title <nsp|nsz|xci|xcz>\n       nx_extract <prod.keys> --contents <nsp|nsz|xci|xcz>\n       nx_extract <prod.keys> --keys <nsp|nsz|xci|xcz>...\n       nx_extract <prod.keys> --sysdata <firmware dir> <title id> <out dir>"); return 2; }
         KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
         if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], image, a.Length > 4 ? Convert.ToUInt64(a[4], 16) : null);
+        if (a[1] == "--sysdata") { if (a.Length < 5) { Console.Error.WriteLine("usage: nx_extract <prod.keys> --sysdata <firmware dir> <title id> <out dir>"); return 2; } return SysData(ks, a[2], Convert.ToUInt64(a[3], 16), a[4]); }
         // each by its own content meta: a merged package (base game + update + DLC in one NSP, a cartridge dump with its update) is given as both the base game and the update,
         // and the base game's Program NCA and the update's have the same title ID, so without the filter the update would be layered on itself or on the wrong base
         var basePkg = OpenNsp(ks, a[1], ContentMetaType.Application, app); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2], ContentMetaType.Patch, app | 0x800);
@@ -203,6 +207,25 @@ static class P {
         if (image) WriteImage(fs, outDir); else Copy(fs, outDir, null);
         return Damaged();
     }
+
+    // System data from a firmware dump: every .nca in the folder (a file, or a folder of 00, 01... parts as the NAND keeps large ones), the data NCA whose title ID matches
+    static int SysData(KeySet ks, string dir, ulong id, string outDir) {
+        Nca data = null; int n = 0;
+        foreach (string path in Directory.EnumerateFileSystemEntries(dir)) {
+            IStorage st;
+            if (File.Exists(path)) st = new LocalStorage(path, FileAccess.Read);
+            else if (File.Exists(Path.Combine(path, "00"))) { var parts = new List<IStorage>(); for (int i = 0; File.Exists(Path.Combine(path, $"{i:d2}")); i++) parts.Add(new LocalStorage(Path.Combine(path, $"{i:d2}"), FileAccess.Read)); st = new ConcatenationStorage(parts, true); }
+            else continue;
+            Nca nca; try { nca = new Nca(ks, st); n++; } catch (Exception) { continue; }   // not an NCA (or not one these keys open)
+            if (nca.Header.TitleId == id && (nca.Header.ContentType == NcaContentType.PublicData || nca.Header.ContentType == NcaContentType.Data)) { data = nca; break; }
+        }
+        if (data == null) { Console.Error.WriteLine($"[RED] no data NCA of {id:x16} among the {n} NCAs in {dir}"); return 4; }
+        Console.WriteLine($"system data {id:x16} ({n} NCAs read)");
+        Directory.CreateDirectory(outDir);
+        Copy(() => new RomFsFileSystem(data.OpenStorage(NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid)), outDir, null);
+        return 0;
+    }
+
 
     // The content metas (*.cnmt in the Meta NCAs) of a package's NCAs
     static IEnumerable<Cnmt> Metas(List<Nca> ncas) {

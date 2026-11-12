@@ -143,8 +143,8 @@ static void fg_keep(VkCommandBuffer cb, vkimg_t *im) {
     VkImageCopy c = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {im->w, im->h, 1}};
     vkCmdCopyImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, g_fx.older.i, VK_IMAGE_LAYOUT_GENERAL, 1, &c); g_fx.sm = !g_fx.sm;
 }
-// The picture upscaled by EASU into g_fx.out, then sharpened by RCAS (or, with amount, by fx_edge.frag over radius pixels) into the swapchain image's rectangle (dx, dy, dw, dh). 0: not done, the blit stays
-static int fsr_draw(VkCommandBuffer cb, uint32_t k, VkImage src, VkImageView sv, uint32_t iw, uint32_t ih, int cx, int cy, int cw, int ch, int dx, int dy, int dw, int dh, uint32_t idx, VkImageLayout *lay, float stops, float radius, float amount) {
+// The picture upscaled by EASU into g_fx.out, then sharpened by RCAS (or, with amount, by fx_edge.frag over radius pixels) into dst's rectangle (the swapchain image, or the pre-rotation image) (dx, dy, dw, dh). 0: not done, the blit stays
+static int fsr_draw(VkCommandBuffer cb, uint32_t k, VkImage src, VkImageView sv, uint32_t iw, uint32_t ih, int cx, int cy, int cw, int ch, int dx, int dy, int dw, int dh, VkImage dst, VkImageView dview, VkImageLayout *lay, float stops, float radius, float amount) {
     if (!fx_init() || !fx_rcas() || (amount > 0 && !fx_edge())) return 0;
     (void)src; fx_img_make(&g_fx.out, (uint32_t)dw, (uint32_t)dh, VK_FORMAT_R8G8B8A8_UNORM); fx_general(cb, &g_fx.out);
     fx_set(g_fx.se[k], &sv, 1); fx_set(g_fx.sr[k], &g_fx.out.v, 1);
@@ -159,11 +159,11 @@ static int fsr_draw(VkCommandBuffer cb, uint32_t k, VkImage src, VkImageView sv,
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_fx.easu); vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_fx.le, 0, 1, &g_fx.se[k], 0, NULL);
     vkCmdPushConstants(cb, g_fx.le, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof e, &e); vkCmdDraw(cb, 3, 1, 0, 0); vkCmdEndRendering(cb);
     vk_img_barrier_all(cb);
-    barrier(cb, g_simg[idx], *lay, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL); *lay = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier(cb, dst, *lay, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL); *lay = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     struct { uint32_t con[4]; int32_t ox, oy, linear, pad; } r; memset(&r, 0, sizeof r); r.con[0] = U(pow(2.0, -stops)); r.ox = dx; r.oy = dy; r.linear = g_sfmt == VK_FORMAT_R8G8B8A8_SRGB || g_sfmt == VK_FORMAT_B8G8R8A8_SRGB;
 #undef U
     struct { float tx, ty, radius, amount; int32_t ox, oy, linear, pad; } w = {1.0f / dw, 1.0f / dh, radius, amount, dx, dy, r.linear, 0};
-    fx_begin(cb, g_sview[idx], *lay, dx, dy, (uint32_t)dw, (uint32_t)dh, g_sext);
+    fx_begin(cb, dview, *lay, dx, dy, (uint32_t)dw, (uint32_t)dh, g_sext);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, amount > 0 ? g_fx.edge : g_fx.rcas); vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_fx.lr, 0, 1, &g_fx.sr[k], 0, NULL);
     if (amount > 0) vkCmdPushConstants(cb, g_fx.lr, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof w, &w); else vkCmdPushConstants(cb, g_fx.lr, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof r, &r);
     vkCmdDraw(cb, 3, 1, 0, 0); vkCmdEndRendering(cb);

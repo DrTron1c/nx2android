@@ -8,6 +8,7 @@
 // copy then the render thread's. The games' configs set the limit to 30 and the interval to 2 (their notes name the .ini files)
 #include "hle.h"
 #include <mach/mach.h>
+#include <sys/mman.h>
 
 // What a field holds: the frame rate as a float, double or int32, vsyncs per frame (60 / frame rate) as an int32, or the frame time in milliseconds as a float. Copies: consecutive copies of the
 // value (Unreal keeps one for the game thread, one for the render thread). A row with no pointer (ptr_off 0) has its field at main + field: a constant in main's read-only data, which the loader
@@ -23,6 +24,27 @@ enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32, TICKS_U32, SECS_F32, MODE_U32, FPS_
 static float ms_want(int fps) { return 1000.0f / (float)fps - (fps == 60 ? MS_MARGIN : 0); }
 typedef struct { const char *build, *what; uint64_t ptr_off; uint32_t field; uint8_t kind, copies; uint32_t scale; uint32_t ptr2; } lock_t;   // ptr2: a second pointer at that object + ptr2 (an IL2CPP class's static fields)
 static const lock_t k_locks[] = {
+    // Octopath Traveler 0 1.0.5: Unreal Engine 5's console variables t.MaxFPS (the game thread's frame limit: it sleeps until 1 / t.MaxFPS has passed and steps the game by the time that
+    // really passed) and rhi.SyncInterval (vsyncs per present: the RHI's present interval). Each is a TAutoConsoleVariable in main's bss (vtable, the console object, then at +0x10 the pointer to
+    // its value: the game thread's copy, then the render thread's). The game's config sets t.MaxFPS 30 ([ConsoleVariables] of DefaultEngine.ini; FrameRateLimit=30 of SwitchGameUserSettings.ini
+    // sets it again) and rhi.SyncInterval 2 (SwitchDeviceProfiles.ini), so the game asks for present interval 2. Found from the names' references in the static constructors that register them
+    // (main+0x2ca6524, main+0x1026e54; RegisterConsoleVariable, then AsVariableFloat / AsVariableInt stored at +0x10)
+    { "9fe60a212cff9b9a3656ab63d4f882e5", "Unreal t.MaxFPS", 0x7c738d0 + 0x10, 0, FPS_F32, 2 },
+    { "9fe60a212cff9b9a3656ab63d4f882e5", "Unreal rhi.SyncInterval", 0x7b32690 + 0x10, 0, VSYNCS_I32, 2 },
+    // DRAGON QUEST XI S 1.0.4: Unreal Engine 4.18's t.MaxFPS and nvn.SyncInterval (the Switch RHI's present interval), the same TAutoConsoleVariable layout. The game's config sets
+    // FrameRateLimit=30 (DefaultGameUserSettings.ini) and nvn.SyncInterval=2 (JackGame/Config/Switch/SwitchEngine.ini). Found from the names' references (UTF-32, as the engine's TCHAR on
+    // the Switch) in the static constructors: main+0x1e7f98 (TAutoConsoleVariable<float> constructor main+0x6ee0e0, AsVariableFloat stored at +0x10) and main+0x21c00c
+    { "1719aabfa5eae42b132b65770b871288", "Unreal t.MaxFPS", 0x8501c38 + 0x10, 0, FPS_F32, 2 },
+    { "1719aabfa5eae42b132b65770b871288", "Unreal nvn.SyncInterval", 0x85270b8 + 0x10, 0, VSYNCS_I32, 2 },
+    // DRAGON QUEST VII Reimagined 1.2.0: Unreal Engine 4.27's t.MaxFPS and rhi.SyncInterval, the same layout (names in UTF-16, the engine's TCHAR in this build). The game's config sets
+    // FrameRateLimit=30 (DefaultGameUserSettings.ini, SwitchGameUserSettings.ini) and rhi.syncinterval=2 (SwitchDeviceProfiles.ini). Registered at main+0x4a61b40 (float, AsVariableFloat
+    // stored at +0x10) and main+0x36164f4 (int, AsVariableInt at +0x10)
+    { "f7ec03e4cb9de3bd8319d4e899d2e9cc", "Unreal t.MaxFPS", 0x7f41908 + 0x10, 0, FPS_F32, 2 },
+    { "f7ec03e4cb9de3bd8319d4e899d2e9cc", "Unreal rhi.SyncInterval", 0x7dedf38 + 0x10, 0, VSYNCS_I32, 2 },
+    // FINAL FANTASY RESONANCE 1.0.1: Unreal Engine 5.6.1's t.MaxFPS and rhi.SyncInterval, the same layout (names in UTF-16). The engine's Switch device profile sets rhi.syncinterval=2
+    // (BaseSwitchDeviceProfiles.ini). Registered at main+0x33a4dec (float, IConsoleManager slot 2; AsVariableFloat stored at +0x10) and main+0x149e0bc (int, slot 1; AsVariableInt at +0x10)
+    { "84e182f72ee1da4f477804bd05b54c15", "Unreal t.MaxFPS", 0x8c29af0 + 0x10, 0, FPS_F32, 2 },
+    { "84e182f72ee1da4f477804bd05b54c15", "Unreal rhi.SyncInterval", 0x8adca10 + 0x10, 0, VSYNCS_I32, 2 },
     // Graveyard Keeper 2 1.0.4: Unity 6's vsync count and frame time, globals in main's data. Its vsync-count setter (main+0xd47310) stores the count (at least 1) at main+0x7d869d8 and
     // count / 60 seconds at main+0x7d869e4, which the frame pacing (main+0xd587f4) waits for 0.9 of after the last vsync; the game sets 2. Found from masagrator's FPSLocker config for
     // 1.0.2 (FPSLocker-Warehouse, patches/0100005027A18000/D8AEEEB4E7F1AB63.yaml: the same two fields, 1 / 62 s at 60), whose reference bytes occur once in this build's data
@@ -64,6 +86,13 @@ static const lock_t k_locks[] = {
 #define NLOCKS ((int)(sizeof k_locks / sizeof k_locks[0]))
 
 static int rd(uint64_t a, void *out, size_t n) { vm_size_t got = 0; return a >= 0x1000 && vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n; }
+// the same, for the debug reads (peek, memdump): pages mapped but not readable that way, a GPU memory pool shared with the device (Android's zero-copy pools are
+// dma-buf mappings, which process_vm_readv refuses: Pokémon Legends: Z-A's culling counters), are copied directly once msync says they are mapped (upstream)
+static int rd_dbg(uint64_t a, void *out, size_t n) {
+    if (rd(a, out, n)) return 1;
+    uint64_t pg = a & ~0xfffull; if (a < 0x1000 || msync((void *)(uintptr_t)pg, (a + n - pg + 0xfff) & ~0xfffull, MS_ASYNC)) return 0;
+    memcpy(out, (const void *)(uintptr_t)a, n); return 1;
+}
 
 // NieR 1.0.3 exposes its preset minimum but ships fixed mode-specific fallbacks.
 // Keep the native current-scale and UV controller intact; only select its
@@ -441,16 +470,22 @@ void dm_ctl_cvar_f32(uint64_t off, float v) {
 void dm_ctl_peek(uint64_t a, int n) {
     for (int i = 0; i < n && i < 64; i += 4) {
         uint32_t w[4] = {0}; int k = n - i < 4 ? n - i : 4;
-        if (!rd(a + 4 * (uint64_t)i, w, 4 * (size_t)k)) { LOG("DM_CTL: peek %#llx: not readable", (unsigned long long)(a + 4 * (uint64_t)i)); return; }
+        if (!rd_dbg(a + 4 * (uint64_t)i, w, 4 * (size_t)k)) { LOG("DM_CTL: peek %#llx: not readable", (unsigned long long)(a + 4 * (uint64_t)i)); return; }
         float f[4]; memcpy(f, w, sizeof f);
         LOG("DM_CTL: peek %#llx: %g %g %g %g (%08x %08x %08x %08x)", (unsigned long long)(a + 4 * (uint64_t)i), f[0], f[1], f[2], f[3], w[0], w[1], w[2], w[3]);
     }
+}
+// "pokei <guest address> <value>": one 32-bit int written to guest memory (an engine's switch tried while the game runs, its address found from its registration)
+void dm_ctl_poke_i32(uint64_t a, int32_t v) {
+    uint32_t was; if (!rd_dbg(a, &was, 4)) { LOG("DM_CTL: pokei %#llx: not readable", (unsigned long long)a); return; }
+    int32_t *p = (int32_t *)(uintptr_t)a; dm_guest_write_prepare(p, sizeof *p); *p = v;
+    LOG("DM_CTL: pokei %#llx: %d → %d", (unsigned long long)a, (int32_t)was, v);
 }
 // "memdump <guest address> <bytes> <path>": guest memory to a file, read safely (stops at the first unreadable page)
 void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path) {
     FILE *f = fopen(path, "wb"); if (!f) { LOG("[RED] DM_CTL: memdump: cannot open %s", path); return; }
     static uint8_t buf[1 << 16]; uint64_t done = 0;
-    while (done < n) { size_t k = n - done < sizeof buf ? (size_t)(n - done) : sizeof buf; if (!rd(a + done, buf, k)) break; fwrite(buf, 1, k, f); done += k; }
+    while (done < n) { size_t k = n - done < sizeof buf ? (size_t)(n - done) : sizeof buf; if (!rd_dbg(a + done, buf, k)) break; fwrite(buf, 1, k, f); done += k; }
     fclose(f); LOG("DM_CTL: memdump %#llx: %llu of %llu bytes → %s", (unsigned long long)a, (unsigned long long)done, (unsigned long long)n, path);
 }
 // "cvari <main offset> <value>": the same for an int console variable

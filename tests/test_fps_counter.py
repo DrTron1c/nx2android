@@ -29,7 +29,7 @@ class FpsCounter(unittest.TestCase):
         src = (AND / 'gfx_vk_present.c').read_text(encoding='utf-8')
         self.assertIn('#include "font_fps.h"', src)
         self.assertEqual(src.count('atomic_fetch_add(&g_fps_gen, 1)'), 2)      # the LSFG frames and the in-between frame
-        self.assertEqual(src.count('atomic_fetch_add(&g_fps_frames, 1)'), 1)   # the game's own, in mtl_present
+        self.assertEqual(src.count('atomic_fetch_add(&g_fps_frames, 1)'), 2)   # the game's own: mtl_present, and vk_present_vkimg for an OpenGL ES game (gl_android.c)
         self.assertIn('"%d > %d FPS"', src)
 
     def test_frame_generation_quality(self):   # the Display tab's Frame gen quality: LSFG's motion scale and basic frame generation's field density

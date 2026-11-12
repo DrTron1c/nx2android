@@ -267,6 +267,7 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
     return 1;
 }
 static void fl_add(const uint8_t *a, uint64_t n); static void fl_drop(const uint8_t *a, uint64_t n);   // flushed ranges, see nvn_flushed
+static void ft_drop(const uint8_t *a, uint64_t n);   // first-touch textures over a pool that goes, see ft_add
 // Under asynchronous replay the submissions queued before it are replayed first: they may still read the pool (Unicorn Overlord's skipped scenes freed theirs
 // right after submitting, and the replay then found its index buffers outside every pool and the command memory overwritten: a black screen, the sound going on)
 NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) {
@@ -275,7 +276,7 @@ NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) {
     replay_lock(); mtl_alias_drop_pool(p); ((pool_t *)p)->magic = 0; replay_unlock();
     if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
     if (((pool_t *)p)->mem && !(((pool_t *)p)->flags & 0x200)) {   // A virtual pool's storage is borrowed from a physical pool; do not unregister it
- nvn_dirty_remove_range(((pool_t *)p)->mem); replay_lock(); mtl_pool_del(((pool_t *)p)->mem); replay_unlock(); fl_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); } }
+ nvn_dirty_remove_range(((pool_t *)p)->mem); replay_lock(); mtl_pool_del(((pool_t *)p)->mem); replay_unlock(); fl_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); ft_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); } }
 static void ft_flush(const uint8_t *a, uint64_t n);
 NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) {   // see ft_add and nvn_flushed
     const pool_t *o = (const pool_t *)p;
@@ -412,10 +413,33 @@ static void ft_add(const tex_t *t) {
     g_ft[g_nft++] = (flush_tex){t->mem, t->L.size, *t, st, nvn_dirty_span(t->mem, t->L.size)};
     pthread_mutex_unlock(&g_ft_mu);
 }
+// Under asynchronous replay a texture Finalized (or initialized again) between submit and replay is still drawn by that submission, and its first use there (nvn_ft_written) needs
+// the entry: the deletion waits for the replay of the first job queued after it (ft_del_drain, submit_now); without a replay thread it is at once
+uint64_t nvn_jobs_queued(void); uint64_t nvn_replaying_job(void);
+typedef struct { uint64_t serial, seq; } ft_rel;
+static ft_rel *g_ftrel; static size_t g_nftrel, g_cftrel;   // under g_ft_mu
+static void ft_del_now(uint64_t serial) {   // g_ft_mu held
+    for (size_t i = 0; i < g_nft; i++) if (g_ft[i].t.serial == serial) { g_ft[i] = g_ft[--g_nft]; break; }
+}
 static void ft_del(uint64_t serial) {
     if (!DM_GAME_TEX_FLUSH_UPLOAD || !serial) return;
+    uint64_t seq = nvn_jobs_queued();
     pthread_mutex_lock(&g_ft_mu);
-    for (size_t i = 0; i < g_nft; i++) if (g_ft[i].t.serial == serial) { g_ft[i] = g_ft[--g_nft]; break; }
+    if (!seq) ft_del_now(serial);
+    else { if (g_nftrel == g_cftrel && !(g_ftrel = realloc(g_ftrel, (g_cftrel = g_cftrel ? 2 * g_cftrel : 256) * sizeof *g_ftrel))) die("flush_tex allocation failed"); g_ftrel[g_nftrel++] = (ft_rel){serial, seq}; }
+    pthread_mutex_unlock(&g_ft_mu);
+}
+static void ft_del_drain(void) {   // the replay thread, at each submission
+    uint64_t job = nvn_replaying_job(); if (!job) return;
+    pthread_mutex_lock(&g_ft_mu);
+    size_t o = 0; for (size_t i = 0; i < g_nftrel; i++) { if (g_ftrel[i].seq < job) ft_del_now(g_ftrel[i].serial); else g_ftrel[o++] = g_ftrel[i]; }
+    g_nftrel = o;
+    pthread_mutex_unlock(&g_ft_mu);
+}
+static void ft_drop(const uint8_t *a, uint64_t n) {   // a pool goes: the textures over it that were never Finalized leave the list (their entries pointed at dead memory and stayed for good)
+    if (!DM_GAME_TEX_FLUSH_UPLOAD || !a || !n) return;
+    pthread_mutex_lock(&g_ft_mu);
+    for (size_t i = 0; i < g_nft;) if (g_ft[i].mem >= a && g_ft[i].mem < a + n) g_ft[i] = g_ft[--g_nft]; else i++;
     pthread_mutex_unlock(&g_ft_mu);
 }
 // Profile tex_dirty_upload: Tears of the Kingdom fills some textures from the CPU after creating them and publishes them with no NVN flush at all (os::FlushDataCache runs
@@ -524,7 +548,8 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
     // Re-initializing a texture object that is still live (without a Finalize first): release the host texture of the old serial first. SMBW re-initializes its transient render targets on the same object every frame and never Finalizes them;
     //   previously every init created a new private MTLTexture and the old one stayed in the serial table forever, so GPU memory grew about 13 MB per frame (killed by the memory watchdog at 24 GB)
-    if (o->magic == MAGIC('T', 'E', 'X', 0) && o->serial) { static uint64_t n; if (!n++) LOG("[nvn] TextureInitialize on a texture object that is still live (no Finalize): releasing the old host texture (first case ser=%llu)", (unsigned long long)o->serial); mtl_tex_release(o); }
+    //   The old serial also leaves the first-touch list (ft_del, as Finalize does): kept, every such re-initialization added an entry that only a write to its pages removed, and the per-submission poll walked them all
+    if (o->magic == MAGIC('T', 'E', 'X', 0) && o->serial) { static uint64_t n; if (!n++) LOG("[nvn] TextureInitialize on a texture object that is still live (no Finalize): releasing the old host texture (first case ser=%llu)", (unsigned long long)o->serial); ft_del(o->serial); mtl_tex_release(o); }
     memset(o, 0, sizeof *o);
     o->magic = MAGIC('T', 'E', 'X', 0); o->d = s->d; o->pool = s->pool; o->off = s->off;
     o->has_layout = s->has_layout; memcpy(o->layout, s->layout, 8); o->set_swz = s->set_swz; o->stencil = s->stencil; o->swz = s->swz;
@@ -542,6 +567,21 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     if (s->pkg_data && o->mem) {
         memcpy(o->mem, s->pkg_data, o->L.size);
         if (!(o->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET))) mtl_tex_cpu_written(o);
+    }
+    // A texture over memory the game filled before it made the pool: a pool the CPU cannot access (CPU_NO_ACCESS) takes the memory's bytes at nvnMemoryPoolInitialize as its
+    // content, and a texture on it with no packaged layout (no SetPackagedTextureLayout, no packaged data) reads them as they are. The host's image of such a texture was made
+    // empty at its first use, as for a render target. Metroid Dread keeps its image-based light cube maps (128x128 and 64x64 BC6H, 256x256 BC1; flags 0) that way: they read
+    // 0, the ambient light the material shaders write into the light buffer was 0, and everything that only direct lights did not reach came out black (Samus a silhouette;
+    // issue #80). Such a texture is CPU-written (uploaded from memory at its first use) when its storage holds anything; render targets, images, video, display, linear and
+    // sparse textures are left out, so are virtual pools (their pages exist only where mapped, and their content is the mapping's), and so is memory that looks all zero (a
+    // texture the GPU fills later). The look reads the first 64 KB and then 64 bytes of each 4 KB page: a texture that is all zero, re-initialized every frame, stays cheap
+    if (!o->has_layout && !s->pkg_data && o->mem && o->pool && (o->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) && !(o->pool->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL) &&
+        o->d.target != NVN_TEXTURE_TARGET_BUFFER && !(o->d.flags & (NVN_TEXTURE_FLAGS_DISPLAY | NVN_TEXTURE_FLAGS_VIDEO_DECODE | NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_COMPRESSIBLE |
+                                                                   NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_SPARSE | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET))) {
+        size_t i = 0, n = o->L.size, head = n < 65536 ? n : 65536; int data = 0;
+        for (; i < head && !data; i++) data = o->mem[i] != 0;
+        for (size_t pg = head; pg < n && !data; pg += 4096) for (size_t k = pg; k < pg + 64 && k < n && !data; k++) data = o->mem[k] != 0;
+        if (data) { mtl_tex_cpu_written(o); static int nl; if (nl++ < 8) LOG("[nvn] texture %ux%ux%u format %#x target %d (no packaged layout) holds data at creation in a CPU-inaccessible pool: uploaded from memory", o->d.width, o->d.height, o->d.depth, o->d.format, o->d.target); }
     }
     OLOG("Texture %p %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx", (void *)t, o->d.width, o->d.height, o->d.depth,
          o->d.levels, o->d.format, o->d.target, o->d.flags, o->L.size);
@@ -761,7 +801,9 @@ static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
 }
 int prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
     if (st >= p->nstage) return 0;
-    prog_keys_t *k = pk_get(p, 1);
+    // a program already Finalized (replayed after its Finalize under asynchronous replay, or submitted after it) gets no entry: pk_drop has run, nothing would drop one made now
+    // (its keys are hashed again at each of its binds in that one submission: control section and code, once per stage; cheaper than an entry kept for good)
+    prog_keys_t tmp = {0}, *k = pk_get(p, p->magic == MAGIC('P', 'R', 'O', 'G')); if (!k) k = &tmp;
     if (!(k->ok >> st & 1)) { keys_hash(&p->sd[st], 0, k->key[st]); k->ok |= (uint8_t)(1u << st); }
     memcpy(key, k->key[st], 8);
     return 1;
@@ -1499,7 +1541,7 @@ static void submit_now(NVNqueue *q, int n, const NVNcommandHandle *h) {
     mtl_queue_activate(((const queue_t *)q)->serial);
     mtl_set_queue_origin_lower_left(((const queue_t *)q)->origin_ll);
     nvn_cap_submit(n, (const uint64_t *)h);   // DM_NVN_CAPTURE (nvn_capture.inc)
-    mtl_sub_begin();
+    mtl_sub_begin(); ft_del_drain();
     nvn_ft_poll();
     mtl_sub_index((const uint64_t *)h, n);
     for (int i = 0; i < n; i++) { mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
@@ -1564,7 +1606,9 @@ NVN(nvnWindowBuilderSetTextures, void, NVNwindowBuilder *b, int n, NVNtexture *c
     if (n < 0 || n > 4) { LOG("[RED] WindowBuilderSetTextures count %d", n); n = n < 0 ? 0 : 4; }
     WB(b)->ntex = n; for (int i = 0; i < n; i++) WB(b)->tex[i] = t[i];
 }
-NVN(nvnWindowBuilderSetPresentInterval, void, NVNwindowBuilder *b, int v) { WB(b)->interval = v; }
+NVN(nvnWindowBuilderSetPresentInterval, void, NVNwindowBuilder *b, int v) {
+    char at[96]; crash_addr_str(at, sizeof at, (uint64_t)__builtin_return_address(0)); LOG("[nvn] window builder present interval %d (from %s)", v, at); WB(b)->interval = v;
+}
 NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     const win_builder_t *s = (const win_builder_t *)b; win_t *o = (win_t *)w;
     memset(o, 0, sizeof *o); o->magic = MAGIC('W', 'I', 'N', 'D'); o->native = s->native; o->ntex = s->ntex; o->interval = s->interval;
@@ -1575,9 +1619,8 @@ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     return 1;
 }
 NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return ((const win_t *)w)->interval; }   // Link's Awakening reads it back every frame
-NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) {
-    if (((win_t *)w)->interval != v) { module_t *m = module_of(__builtin_return_address(0));
-        LOG("[nvn] the game sets present interval %d → %d (from %s+%#llx)", ((win_t *)w)->interval, v, m ? m->name : "?", m ? (unsigned long long)((uint64_t)__builtin_return_address(0) - (uint64_t)m->base) : 0ULL); }
+NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) {   // the caller in the log: where a 60 fps cut starts looking (Pokémon Legends: Z-A)
+    if (((win_t *)w)->interval != v) { char at[96]; crash_addr_str(at, sizeof at, (uint64_t)__builtin_return_address(0)); LOG("[nvn] the game sets present interval %d → %d (from %s)", ((win_t *)w)->interval, v, at); }
     ((win_t *)w)->interval = v;
 }
 NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int hh) {
@@ -2899,15 +2942,16 @@ NVN(nvnCommandBufferDrawArraysInstanced, void, NVNcommandBuffer *c, NVNdrawPrimi
 // Indirect, as DrawArraysIndirect: the record at ind is read by the GPU (nvn_mtl.m draw)
 // Indirect-count multi-draws (Monster Hunter Rise's GPU-driven scene: compute culling writes the draw records and a u32 count, then up to max draws are made from them; 1–49 per call,
 // stride 20, the records and counts in its sparse virtual pool). Metal has no draw count read by the GPU, so small multi-draws become max ordinary indirect draws that carry the count's address
-// and their index. A large call records the range once. Replay masks the argument records on the GPU, zeros past the count (nvn_mtl.m mdx_run). Both used to be empty, and the whole scene stayed undrawn
+// and their index (Vulkan: one draw with a count at the group's first, gfx_vk_exec.c mdi_group). A large call records the range once. Replay masks the argument records on the GPU, zeros past
+// the count (nvn_mtl.m mdx_run). Both used to be empty, and the whole scene stayed undrawn
 enum { MDI_INLINE = 1024 };  // larger calls keep the range in a single record
 NVN(nvnCommandBufferMultiDrawElementsIndirectCount, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, NVNbufferAddress ib, NVNbufferAddress ind, NVNbufferAddress cnt, int max, ptrdiff_t stride) {
     if (max > MDI_INLINE) { *REC(c, OP_MULTI_DRAW, p_multi_draw) = (p_multi_draw){ind, cnt, ib, stride, max, pr, it}; return; }
-    for (int i = 0; i < max; i++) rec_draw_idx(c, (p_draw_idx){pr, it, 0, 0, 0, 1, ib, ind + (uint64_t)i * (uint64_t)stride, cnt, i});
+    for (int i = 0; i < max; i++) rec_draw_idx(c, (p_draw_idx){pr, it, 0, 0, 0, 1, ib, ind + (uint64_t)i * (uint64_t)stride, cnt, i, max, (int)stride});
 }
 NVN(nvnCommandBufferMultiDrawArraysIndirectCount, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNbufferAddress ind, NVNbufferAddress cnt, int max, ptrdiff_t stride) {
     if (max > MDI_INLINE) { *REC(c, OP_MULTI_DRAW, p_multi_draw) = (p_multi_draw){ind, cnt, 0, stride, max, pr, -1}; return; }
-    for (int i = 0; i < max; i++) rec_draw(c, (p_draw){pr, 0, 0, 1, 0, ind + (uint64_t)i * (uint64_t)stride, cnt, i});
+    for (int i = 0; i < max; i++) rec_draw(c, (p_draw){pr, 0, 0, 1, 0, ind + (uint64_t)i * (uint64_t)stride, cnt, i, max, (int)stride});
 }
 // Whether the host can read n bytes at a guest address: outside a sparse virtual pool always; inside one only where pages are mapped (nvn_mtl.m reads multi-draw counts there)
 int nvn_host_readable(uint64_t a, uint64_t n) {

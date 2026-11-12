@@ -13,6 +13,7 @@ static const ov_ctl OV_LAYOUTS[2][DM_AOV_N] = {{DM_AOV_TABLET}, {DM_AOV_PHONE}};
 #define OV_N DM_AOV_N
 // the layout in use: the phone's when the window is at least OV_PHONE_ASPECT wide for its height (a 20:9 phone is 2.2, a 16:10 tablet 1.6), else the tablet's
 #define OV_PHONE_ASPECT 1.9f
+static inline int ov_layout_for_size(int width, int height) { return height > 0 && (float)width / (float)height >= OV_PHONE_ASPECT; }
 int dm_overlay_layout(void);   // front_android.c: 0 the tablet's, 1 the phone's
 #define OV_CTLS (OV_LAYOUTS[dm_overlay_layout()])
 #define OV_KNOB 0.42f        // a stick's knob radius, of the stick's (the theme-less drawing)
@@ -70,6 +71,27 @@ static inline float ov_reach(const ov_ctl *c, const float b[4], float H) {
     float m = fminf(b[2], b[3]);
     return c->kind == OV_BUTTON || c->kind == OV_MENU ? fmaxf(m * 0.25f, OV_REACH_MIN * H * dm_overlay_scale() - m) : m * 0.5f;
 }
+// A small area between adjacent face buttons lets one thumb press both without changing their individual hit areas.
+static inline uint64_t ov_face_combo(const ov_ctl *layout, float x, float y, float W, float H) {
+    const uint64_t face = DM_BTN_A | DM_BTN_B | DM_BTN_X | DM_BTN_Y;
+    for (int i = 0; i < OV_N; i++) {
+        const ov_ctl *a = &layout[i]; if (a->kind != OV_BUTTON || !(a->btn & face)) continue;
+        for (int j = i + 1; j < OV_N; j++) {
+            const ov_ctl *b = &layout[j]; uint64_t pair = a->btn | b->btn;
+            if (b->kind != OV_BUTTON || !(b->btn & face) || a->btn == b->btn || pair == (DM_BTN_A | DM_BTN_Y) || pair == (DM_BTN_X | DM_BTN_B)) continue;
+            float ab[4], bb[4]; ov_box(a, W, H, ab); ov_box(b, W, H, bb);
+            float distance = hypotf(ab[0] - bb[0], ab[1] - bb[1]);
+            float radius = fminf(fminf(ab[2], ab[3]), fminf(bb[2], bb[3]));
+            if (distance < radius || distance > radius * 3.5f) continue;
+            if (hypotf(x - (ab[0] + bb[0]) * 0.5f, y - (ab[1] + bb[1]) * 0.5f) <= radius * 0.35f) return pair;
+        }
+    }
+    return 0;
+}
+static inline uint64_t ov_button_bits(const ov_ctl *layout, const ov_ctl *button, float x, float y, float W, float H) {
+    uint64_t pair = (button->btn & (DM_BTN_A | DM_BTN_B | DM_BTN_X | DM_BTN_Y)) ? ov_face_combo(layout, x, y, W, H) : 0;
+    return pair && (pair & button->btn) ? pair : button->btn;
+}
 // a d-pad direction's circle in the theme-less drawing: centre offset and radius, in the d-pad's half width (k: 0 right, 1 left, 2 down, 3 up)
 static inline void ov_dpad_dir(int k, float *ox, float *oy, float *r) { float s = 0.42f; *ox = k == 0 ? s * 1.2f : k == 1 ? -s * 1.2f : 0; *oy = k == 2 ? s * 1.2f : k == 3 ? -s * 1.2f : 0; *r = s * 0.75f; }
 static const uint64_t OV_DPAD_BITS[4] = {DM_BTN_RIGHT, DM_BTN_LEFT, DM_BTN_DOWN, DM_BTN_UP};
@@ -86,12 +108,13 @@ void dm_overlay_theme_done(const ov_theme *t);   // the pixels are on the GPU: t
 
 // ---- the pause menu: a panel in the middle of the window: a row of tabs, the open tab's rows, and Resume. Everything is placed in a panel rectangle p
 // (x, y, width, height: the window's for touches, the raster's for drawing), so the touches and the drawing agree ----
-enum { OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_FPS, OVM_MODE, OVM_EXPORT, OVM_IMPORT, OVM_FLOAT, OVM_ASPECT, OVM_FSR, OVM_SHARP, OVM_FG, OVM_SCALE, OVM_CAP, OVM_DELSAVE, OVM_SHADOWS, OVM_BOOST, OVM_SOUND, OVM_TEXHALF, OVM_PREWARM, OVM_LOWLAT, OVM_SPEED, OVM_FGQ, OVM_VRS, OVM_ANISO, OVM_PRESET, OVM_AUTORES, OVM_SHADOWRES, OVM_RESUME, OVM_TAB, OVM_N };   // OVM_TAB: the tabs' row;
-            // OVM_EDIT: the layout editor; OVM_MODE: handheld (performance) or docked (resolution); OVM_EXPORT, OVM_IMPORT: the save manager (saves_android.c)
+enum { OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_FPS, OVM_MODE, OVM_EXPORT, OVM_IMPORT, OVM_FLOAT, OVM_ASPECT, OVM_FSR, OVM_SHARP, OVM_FG, OVM_SCALE, OVM_CAP, OVM_DELSAVE, OVM_SHADOWS, OVM_BOOST, OVM_SOUND, OVM_TEXHALF, OVM_PREWARM, OVM_LOWLAT, OVM_SPEED, OVM_FGQ, OVM_VRS, OVM_ANISO, OVM_PRESET, OVM_AUTORES, OVM_SHADOWRES, OVM_PAD, OVM_RESUME, OVM_TAB, OVM_N };   // OVM_TAB: the tabs' row;
+            // OVM_EDIT: the layout editor; OVM_MODE: handheld (performance) or docked (resolution); OVM_EXPORT, OVM_IMPORT: the save manager (saves_android.c);
+            // OVM_PAD: a controller's face buttons by their position or by their label (front_android.c pad_labels; dm_disp(DISP_PAD))
 #define OVM_TABS 5
 #define OVM_PER_TAB 7
 // Speed: the preset (OVM_PRESET sets the rows marked P in front_android.c preset_apply) and what trades picture for frame rate
-static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_FLOAT, OVM_RUMBLE, OVM_LOWLAT, -1},
+static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_FLOAT, OVM_RUMBLE, OVM_LOWLAT, OVM_PAD},
     {OVM_FPS, OVM_MODE, OVM_CAP, OVM_SHADOWS, OVM_PREWARM, OVM_TEXHALF, OVM_SPEED}, {OVM_ASPECT, OVM_FSR, OVM_SHARP, OVM_FG, OVM_FGQ, OVM_SCALE, -1},
     {OVM_PRESET, OVM_AUTORES, OVM_SHADOWRES, OVM_VRS, OVM_ANISO, OVM_BOOST, -1}, {OVM_EXPORT, OVM_IMPORT, OVM_DELSAVE, OVM_SOUND, -1, -1, -1}};
 static const char *const OVM_TAB_NAMES[OVM_TABS] = {"Gamepad", "Game", "Display", "Speed", "Saves"};
@@ -107,7 +130,7 @@ static inline int ov_menu_item(int tab, int row) { return row == 0 ? OVM_TAB : r
 // changes with each). Bit 16: the text entry's panel instead (its edit count below); bit 17: the layout editor (OVE_ST_* below); bit 18: the save picker (OVS_ST)
 int dm_menu_state(void);
 // bits 28 and 19 the tab's second and third bits (five tabs), bits 29..30 count changes in the Display tab. dm_disp: its values and the floating sticks' (front_android.c)
-enum { DISP_ASPECT, DISP_FSR, DISP_SHARP, DISP_FG, DISP_FLOAT, DISP_SCALE, DISP_CAP, DISP_DELSAVE, DISP_SHADOWS, DISP_BOOST, DISP_SOUND, DISP_TEXHALF, DISP_PREWARM, DISP_LOWLAT, DISP_SPEED, DISP_FGQ, DISP_VRS, DISP_ANISO, DISP_PRESET, DISP_AUTORES, DISP_SHADOWRES, DISP_N };
+enum { DISP_ASPECT, DISP_FSR, DISP_SHARP, DISP_FG, DISP_FLOAT, DISP_SCALE, DISP_CAP, DISP_DELSAVE, DISP_SHADOWS, DISP_BOOST, DISP_SOUND, DISP_TEXHALF, DISP_PREWARM, DISP_LOWLAT, DISP_SPEED, DISP_FGQ, DISP_VRS, DISP_ANISO, DISP_PRESET, DISP_AUTORES, DISP_SHADOWRES, DISP_PAD, DISP_N };   // DISP_PAD: front_android.c pad_labels (the menu state has no bit left for it)
 #define PRESETS 5   // the Speed tab's Preset: Custom, Quality, Balanced, Performance, Max FPS (front_android.c preset_apply)   // DISP_SHADOWS: 0 the profile's extra bias, 1 three times it, 2 the game's bias alone, 3 no shadow map drawn (gfx_vk_exec.c shadow_pass). DISP_DELSAVE: Delete save tapped once, not kept
 int dm_disp(int what);
 int dm_overlay_float(int stick, float *x, float *y);   // 1: this stick floats: it shows only while held, at (x, y), fractions of the window
