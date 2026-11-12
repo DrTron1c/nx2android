@@ -119,6 +119,9 @@ def job_for(key, stage, rec, w, write=True):   # dmsh_build.py job_for; transfor
     if dmsh_ampere.is_nvn2(rec[ci:]):   # NVN2 (Switch 2): Ampere code for the translator's Ampere frontend, as dmsh_build.py job_for
         c1 = dmsh_ampere.c1_segment(rec[ci:], code); code = code[:dmsh_ampere.inst_len(rec[ci:])]; extra['arch'] = 'sm86'
         if stage == 'cs': extra['nvn2_cs'] = [rec[ci + 0xb1], rec[ci + 0xb2], rec[ci + 0xb3], struct.unpack_from('<H', rec, ci + 0xba)[0], rec[ci + 0xa9] * 4]
+        # NVN2 keeps a pixel shader's early fragment tests flag at control +0x5b (nxnative a888e66, dmsh_ampere.early_fragment_tests): the driver reads the flags as single bytes
+        # at +0x58..+0x62. Not for a shader whose SPH (the code's first 0x80 bytes, word 19 bit 1) writes depth: tested early, its own depth would not be the one tested
+        if stage == 'ps' and len(rec) > ci + 0x5b and rec[ci + 0x5b] and len(code) >= 0x50 and not struct.unpack_from('<I', code, 19 * 4)[0] & 2: extra['early_z'] = True
     else:
         c1o, c1t = struct.unpack_from('<2I', rec, ci + 0x700)
         c1 = rec[0x38 + c1o:0x38 + c1t]
@@ -133,7 +136,7 @@ def job_for(key, stage, rec, w, write=True):   # dmsh_build.py job_for; transfor
         # GLSLC marks a fragment shader declared layout(early_fragment_tests) at control +0x718 (bit 0); NVN then sets the 3D engine's FORCE_EARLY_FRAGMENT_TESTS, which
         # the code area does not carry. Monster Hunter Rise's occlusion culling draws boxes over a 128x64 depth and stores a flag per visible box: tested after the shader,
         # every box's fragments ran and flagged it (15 ms a frame in Kamura village on Adreno 650)
-        if stage == 'ps' and len(rec) >= ci + 0x71c and struct.unpack_from('<I', rec, ci + 0x718)[0] & 1: extra['early_z'] = True
+        if stage == 'ps' and len(rec) >= ci + 0x71c and struct.unpack_from('<I', rec, ci + 0x718)[0] & 1 and not (len(code) >= 0x50 and struct.unpack_from('<I', code, 19 * 4)[0] & 2): extra['early_z'] = True   # (not one that writes depth)
     cp = os.path.join(w, key + '.bin')
     if write: open(cp, 'wb').write(code)
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'subgroup': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {})}

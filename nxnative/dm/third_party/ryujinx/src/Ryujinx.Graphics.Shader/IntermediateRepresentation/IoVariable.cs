@@ -46,5 +46,8 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
         VertexIndex,
         ViewportIndex,
         ViewportMask,
+        HelperInvocation,   // nxnative: at the end, so the others keep their numbers
+        BaryCoord,          // nxnative: the pixel's barycentric coordinates, perspective (a[0x3b4]) and screen-linear (a[0x3a8])
+        BaryCoordNoPersp,
     }
 }
