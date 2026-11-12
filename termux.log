@@ -1,0 +1,401 @@
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/hwclock
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/tar
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/base64
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/stat
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/log
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/sendevent
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/vmstat
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/mkfifo
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/seq
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/swapon
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/nice
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/ulimit
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/strings
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/zcat
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/killall
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/nl
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/true
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/truncate
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/linker_asan
++ t=linker
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/mountpoint
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/printenv
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/setprop
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/realpath
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/gunzip
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/sleep
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/paste
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/uuencode
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/sync
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/comm
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/insmod
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/microcom
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/ln
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/xxd
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/linker_asan64
++ t=linker64
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/cpio
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/blockdev
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/mktemp
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/kill
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/false
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/md5sum
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/sha1sum
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/xargs
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/pidof
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/logname
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/start
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/umount
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/expr
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/id
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/chrt
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/taskset
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/gzip
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/diff
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/split
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/mkswap
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/sha256sum
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/rm
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/od
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/file
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/fgrep
++ t=grep
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/which
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/readlink
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/cp
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/pmap
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/fallocate
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/tty
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/cal
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/yes
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/losetup
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/rmmod
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/timeout
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/inotifyd
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/echo
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/chmod
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/setsid
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/ionice
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/lsof
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/uptime
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/df
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/stop
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/chgrp
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/tail
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/tac
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/lsmod
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/cmp
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/date
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/fmt
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/iorenice
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/whoami
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/su
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/basename
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/rmdir
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/pwd
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/expand
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/sha512sum
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/chroot
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/opt/aosp/bin/nohup
++ t=toybox
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/libexec/installed-tests/termux-exec/lib/termux-exec_nos_c/tre/scripts/termux/api/termux_exec/service/ld_preload/direct/exec/files/print-args-linux-script.sh.sym
++ t=./print-args-linux-script.sh
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/libexec/installed-tests/termux-exec/lib/termux-exec_nos_c/tre/scripts/termux/api/termux_exec/service/ld_preload/direct/exec/files/print-args-termux-script.sh.sym
++ t=./print-args-termux-script.sh
++ case "$t" in
++ read -r l
+++ readlink /data/data/com.termux/files/usr/libexec/installed-tests/termux-exec/lib/termux-exec_nos_c/tre/scripts/termux/api/termux_exec/service/ld_preload/direct/exec/files/print-args-binary.sym
++ t=./print-args-binary
++ case "$t" in
++ read -r l
++ cd /data/data/com.termux/files/usr/..
++ tar --format=gnu -cf - --exclude=usr/opt --exclude=usr/share/doc --exclude=usr/share/man --exclude=usr/share/info --exclude=usr/share/terminfo --exclude=usr/include --exclude=usr/var --exclude=usr/tmp '--exclude=usr/lib/python3*/test' '--exclude=usr/lib/python3*/__pycache__' '--exclude=usr/lib/libclang.so*' --no-wildcards-match-slash '--exclude=usr/lib/*.a' usr
++ gzip -6
+-rw-r--r-- 1 runner runner 255413807 Nov 12 15:58 toolchain.tar.gz

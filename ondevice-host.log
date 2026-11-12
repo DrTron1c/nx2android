@@ -1,0 +1,31 @@
+source 178 of 203
+source 179 of 203
+source 180 of 203
+source 181 of 203
+source 182 of 203
+source 183 of 203
+source 184 of 203
+source 185 of 203
+source 186 of 203
+source 187 of 203
+source 188 of 203
+source 189 of 203
+source 190 of 203
+source 191 of 203
+source 192 of 203
+source 193 of 203
+source 194 of 203
+source 195 of 203
+source 196 of 203
+source 197 of 203
+source 198 of 203
+source 199 of 203
+source 200 of 203
+source 201 of 203
+source 202 of 203
+source 203 of 203
+compiled 203 sources, 0 failed
+linking
+linked /data/data/com.termux/files/usr/tmp/host/libdmhost.so
+stripped /data/data/com.termux/files/usr/tmp/host/libdmhost.so: 2417 KB
+-rwxr-xr-x 1 system system 2475224 Nov 12 15:57 /data/data/com.termux/files/usr/tmp/host/libdmhost.so

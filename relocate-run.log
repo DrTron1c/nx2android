@@ -1,0 +1,17 @@
++ W=/workdir
++ F=/data/data/com.termux/files/nx2a
++ mkdir -p /data/data/com.termux/files/nx2a/nx2android/nxnative /data/data/com.termux/files/nx2a/home /data/data/com.termux/files/nx2a/tmp
++ tar -xzf /workdir/toolchain.tar.gz -C /data/data/com.termux/files/nx2a
++ cp -r /workdir/porter /data/data/com.termux/files/nx2a/nx2android/
++ cp -r /workdir/nxnative/dm /workdir/nxnative/scripts /data/data/com.termux/files/nx2a/nx2android/nxnative/
++ cat
++ O=/data/data/com.termux/files/usr
++ G=/data/data/com.termux/files/usr.gone
++ mkdir -p /data/data/com.termux/files/usr.gone
++ cd /data/data/com.termux/files/usr
+++ ls -A
+++ grep -v '^opt$'
++ mv bin etc include lib libexec share tmp var /data/data/com.termux/files/usr.gone/
++ cd /
++ LD_LIBRARY_PATH=/data/data/com.termux/files/nx2a/usr/lib
++ /system/bin/sh /data/data/com.termux/files/nx2a/check.sh
