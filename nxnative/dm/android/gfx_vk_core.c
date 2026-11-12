@@ -473,88 +473,12 @@ static int recv_fds(int sock, int *fds, int max) {
             for (size_t i = 0; i < (c->cmsg_len - CMSG_LEN(0)) / sizeof(int) && n < max; i++) fds[n++] = ((int *)CMSG_DATA(c))[i];
     return n;
 }
+static int g_bda_on = -1;   // raw global memory: pools have device addresses (vk_gmem_buffers)
+static int bda_on(void) { if (g_bda_on < 0) g_bda_on = !getenv("DM_VK_NO_BDA") && vkGetDeviceProcAddr(V.dev, "vkGetBufferDeviceAddress") != NULL; return g_bda_on; }
 static const VkBufferUsageFlags POOL_USAGE0 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
     VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-static int g_bda_on = -1;   // raw global memory: pools have device addresses (vk_gmem_buffers)
-static int bda_on(void) { if (g_bda_on < 0) g_bda_on = !getenv("DM_VK_NO_BDA") && vkGetDeviceProcAddr(V.dev, "vkGetBufferDeviceAddress") != NULL; return g_bda_on; }
 #define POOL_USAGE (POOL_USAGE0 | (V.has_xfb ? VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT : 0) | (bda_on() ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0))   // any pool range may be a transform feedback buffer
-// DM_VK_LAZY_POOLS=1: a chunk gets its hardware buffer the first time the GPU needs it. A hardware buffer holds all its memory from the start and Android cannot swap it, and textures are
-// uploaded from pool memory into images of their own, so most of a pool may never need one: Pokémon Pokopia makes 5 GB of pools before its first frame, and Android killed it on a 12 GB tablet.
-// The swap: the chunk goes read-only, its contents are copied and the buffer is mapped over it. A guest write or a host write meanwhile waits here (a kernel write gets EFAULT, and
-// its caller prepares again, which waits: hle_fs.c ReadFile), and readers see the same bytes in either mapping
-static _Atomic uint64_t g_swap_lo, g_swap_hi;
-static int swap_has(uint64_t a) { return a >= atomic_load(&g_swap_lo) && a < atomic_load(&g_swap_hi); }
-static void swap_wait(void) { while (atomic_load(&g_swap_hi)) sched_yield(); }
-// A write that faulted on the read-only mapping of a swap can reach this hook after the swap is over and the page is writable again: the swap's range is no longer set, no other
-// hook claims the fault, and the game crashed (Pokopia: SIGSEGV in memcpy at the address of the chunk made a hardware buffer just before). The last swapped ranges are kept, and
-// a write fault inside one is retried once by the faulting thread; a second fault at the same address goes on to the other hooks (dirty tracking's read-only pages)
-enum { SWAP_RECENT = 16 };
-static _Atomic uint64_t g_swap_rlo[SWAP_RECENT], g_swap_rhi[SWAP_RECENT]; static _Atomic unsigned g_swap_rn;
-static void swap_recent(uint64_t lo, uint64_t hi) { unsigned i = atomic_fetch_add(&g_swap_rn, 1) % SWAP_RECENT; atomic_store(&g_swap_rhi[i], 0); atomic_store(&g_swap_rlo[i], lo); atomic_store(&g_swap_rhi[i], hi); }
-static int swap_fault(void *addr, int is_write, void *uc) {
-    (void)uc; uint64_t a = (uint64_t)(uintptr_t)addr;
-    if (!is_write) return 0;
-    if (swap_has(a)) { swap_wait(); return 1; }
-    static __thread uint64_t retried;
-    for (int i = 0; i < SWAP_RECENT; i++) if (a >= atomic_load(&g_swap_rlo[i]) && a < atomic_load(&g_swap_rhi[i])) {
-        if (retried == a) { retried = 0; return 0; }
-        retried = a; return 1; }
-    return 0;
-}
-static void swap_prep(void *addr, size_t len) { uint64_t a = (uint64_t)(uintptr_t)addr; if (atomic_load(&g_swap_hi) && a < atomic_load(&g_swap_hi) && a + len > atomic_load(&g_swap_lo)) swap_wait(); }
-static int pool_lazy_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_LAZY_POOLS"); on = e && atoi(e); if (on) { dm_fault_hook_register(swap_fault); dm_guest_write_prep_register(swap_prep); } } return on; }
-// DM_VK_POOL_FILE=1: a lazy pool's pages live in a deleted file of the app's own storage (DM_TEMP) rather than in anonymous memory. Swap on Android is RAM: texture data barely compresses, so
-// Pokopia's 3.7 GB in swap held about as much RAM (the log: 6.6 GB came back when it was killed, 2.8 GB of it outside swap), and Android killed it for low memory with 450 MB left. A file's
-// pages the system can simply drop and read again. What the GPU uses still moves to a hardware buffer (pool_zero_copy), and the file goes with the process, however it ends
-enum { POOL_FILES = 32 };
-static struct { uint64_t lo, hi; int fd; } g_pf[POOL_FILES]; static int g_npf; static uint64_t g_pf_bytes;
-void vk_pool_file(void *mem, uint64_t size) {
-    static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_POOL_FILE"); on = e && atoi(e); }
-    uint64_t a = (uint64_t)(uintptr_t)mem; const char *dir = getenv("DM_TEMP");
-    if (!on || !pool_lazy_on() || !dir || size < (64ull << 20) || ((a | size) & 0xfff) || g_npf == POOL_FILES) return;
-    for (int i = 0; i < g_npf; i++) if (a < g_pf[i].hi && a + size > g_pf[i].lo) return;   // the same memory made a pool again: it is in its file already
-    struct statvfs sv; if (statvfs(dir, &sv) || (uint64_t)sv.f_bavail * sv.f_frsize < size + (2ull << 30)) { VKLOG("[RED] memory pool %p +%#llx stays in memory: the device has too little free storage for its file", mem, (unsigned long long)size); return; }
-    char path[900]; snprintf(path, sizeof path, "%s/pool-%llx.tmp", dir, (unsigned long long)a);
-    struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0); int fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0) { VKLOG("[RED] memory pool %p stays in memory: no file (errno %d)", mem, errno); return; }
-    unlink(path);
-    int rc = posix_fallocate(fd, 0, (off_t)size);   // the room is taken now: a full disk could otherwise only show as a crash at a later write
-    if (rc) { VKLOG("[RED] memory pool %p stays in memory: no room for its file (%d)", mem, rc); close(fd); return; }
-    pthread_rwlock_wrlock(&g_pool_mu);   // one chunk swap at a time (g_swap_lo): the same hold as a chunk that gets its hardware buffer
-    atomic_store(&g_swap_lo, a); atomic_store(&g_swap_hi, a + size);
-    int ok = !mprotect(mem, size, PROT_READ); uint64_t kept = 0;
-    for (uint64_t o = 0; ok && o < size; o += 1ull << 20) {   // what the pool already holds: the rest is zeros, and the file reads as zeros
-        uint64_t n = size - o < 1ull << 20 ? size - o : 1ull << 20; const uint64_t *q = (const uint64_t *)((const uint8_t *)mem + o); int used = 0;
-        for (uint64_t k = 0; k < n / 8 && !used; k++) used = q[k] != 0;
-        for (uint64_t at = 0; used && at < n;) { ssize_t w = pwrite(fd, (const uint8_t *)mem + o + at, n - at, (off_t)(o + at)); if (w <= 0) { ok = 0; break; } at += (uint64_t)w; }
-        if (used) kept += n;
-    }
-    if (ok && mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) != mem) die("[vk] memory pool %p: cannot map its file (errno %d)", mem, errno);
-    if (!ok) mprotect(mem, size, PROT_READ | PROT_WRITE);
-    swap_recent(a, a + size);
-    atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
-    pthread_rwlock_unlock(&g_pool_mu);
-    if (!ok) { VKLOG("[RED] memory pool %p stays in memory: its file could not be written (errno %d)", mem, errno); close(fd); return; }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    g_pf[g_npf].lo = a; g_pf[g_npf].hi = a + size; g_pf[g_npf].fd = fd; g_npf++; g_pf_bytes += size;
-    VKLOG("memory pool %p +%#llx kept in a file: %llu MB held already, %.0f ms (%llu MB in such files)", mem, (unsigned long long)size, (unsigned long long)(kept >> 20), (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6, (unsigned long long)(g_pf_bytes >> 20));
-}
-// [lo, lo+n) now lives in a hardware buffer: its pages in the pool's file (vk_pool_file) are a stale copy that only takes the system's memory (and, written by the game
-// before, would be written back to storage), so they are given back. Nothing maps that part of the file again
-static uint64_t g_pf_punched;
-static void pf_punch(uint64_t lo, uint64_t n) {
-    for (int i = 0; i < g_npf; i++) {
-        if (lo >= g_pf[i].hi || lo + n <= g_pf[i].lo) continue;
-        uint64_t a = lo > g_pf[i].lo ? lo : g_pf[i].lo, e = lo + n < g_pf[i].hi ? lo + n : g_pf[i].hi;
-        if (!fallocate(g_pf[i].fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t)(a - g_pf[i].lo), (off_t)(e - a))) g_pf_punched += e - a;
-        else { static int said; if (!said++) VKLOG("[RED] memory pool file: its pages could not be given back (errno %d)", errno); }
-    }
-}
-static uint64_t buf_bda(VkBuffer b) {   // a pool buffer's device address (0 without them)
-    static PFN_vkGetBufferDeviceAddress gba; if (!bda_on()) return 0; if (!gba) gba = (PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(V.dev, "vkGetBufferDeviceAddress");
-    VkBufferDeviceAddressInfo bai = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, NULL, b}; return gba ? gba(V.dev, &bai) : 0;
-}
 static VkResult pool_copied_alloc(vkpool_t *p, uint64_t size, int cached) {
     VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
     VkBuffer b; VkResult r = vkCreateBuffer(V.dev, &bi, NULL, &b); if (r) return r;
@@ -698,6 +622,82 @@ static int slab_take(uint64_t size, slab_t **out, uint32_t *slot) {   // 1: a sl
 }
 static void slab_give(slab_t *s, uint32_t i, uint64_t fence) {
     pthread_mutex_lock(&g_slab_mu); s->fence[i] = fence; s->bits[i >> 6] |= 1ull << (i & 63); s->nfree++; pthread_mutex_unlock(&g_slab_mu);
+}
+// DM_VK_LAZY_POOLS=1: a chunk gets its hardware buffer the first time the GPU needs it. A hardware buffer holds all its memory from the start and Android cannot swap it, and textures are
+// uploaded from pool memory into images of their own, so most of a pool may never need one: Pokémon Pokopia makes 5 GB of pools before its first frame, and Android killed it on a 12 GB tablet.
+// The swap: the chunk goes read-only, its contents are copied and the buffer is mapped over it. A guest write or a host write meanwhile waits here (a kernel write gets EFAULT, and
+// its caller prepares again, which waits: hle_fs.c ReadFile), and readers see the same bytes in either mapping
+static _Atomic uint64_t g_swap_lo, g_swap_hi;
+static int swap_has(uint64_t a) { return a >= atomic_load(&g_swap_lo) && a < atomic_load(&g_swap_hi); }
+static void swap_wait(void) { while (atomic_load(&g_swap_hi)) sched_yield(); }
+// A write that faulted on the read-only mapping of a swap can reach this hook after the swap is over and the page is writable again: the swap's range is no longer set, no other
+// hook claims the fault, and the game crashed (Pokopia: SIGSEGV in memcpy at the address of the chunk made a hardware buffer just before). The last swapped ranges are kept, and
+// a write fault inside one is retried once by the faulting thread; a second fault at the same address goes on to the other hooks (dirty tracking's read-only pages)
+enum { SWAP_RECENT = 16 };
+static _Atomic uint64_t g_swap_rlo[SWAP_RECENT], g_swap_rhi[SWAP_RECENT]; static _Atomic unsigned g_swap_rn;
+static void swap_recent(uint64_t lo, uint64_t hi) { unsigned i = atomic_fetch_add(&g_swap_rn, 1) % SWAP_RECENT; atomic_store(&g_swap_rhi[i], 0); atomic_store(&g_swap_rlo[i], lo); atomic_store(&g_swap_rhi[i], hi); }
+static int swap_fault(void *addr, int is_write, void *uc) {
+    (void)uc; uint64_t a = (uint64_t)(uintptr_t)addr;
+    if (!is_write) return 0;
+    if (swap_has(a)) { swap_wait(); return 1; }
+    static __thread uint64_t retried;
+    for (int i = 0; i < SWAP_RECENT; i++) if (a >= atomic_load(&g_swap_rlo[i]) && a < atomic_load(&g_swap_rhi[i])) {
+        if (retried == a) { retried = 0; return 0; }
+        retried = a; return 1; }
+    return 0;
+}
+static void swap_prep(void *addr, size_t len) { uint64_t a = (uint64_t)(uintptr_t)addr; if (atomic_load(&g_swap_hi) && a < atomic_load(&g_swap_hi) && a + len > atomic_load(&g_swap_lo)) swap_wait(); }
+static int pool_lazy_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_LAZY_POOLS"); on = e && atoi(e); if (on) { dm_fault_hook_register(swap_fault); dm_guest_write_prep_register(swap_prep); } } return on; }
+// DM_VK_POOL_FILE=1: a lazy pool's pages live in a deleted file of the app's own storage (DM_TEMP) rather than in anonymous memory. Swap on Android is RAM: texture data barely compresses, so
+// Pokopia's 3.7 GB in swap held about as much RAM (the log: 6.6 GB came back when it was killed, 2.8 GB of it outside swap), and Android killed it for low memory with 450 MB left. A file's
+// pages the system can simply drop and read again. What the GPU uses still moves to a hardware buffer (pool_zero_copy), and the file goes with the process, however it ends
+enum { POOL_FILES = 32 };
+static struct { uint64_t lo, hi; int fd; } g_pf[POOL_FILES]; static int g_npf; static uint64_t g_pf_bytes;
+void vk_pool_file(void *mem, uint64_t size) {
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_POOL_FILE"); on = e && atoi(e); }
+    uint64_t a = (uint64_t)(uintptr_t)mem; const char *dir = getenv("DM_TEMP");
+    if (!on || !pool_lazy_on() || !dir || size < (64ull << 20) || ((a | size) & 0xfff) || g_npf == POOL_FILES) return;
+    for (int i = 0; i < g_npf; i++) if (a < g_pf[i].hi && a + size > g_pf[i].lo) return;   // the same memory made a pool again: it is in its file already
+    struct statvfs sv; if (statvfs(dir, &sv) || (uint64_t)sv.f_bavail * sv.f_frsize < size + (2ull << 30)) { VKLOG("[RED] memory pool %p +%#llx stays in memory: the device has too little free storage for its file", mem, (unsigned long long)size); return; }
+    char path[900]; snprintf(path, sizeof path, "%s/pool-%llx.tmp", dir, (unsigned long long)a);
+    struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0); int fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) { VKLOG("[RED] memory pool %p stays in memory: no file (errno %d)", mem, errno); return; }
+    unlink(path);
+    int rc = posix_fallocate(fd, 0, (off_t)size);   // the room is taken now: a full disk could otherwise only show as a crash at a later write
+    if (rc) { VKLOG("[RED] memory pool %p stays in memory: no room for its file (%d)", mem, rc); close(fd); return; }
+    pthread_rwlock_wrlock(&g_pool_mu);   // one chunk swap at a time (g_swap_lo): the same hold as a chunk that gets its hardware buffer
+    atomic_store(&g_swap_lo, a); atomic_store(&g_swap_hi, a + size);
+    int ok = !mprotect(mem, size, PROT_READ); uint64_t kept = 0;
+    for (uint64_t o = 0; ok && o < size; o += 1ull << 20) {   // what the pool already holds: the rest is zeros, and the file reads as zeros
+        uint64_t n = size - o < 1ull << 20 ? size - o : 1ull << 20; const uint64_t *q = (const uint64_t *)((const uint8_t *)mem + o); int used = 0;
+        for (uint64_t k = 0; k < n / 8 && !used; k++) used = q[k] != 0;
+        for (uint64_t at = 0; used && at < n;) { ssize_t w = pwrite(fd, (const uint8_t *)mem + o + at, n - at, (off_t)(o + at)); if (w <= 0) { ok = 0; break; } at += (uint64_t)w; }
+        if (used) kept += n;
+    }
+    if (ok && mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) != mem) die("[vk] memory pool %p: cannot map its file (errno %d)", mem, errno);
+    if (!ok) mprotect(mem, size, PROT_READ | PROT_WRITE);
+    swap_recent(a, a + size);
+    atomic_store(&g_swap_hi, 0); atomic_store(&g_swap_lo, 0);
+    pthread_rwlock_unlock(&g_pool_mu);
+    if (!ok) { VKLOG("[RED] memory pool %p stays in memory: its file could not be written (errno %d)", mem, errno); close(fd); return; }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    g_pf[g_npf].lo = a; g_pf[g_npf].hi = a + size; g_pf[g_npf].fd = fd; g_npf++; g_pf_bytes += size;
+    VKLOG("memory pool %p +%#llx kept in a file: %llu MB held already, %.0f ms (%llu MB in such files)", mem, (unsigned long long)size, (unsigned long long)(kept >> 20), (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6, (unsigned long long)(g_pf_bytes >> 20));
+}
+// [lo, lo+n) now lives in a hardware buffer: its pages in the pool's file (vk_pool_file) are a stale copy that only takes the system's memory (and, written by the game
+// before, would be written back to storage), so they are given back. Nothing maps that part of the file again
+static uint64_t g_pf_punched;
+static void pf_punch(uint64_t lo, uint64_t n) {
+    for (int i = 0; i < g_npf; i++) {
+        if (lo >= g_pf[i].hi || lo + n <= g_pf[i].lo) continue;
+        uint64_t a = lo > g_pf[i].lo ? lo : g_pf[i].lo, e = lo + n < g_pf[i].hi ? lo + n : g_pf[i].hi;
+        if (!fallocate(g_pf[i].fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t)(a - g_pf[i].lo), (off_t)(e - a))) g_pf_punched += e - a;
+        else { static int said; if (!said++) VKLOG("[RED] memory pool file: its pages could not be given back (errno %d)", errno); }
+    }
+}
+static uint64_t buf_bda(VkBuffer b) {   // a pool buffer's device address (0 without them)
+    static PFN_vkGetBufferDeviceAddress gba; if (!bda_on()) return 0; if (!gba) gba = (PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(V.dev, "vkGetBufferDeviceAddress");
+    VkBufferDeviceAddressInfo bai = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, NULL, b}; return gba ? gba(V.dev, &bai) : 0;
 }
 // Zero copy: the pages of [mem, mem+size) become an AHardwareBuffer's, imported as a VkBuffer (a slab's slot for a small pool, or a kept buffer of a freed pool of that size). 0 on success.
 // On a chunk already in use (p->lazy, pool_materialize) the pages move last, once nothing can fail, and it takes neither a slot nor a kept buffer: both put the pages in place first

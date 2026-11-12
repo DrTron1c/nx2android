@@ -138,6 +138,7 @@ COMPLETION
 #include <stdlib.h>
 #include <unistd.h>
 static struct { VkDevice dev; VkPhysicalDeviceMemoryProperties mem; VkPhysicalDeviceProperties props; int has_xfb; } V;
+static int bda_on(void) { return 0; }   // (this fork: pools with device addresses, gfx_vk_core.c; none here)
 typedef struct { VkBuffer buf; VkDeviceMemory mem; uint8_t *shadow; int noncoherent; uint64_t lo, hi; } vkpool_t;
 static int failure, buffers, memories, mapped, creates, allocs, types[8];
 static uint32_t allowed=3;

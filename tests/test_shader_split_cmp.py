@@ -59,7 +59,7 @@ class CmpContainer(unittest.TestCase):
         if self.s.frame_size(f) is not None: self.skipTest('this zstd build records the size in streamed frames')
         d = struct.pack('<I', len(self.body) + 1) + f
         r, said = self.unsized(d)
-        self.assertEqual(r, d); self.assertIn('bytes where the prefix gives', said)
+        self.assertEqual(r, d); self.assertIn('[RED] /t.cmp', said); self.assertRegex(said, r'bytes where the prefix gives|the size prefix says \d+ bytes')   # (this fork's shader_split words it so)
 
 
 if __name__ == '__main__':

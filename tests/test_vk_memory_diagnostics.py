@@ -95,7 +95,21 @@ typedef struct { uint32_t width, height, layers, format; uint64_t usage; uint32_
 #define AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN 48
 #define AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER 16777216
 #define POOL_USAGE VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-typedef struct { VkBuffer buf; VkDeviceMemory mem; AHardwareBuffer *ahb; int zero_copy; } vkpool_t;
+typedef struct slab_t { int fd; uint8_t *map; VkBuffer buf; uint64_t slot_bytes; } slab_t;
+typedef struct { VkBuffer buf; VkDeviceMemory mem; AHardwareBuffer *ahb; int zero_copy, lazy; uint64_t bda, boff; slab_t *slab; uint32_t slot; } vkpool_t;
+typedef struct { AHardwareBuffer *ahb; VkBuffer buf; VkDeviceMemory mem; uint64_t size, fence; } zcfree_t;
+// this fork's pool_zero_copy: small pools take a slab's slot and freed pools' buffers are kept (both upstream's), lazy chunks and device addresses (none here)
+static int slab_take(uint64_t size, slab_t **out, uint32_t *slot) { (void)size; (void)out; (void)slot; return 0; }
+static void slab_give(slab_t *s, uint32_t slot, uint64_t fence) { (void)s; (void)slot; (void)fence; }
+static int zcf_take(uint64_t size, zcfree_t *out) { (void)size; (void)out; return 0; }
+static void zcf_free_now(zcfree_t *z) { (void)z; }
+static int bda_on(void) { return 0; }
+static uint64_t buf_bda(VkBuffer b) { (void)b; return 0; }
+static void pf_punch(uint64_t lo, uint64_t n) { (void)lo; (void)n; }
+static void swap_recent(uint64_t lo, uint64_t hi) { (void)lo; (void)hi; }
+static void nvn_dirty_reopen(const void *m, size_t n) { (void)m; (void)n; }
+static _Atomic uint64_t g_swap_lo, g_swap_hi;
+static void die(const char *f, ...) { (void)f; abort(); }
 static struct { VkDevice dev; } V;
 static int failure, released, closed, destroyed, messages;
 static char last[1024];

@@ -125,8 +125,8 @@ static uint32_t *bundle_spv(const bent *e, uint32_t *nw) {
     else if (r != n) snprintf(why, sizeof why, "its SPIR-V decompresses to %zu bytes, its entry says %u", r, n);
     else if (w[0] != 0x07230203) snprintf(why, sizeof why, "not SPIR-V (first word %#x)", w[0]);
     else if (w[4]) snprintf(why, sizeof why, "invalid SPIR-V schema %u", w[4]);
-    else if (w[1] < 0x10000 || w[1] > 0x10600 || (w[1] & 0xff)) snprintf(why, sizeof why, "unsupported SPIR-V version %#x", w[1]);
-    // Our translator emits SPIR-V 1.3 for Vulkan 1.1 (up to 1.6 let through: the driver judges a newer module); check framing before any
+    else if (w[1] < 0x10000 || w[1] > 0x10300 || (w[1] & 0xff)) snprintf(why, sizeof why, "unsupported SPIR-V version %#x", w[1]);
+    // Our translator emits SPIR-V 1.3 for Vulkan 1.1 (CodeGenContext SpirvVersionMinor); check framing before any
     // runtime patcher walks instructions. This is not semantic spirv-val.
     if (!*why) for (uint32_t at = 5; at < n / 4;) {
         uint32_t count = w[at] >> 16;
