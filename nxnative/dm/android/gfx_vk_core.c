@@ -401,6 +401,7 @@ void vk_init(void) {
         V.has_timeline = 0;
     }
     { void vk_dq_init(void); vk_dq_init(); }   // DM_VK_MT_REPLAY: the vkCmd* calls through the recorder thread (gfx_vk_dq.c)
+    { void vk_gbar_init(void); vk_gbar_init(); }   // DM_VK_BAR_NARROW: narrower barriers between dispatches (gfx_vk_gbar.c), over the recorder's wrappers
     vkGetDeviceQueue(V.dev, V.qf, 0, &V.q);
     VkPipelineCacheCreateInfo pci = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     char path[1024]; const char *root = getenv("DM_ROOT"); void *data = NULL; size_t dn = 0;

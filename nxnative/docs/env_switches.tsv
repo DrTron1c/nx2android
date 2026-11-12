@@ -334,6 +334,7 @@ DM_UE_SHADERS	path	Folder of the Unreal shader code archives decoded by `uepak.p
 DM_UE_TEXTURE_POOL	switch	Megabytes Unreal's texture streaming pool (`r.Streaming.PoolSize`) is raised to, overriding the profile's `ue_texture_pool`; `0` keeps the game's own pool. On iOS only this switch turns it on (`Documents/env.txt`)
 DM_UPSCALER	player	`metalfx` draws the game's own upscaler shaders (agl's NDSR network, found by the shader map) with MetalFX's spatial scaler; `game` (the default) runs them
 DM_VK_ANISO	player	`1` 4x, `2` 2x, `3` off (start-up; the pause menu's Texture filtering, settings.txt `aniso=`): the game's anisotropic filtering held to that (Android `gfx_vk_tex.c`)
+DM_VK_BAR_NARROW	switch	`1` (Android, start-up): the barrier after a compute dispatch is owed until the next command, and becomes compute-to-compute when another dispatch follows; any other command records it in full (`gfx_vk_gbar.c`, after Banana Native's narrowed game barriers between Pokopia's dispatches); Pokémon Pokopia's `android.tsv` sets it
 DM_VK_CAPTURE	path	`=<dir>` (Mac) writes every SPIR-V module the game creates to `<dir>/<key>.spv`; the NSP script's Vulkan shader capture stage sets it
 DM_VK_LOG	diagnostic	`=1` logs Vulkan object creation in the Vulkan-on-Metal layer
 DM_VK_SHADOW_RES	player	`1` half, `2` a quarter (start-up; the pause menu's Shadow resolution, settings.txt `shadowres=`): D16 shadow maps of 1024x1024 or more made that much smaller, their passes' viewports and scissors scaled (Android `gfx_vk_tex.c` shadow_shrink)

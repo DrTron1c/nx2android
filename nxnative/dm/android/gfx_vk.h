@@ -137,6 +137,11 @@ VkSampler vk_dummy_sampler(void);
 VkBufferView vk_dummy_tbuf(int storage);
 void vk_end_pass_land(void);   // vk_end_pass, then the deferred uniform updates land (before copies, dispatches, the submission's end)
 void vk_img_barrier_all(VkCommandBuffer cb);   // version 1: one global memory barrier (all images stay in GENERAL)
+void vk_gbar_before_dispatch(VkCommandBuffer cb);   // gfx_vk_gbar.c (DM_VK_BAR_NARROW): the barrier before a dispatch, compute-to-compute right after another one
+void vk_gbar_after_dispatch(VkCommandBuffer cb);    // the barrier after a dispatch: owed until the next command into cb
+int vk_gbar_game(VkCommandBuffer cb);               // a game barrier outside a pass: 1 = it is the owed one
+void vk_gbar_stats(uint64_t *narrowed, uint64_t *settled, uint64_t *absorbed);
+int vk_gbar_on(void);
 void vk_tex_prepare(VkCommandBuffer cb, vkimg_t *im);   // first use: transition from UNDEFINED to GENERAL (and upload a packaged texture)
 
 // ---- shaders (gfx_vk_shader.c) ----

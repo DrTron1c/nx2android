@@ -15,6 +15,9 @@ env	DM_VK_TEX_HALF=1
 env	DM_VK_SHADOW_BIAS=3,8
 # a compute pipeline can take the driver over a minute: built beside the frame, not in it (gfx_vk_exec.c compute_async)
 env	DM_VK_ASYNC_COMPUTE=1
+# its frames run hundreds of dispatches; the barriers between back-to-back dispatches are compute-to-compute, not full ones that flush the colour and depth caches too
+# (gfx_vk_gbar.c; Banana Native v0.2.9: less GPU time a frame on Pokopia)
+env	DM_VK_BAR_NARROW=1
 # handheld: the game picks its lower resolution and settings. Docked it asked more of the tablet than its memory and GPU have: under 15 fps in its first area, and closed by Android after 6 minutes
 env	DM_OPMODE=0
 # Docked saved in settings.txt before this row existed does not count (front_android.c settings_load)
