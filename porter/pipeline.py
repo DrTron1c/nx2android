@@ -397,6 +397,7 @@ class Port:
         g = self.g
         PROG.stage('unpack the game', step=self.s2.name())
         self.game, self.aoc = switch2.extract(self.s2, self.work, self.pkg_ver)
+        self.sysdata = None   # no firmware system data for a Switch 2 game (extract_sysdata reads a Switch 1 firmware dump)
         self.base = self.game; self.dirs = {self.pkg_ver: self.game}; self.versions = [self.pkg_ver]
         PROG.end(f'{self.pkg_ver}, {self.romfs(self.game).stat().st_size / 2**30:.1f} GB')
         bad = [] if self.derived else nsp.build_mismatch(self.game, self.pkg_ver, g)

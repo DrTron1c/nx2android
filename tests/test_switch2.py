@@ -46,4 +46,18 @@ class Switch2(unittest.TestCase):
             self.assertTrue((t / 'out/RomFS.img').is_file() and not (t / 'out/RomFS').exists())
 
 
+    def test_the_stages_after_unpacking_read_nothing_only_a_switch_1_extract_sets(self):
+        # A Switch 2 game is unpacked (extract_switch2), not extracted: a value only extract() sets is missing for it, and the stage reading it stops the port
+        # (the data pack read self.sysdata after the upstream merge: AttributeError on the tablet)
+        import ast
+        cls = next(n for n in ast.parse((Path(__file__).resolve().parent.parent / 'porter/pipeline.py').read_text(encoding='utf-8')).body if isinstance(n, ast.ClassDef) and n.name == 'Port')
+        stores, loads = {}, {}
+        for f in (f for f in cls.body if isinstance(f, ast.FunctionDef)):
+            for n in ast.walk(f):
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == 'self':
+                    (stores if isinstance(n.ctx, ast.Store) else loads).setdefault(n.attr, set()).add(f.name)
+        only = {a for a, fs in stores.items() if fs == {'extract'}}
+        self.assertEqual({a: loads[a] for a in only if loads.get(a, set()) - {'extract'}}, {})
+
+
 if __name__ == '__main__': unittest.main()
