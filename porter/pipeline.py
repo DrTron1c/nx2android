@@ -44,6 +44,7 @@ class Options:
     mt_replay: bool = False            # multithread replay: DM_VK_MT_REPLAY=1 in env.txt (dm/android/gfx_vk_dq.c), after the profile's env rows
     touch: bool = False                # a game played by touch: the on-screen gamepad starts hidden (TOUCH_SETTINGS), so it takes none of the game's touches
     external_display: bool = False     # compile the optional external-screen activity with the Android SDK
+    all_shaders: bool = False          # translate every shader of the game's map, not only its profile's selected set (shader_seen.tsv; dm/android/tools/shader_vk.py selection)
     vercode_offset: int = 0            # added to the APK's versionCode: a rebuild of the same game version installs over a build with a higher one (version_code)
     alias_headroom: int = None         # GB more alias region (alias_headroom); None: ALIAS_HEADROOM for a version the profile was not brought up on, none for one it was
     romfs_at: str = None               # with install: the folder on the device the app reads the RomFS from (porter/install.py), 'app' for its files folder; None: as the device has it
@@ -699,8 +700,10 @@ class Port:
         xlate, xkey = self.translator()
         PROG.set(step='checking the inputs')
         pkey = nsp.package_key(pkg)
-        key = nsp.fingerprint(pkey, ('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE)), ('files', nsp.profile_files(self.g)), xkey, ('files', []))
-        parts = {'the shader package': pkey, 'the translator': xkey, 'the tools': nsp.fingerprint(('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE))), 'the game profile': nsp.fingerprint(('files', nsp.profile_files(self.g)))}
+        every = bool(self.o.all_shaders or os.environ.get('NX2A_ALL_SHADERS') == '1')   # every shader of the map, not the profile's selected set (shader_vk.py selection)
+        key = nsp.fingerprint(pkey, ('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE)), ('files', nsp.profile_files(self.g)), xkey, ('files', [])) + ('-all' if every else '')
+        parts = {'the shader package': pkey, 'the translator': xkey, 'the tools': nsp.fingerprint(('files', [DM / 'android/tools/shader_vk.py'] + nsp.tool_files(NXNATIVE))), 'the game profile': nsp.fingerprint(('files', nsp.profile_files(self.g))),
+                 'the choice of shaders': 'every shader' if every else 'the selected set'}
         pf = kf.with_name('shaders.dmsv.parts')
         if self.dmsv.is_file() and (note := nsp.reused(kf, key)) is not None:
             pf.write_text(json.dumps(parts), encoding='utf-8')
@@ -720,7 +723,7 @@ class Port:
             if m := re.match(r'(prepared|translated|packed) (\d+) of (\d+)', s):
                 what, a, b = steps[m.group(1)]; n, of = int(m.group(2)), int(m.group(3))
                 PROG.set(step=what, done=round(1000 * (a + (b - a) * n / max(of, 1))), total=1000, unit='', note=f'{n:,} of {of:,} shaders')
-        nsp.run([PY, DM / 'android/tools/shader_vk.py', pkg, tmp, '--jobs', str(self.o.jobs), '--dotnet', self.tools['dotnet'], '--xlate', xlate, '--capture', cap, '--resume', work],
+        nsp.run([PY, DM / 'android/tools/shader_vk.py', pkg, tmp, '--jobs', str(self.o.jobs), '--dotnet', self.tools['dotnet'], '--xlate', xlate, '--capture', cap, '--resume', work] + (['--all-shaders'] if every else []),
                 self.logs / 'android_shaders.log', env=self.env, on_line=line)
         m = re.search(r'^(\d+) of (\d+) shaders', (self.logs / 'android_shaders.log').read_text(errors='replace'), re.M)
         if not m or m.group(1) == '0': raise BuildError(f'no shader translated (see {self.logs / "android_shaders.log"})')

@@ -52,7 +52,7 @@ public final class MainActivity extends Activity implements PortService.Listener
     private LinearLayout checklist;
     private ScrollView logScroll;
     private EditText pairPort, pairCode, connectPort;
-    private CheckBox touch, fps60, boost, installAfter, overAdb, keepOn;
+    private CheckBox touch, fps60, boost, allShaders, installAfter, overAdb, keepOn;
     private TextView driverState, lsfgState, storageState;
     private String pickInto = "keys";
     private boolean isSwitch2;
@@ -148,12 +148,17 @@ public final class MainActivity extends Activity implements PortService.Listener
         fps60 = new CheckBox(this); fps60.setText("60 fps when the game's build allows it"); fps60.setTextColor(TEXT);  add(c5, fps60, 0);
         boost = new CheckBox(this); boost.setText("Hold the GPU at full speed (steadier, but hotter)"); boost.setTextColor(TEXT); boost.setChecked(prefs.getBoolean("boost", true)); add(c5, boost, 0);
         boost.setOnCheckedChangeListener((v, on) -> prefs.edit().putBoolean("boost", on).apply());
+        // Every shader of the game (porter --all-shaders): off, a game whose profile lists the shaders it uses (Pokopia: 8,157 of 131,426) translates only those, minutes instead of hours,
+        // and the ones it asks for later are saved while it runs and added at the next port
+        allShaders = new CheckBox(this); allShaders.setText("Translate every shader (hours; off: only the ones the game is known to use, the rest are added at the next port)"); allShaders.setTextColor(TEXT);
+        allShaders.setChecked(prefs.getBoolean("allShaders", false)); add(c5, allShaders, 0);
+        allShaders.setOnCheckedChangeListener((v, on) -> prefs.edit().putBoolean("allShaders", on).apply());
         installAfter = new CheckBox(this); installAfter.setText("Install when done"); installAfter.setTextColor(TEXT);  installAfter.setChecked(true); add(c5, installAfter, 0);
         overAdb = new CheckBox(this); overAdb.setText("Install over Wireless debugging instead"); overAdb.setTextColor(TEXT); overAdb.setChecked(prefs.getBoolean("overAdb", false)); add(c5, overAdb, 0);
         overAdb.setOnCheckedChangeListener((v, on) -> prefs.edit().putBoolean("overAdb", on).apply());
         keepOn = new CheckBox(this); keepOn.setText("Keep the screen on while porting"); keepOn.setTextColor(TEXT);  keepOn.setChecked(prefs.getBoolean("keepOn", true)); add(c5, keepOn, 0);
         keepOn.setOnCheckedChangeListener((v, on) -> { prefs.edit().putBoolean("keepOn", on).apply(); screen(); });
-        for (CheckBox b : new CheckBox[]{touch, fps60, boost, installAfter, overAdb, keepOn}) b.setButtonTintList(android.content.res.ColorStateList.valueOf(LILAC));
+        for (CheckBox b : new CheckBox[]{touch, fps60, boost, allShaders, installAfter, overAdb, keepOn}) b.setButtonTintList(android.content.res.ColorStateList.valueOf(LILAC));
         add(c5, text("GPU driver", 14, TEXT, true), 10);
         driverState = text("", 14, DIM, false); add(c5, driverState, 4);
         LinearLayout driverRow = new LinearLayout(this);
@@ -537,6 +542,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (touch.isChecked()) a.add("--touch");
         if (fps60.isChecked()) a.add("--fps60");
         if (boost.isChecked()) a.add("--gpu-boost");
+        if (allShaders.isChecked()) a.add("--all-shaders");
         String dr = prefs.getString("driver", null);
         if (dr != null) { a.add("--vulkan-driver"); a.add(dr); }
         String ls = prefs.getString("lsfg", null);

@@ -24,6 +24,7 @@ ap.add_argument('pkg'); ap.add_argument('out')
 ap.add_argument('--resume', help='a folder kept between runs of the same inputs: finished work is not done again')
 ap.add_argument('--jobs', type=int, default=os.cpu_count() or 8)
 ap.add_argument('--keys', default='')
+ap.add_argument('--all-shaders', action='store_true', help="every shader of the game's map, not only the profile's selected set (shader_seen.tsv)")
 ap.add_argument('--dotnet', default=os.environ.get('DOTNET', 'dotnet'))
 ap.add_argument('--capture', help='a folder of shaders captured at run time on the device (<key>.bin)')
 ap.add_argument('--xlate', help="the translator (dmsh_xlate.dll) to run (default: the iOS chain's dm/gfx/tools/dmsh_xlate_bin; the porter builds one from the in-repo source)")
@@ -373,6 +374,21 @@ def int_inputs(spv):
             else: other.add(loads[x])
     return {str(loc[v]): 'sint' if v in sint else 'uint' for v in uses if v not in other and v in loc}
 
+# A profile may list the shaders its game is known to use (shader_seen.tsv, rows key<TAB>stage: Pokémon Pokopia's 8,157 of 131,426, from the Mac playtests from the
+# language screen to walking). Only those are translated, with the pixel shaders paired with them (shader_pairs.tsv), as Banana Native's phone build and the Mac's
+# selected build take them (ShaderLibs.selection, dmsh_build.py build_keys): minutes instead of hours on a tablet. A shader the game asks for that the bundle lacks is saved
+# on the device (gfx_vk_shader.c vk_shader_missing) and translated into shaders_extra.dmsv at the next port (the porter's extra_shaders). None: every shader of the map
+def selection(loc):
+    seen = GAME.table('shader_seen.tsv')
+    if a.all_shaders or os.environ.get('NX2A_ALL_SHADERS') == '1' or not seen.exists(): return None
+    want = {l[:16] for l in open(seen, encoding='utf-8') if re.match(r'[0-9a-f]{16}\b', l)} & loc.keys()
+    pairs = GAME.table('shader_pairs.tsv')
+    if want and pairs.exists():
+        for l in open(pairs, encoding='utf-8'):
+            c = l.split()
+            if len(c) >= 2 and c[0] in want and c[1] in loc: want.add(c[1])
+    return want or None
+
 def main():
     handle_remaps = {}
     table = GAME.table('android_shader_handles.tsv')
@@ -387,7 +403,9 @@ def main():
         if len(c) > 4 and c[0].endswith('.bin'): loc.setdefault(c[3], (c[0], int(c[1])))
     cap = {k: v for k, v in captured(a.capture).items() if k not in loc}
     if cap: print(f'{len(cap)} shaders captured at run time: {" ".join(f"{k} ({st})" for k, (st, _) in sorted(cap.items()))}', flush=True)
-    keys = sorted(k for k in (a.keys.split(',') if a.keys else [*loc, *cap]) if k in loc or k in cap)
+    sel = None if a.keys else selection(loc)
+    if sel is not None: print(f'{len(sel):,} of {len(loc):,} shaders selected by the profile (shader_seen.tsv and their pixel shaders); the rest come in as the game asks for them (--all-shaders: every one)', flush=True)
+    keys = sorted(k for k in (a.keys.split(',') if a.keys else [*(loc if sel is None else sel), *cap]) if k in loc or k in cap)
     packs = {}
     w = a.resume or tempfile.mkdtemp(prefix='shvk_', dir=os.environ.get('WORK'))
     os.makedirs(w, exist_ok=True)
