@@ -36,5 +36,6 @@ shader_groups	/Shader/=shader /Effect/=effect /UI/=layout
 shader_note	Splatoon Raiders shaders
 
 # ---- Graphics ----
+# (nxnative made render_cond and segment timestamps every game's default after this fork took its host (a2514d7d, 3304d6a0); this fork's host still reads the keys)
 # agl wraps its clears in render conditions on Donkey Kong Bananza; the same library here, to be confirmed on this game
 render_cond	on

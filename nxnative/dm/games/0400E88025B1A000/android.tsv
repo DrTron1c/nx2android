@@ -1,0 +1,5 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# Star Fox. Upstream (nxnative 67f1d00) ran it on a Mac into the tutorial; Banana Native marked it experimental in v0.3.12; not played on Android here
+status	experimental
+orientation	landscape
+requires	bcn

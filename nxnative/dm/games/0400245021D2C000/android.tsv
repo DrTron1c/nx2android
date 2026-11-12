@@ -1,0 +1,5 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# Yoshi and the Mysterious Book (Unreal Engine 5.4). Upstream (nxnative 9507c22) played it on a Mac at 60 fps through the first habitat; not played on Android
+status	experimental
+orientation	landscape
+requires	bcn

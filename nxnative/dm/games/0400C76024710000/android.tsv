@@ -1,0 +1,5 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# PRAGMATA (RE Engine). Upstream (nxnative ccd834e) played it on a Mac into the station's first rooms; not played on Android
+status	experimental
+orientation	landscape
+requires	bcn

@@ -1,0 +1,6 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# Kirby Air Riders. Upstream (nxnative 8feddfe) played it on a Mac at 60 fps through whole races, at about 10 GB; it relies on uniform-buffer handle tables the
+# host builds, which this fork's host does not have yet: expect missing textures
+status	experimental
+orientation	landscape
+requires	bcn

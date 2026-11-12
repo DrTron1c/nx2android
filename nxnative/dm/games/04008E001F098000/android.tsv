@@ -1,0 +1,5 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# Nintendo Switch Sports Resort. Upstream (nxnative f4b7e77) boots it on a Mac; the shading-rate register fix (b581efc) is in this fork's translator
+status	experimental
+orientation	landscape
+requires	bcn

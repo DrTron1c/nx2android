@@ -1,0 +1,7 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# The Legend of Zelda: Ocarina of Time. Upstream (nxnative b1d7c70) played it on a Mac at about 59 fps. Banana Native (v0.2.9-v0.3.12, Snapdragon 8 Elite) found it
+# GPU-bound on phones (18-23 fps outdoors, a steady 30 its default) and that it uses mesh shaders: on Adreno 7xx (no mesh shading) foliage, some doors and HUD parts
+# were missing until a compute fallback. This fork's translator has no task / mesh stage yet, so expect the same gaps
+status	experimental
+orientation	landscape
+requires	bcn

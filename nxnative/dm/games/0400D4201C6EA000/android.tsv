@@ -1,0 +1,5 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# Mario Tennis Fever. Upstream (nxnative b6dbb85) played it on a Mac at 60 fps (its code is an NRO a boot stub decodes at run time); not played on Android
+status	experimental
+orientation	landscape
+requires	bcn

@@ -1,0 +1,6 @@
+# Written for nx2android's Switch 2 records (2026-11-12): the profile is nxnative's, taken as it was at 4245f9b; it has not been played on Android with this fork.
+# Mario Kart World. Upstream (nxnative 1d4b8e8) played it on a Mac at 60 fps with task and mesh shaders and sparse textures; Banana Native needed 16 GB of RAM
+# (12 GB since v0.3.1) and saw GPU errors on Turnip. This fork's translator has no task / mesh stage yet
+status	experimental
+orientation	landscape
+requires	bcn
