@@ -13,10 +13,14 @@ replay (`dm/gfx/vk_android`), its host, its shader translator and its on-device 
 
 Each change is its own commit after the copy (`git log -- bananative`), so a newer Banana Native can be copied in the same way and the changes put back on top:
 
-- `-PnxFork=true` (android/app/build.gradle): the fork's own app, `org.nx2a.launcher`, "nx2android", that installs beside Banana Native and its test app, with the play
-  app's behaviour, signed with the fork's key (`.github/workflows/launcher.yml` builds it).
-- Frame generation through a game's hitches (`dm/gfx/vk_android/lsfg`).
-- A home-screen icon per game with a name and picture of your choice (`Shortcuts.java`).
+- `-PnxFork=true` (android/app/build.gradle): the fork's own app, `org.nx2a.launcher`, "nx2android engine", that installs beside Banana Native and its test app,
+  with the play app's behaviour, signed with the fork's key (`.github/workflows/launcher.yml` builds it). It has no icon in the app list: nx2android's builder app
+  (`../builder`, `Engine.java`) is the front. It installs and updates the engine, starts a game on it (`<package>.Launch`, android/FRONTENDS.md), pins its
+  home-screen icon with the game's own picture, and opens the engine's pages for Prepare and the game settings.
+- nx2android's look: its on-screen gamepad themes, the player's own designs (`../nxnative/dm/android/themes`; Pokopia's in its HUD style, with L3 and R3), packed by
+  `nxThemeAssets` and drawn by `ThemePad.java` and `TouchControls.java`; the builder's palette for the in-game panel and the pages (`src/variant-nx2a/res`,
+  `SidePanel.java`, BuildConfig.NX_FORK).
+- Frame generation through a game's hitches (`dm/gfx/vk_android/lsfg/lsfg_pacer.c`).
 
 ## Licences
 
