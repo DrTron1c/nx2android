@@ -10,6 +10,7 @@
 
 #define INTERVAL_SMOOTHING 0.25f
 #define MINIMUM_BASE_RATE 10.0f
+#define STALL_INTERVAL 0.5f   // seconds: a frame this long is a stall, after which the rate is measured anew
 #define BURST_CADENCE_RATIO 3.0f
 #define BURST_TARGET_RATIO 2.0f
 #define PROBE_THROUGHPUT_TOLERANCE 0.95f
@@ -88,7 +89,12 @@ lsfg_plan lsfg_pacer_plan(lsfg_pacer *p, size_t capacity, int multiplier, int ta
         if (target > 0 && target * BURST_TARGET_RATIO > burst) burst = target * BURST_TARGET_RATIO;
         if (1.0f / interval > burst) { defer_evaluations(p, interval); p->output_credit = 0; return none; }
     }
-    if (interval > 1.0f / MINIMUM_BASE_RATE) { stabilize(p, now); return none; }
+    // A frame past 1/MINIMUM_BASE_RATE: a hitch gets no generated frames and leaves the rate as it was, but stays warm (the chain still takes it in, so the next
+    // frame can be generated from it); only a stall (a load, the menu, the background) starts the second of stabilisation again. Eden stabilised on every such
+    // frame: Pokopia on Turnip has a frame over 100 ms about once a second (p95 85-118 ms at a 20 fps lock), so each second of stabilisation was cut short by
+    // the next one, and frame generation ran once in a whole session ("20 > 20 FPS" on the counter)
+    if (interval > STALL_INTERVAL) { stabilize(p, now); return none; }
+    if (interval > 1.0f / MINIMUM_BASE_RATE) { lsfg_plan hitch = {0, p->smoothed_interval > 0 && (!p->stable_until || now >= p->stable_until)}; return hitch; }
     p->smoothed_interval = p->smoothed_interval > 0 ? p->smoothed_interval + (interval - p->smoothed_interval) * INTERVAL_SMOOTHING : interval;
     if (!previous_generations) {
         float measured = 1.0f / p->smoothed_interval;

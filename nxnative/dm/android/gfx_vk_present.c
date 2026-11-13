@@ -1124,7 +1124,9 @@ static void *present_thread(void *arg) {
         if (e.im) {
             // Frame generation: the frame half way to this one goes first, this one half a frame later. The gap between the game's frames sets that half, and a game below 15 fps gets none
             static uint64_t t_last; uint64_t t_now = mono_ns(), gap = t_last ? t_now - t_last : 0; t_last = t_now; int gen = dm_disp(DISP_FG) == 1 && V.has_dynrender && gap > 8000000 && gap < 70000000;
-            if (dm_disp(DISP_FG) >= 2 && gap > 8000000 && gap < 120000000) {   // LSFG: its frames at even steps through the gap, the game's own last
+            // LSFG: its frames at even steps through the gap, the game's own last. Every game frame goes in, however long its gap: the pacer gives a hitch or a stall
+            // none (lsfg_pacer.c), and a frame left out of the chain made the next generated frame a step from the one before it, past the frame that was shown
+            if (dm_disp(DISP_FG) >= 2 && gap > 8000000) {
                 VkImage oi[3]; VkImageView ov[3]; uint32_t ow = 0, oh = 0; double hold; int ng = vk_lsfg_frame(e.im, e.has_crop ? e.crop : NULL, gap / 1e9, dm_disp(DISP_FG), oi, ov, &ow, &oh, &hold);
                 for (int g = 0; g < ng; g++) {
                     pthread_mutex_lock(&g_present_mu); g_ls_img = oi[g]; g_ls_view = ov[g]; g_ls_w = ow; g_ls_h = oh; if (swap_make()) { present_window(e.im, NULL, -1, 0, 2); atomic_fetch_add(&g_fps_gen, 1); } pthread_mutex_unlock(&g_present_mu);
