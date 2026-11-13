@@ -56,6 +56,10 @@ public final class MainActivity extends Activity implements PortService.Listener
     private TextView driverState, lsfgState, storageState;
     private String pickInto = "keys";
     private boolean isSwitch2;
+    private String gameId, gameName;   // the chosen folder's title ID and name (porter inspect)
+    private LinearLayout engineCard;
+    private TextView engineState;
+    private Button engineButton;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -74,6 +78,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (dev != null) { adbState.setText("Last connected: " + dev); connectPort.setText(prefs.getString("connect", "")); }
         if (PortService.running) { logText.setText(PortService.recentLog()); setBusy(true); }
         onState();
+        refreshEngine(false);
     }
     @Override protected void onPause() { super.onPause(); PortService.listener = null; Installer.front = false; Installer.report = null; }
 
@@ -126,6 +131,16 @@ public final class MainActivity extends Activity implements PortService.Listener
         gameState = text("", 14, DIM, false); add(c2, gameState, 6);
         add(c2, button("Choose game folder", false, v -> pick(new File(prefs.getString("folder", Environment.getExternalStorageDirectory().getPath())), true)), 10);
         add(root, c2, 12);
+
+        // A Switch 2 game plays on Banana Native's engine (Engine.java): installed and updated from here, started from here or from a home-screen icon
+        engineCard = card("Play on the Switch 2 engine"); engineCard.setVisibility(View.GONE);
+        add(engineCard, text("Banana Native's engine, built by this project: Switch 2 games run on it at its speed, with all its settings. The first time, it prepares the game on this tablet (its code and the shaders it uses); after that, Play starts the game at once.", 13, DIM, false), 6);
+        engineState = text("", 14, DIM, false); add(engineCard, engineState, 8);
+        engineButton = button("Install the engine", true, v -> installEngine()); add(engineCard, engineButton, 10);
+        LinearLayout playRow = new LinearLayout(this);
+        grow(playRow, button("Play", true, v -> playGame())); grow(playRow, button("Add to home screen", false, v -> addToHome()));
+        add(engineCard, playRow, 8);
+        add(root, engineCard, 12);
 
         LinearLayout c3 = card("3. prod.keys");
         keysState = text("", 14, DIM, false); add(c3, keysState, 6);
@@ -307,6 +322,59 @@ public final class MainActivity extends Activity implements PortService.Listener
         });
     }
 
+    // ---- the Switch 2 engine (Engine.java) ----
+    /** What is installed, and with network, whether a newer build is out */
+    private void refreshEngine(boolean network) {
+        if (engineCard == null || engineCard.getVisibility() != View.VISIBLE) return;
+        long have = Engine.installed(this);
+        engineState.setText(have > 0 ? "Installed: build " + have + "." : "Not installed yet: about 200 MB to download.");
+        engineState.setTextColor(have > 0 ? GOOD : DIM);
+        engineButton.setText(have > 0 ? "Check for an engine update" : "Install the engine");
+        if (network) bg(() -> {
+            try {
+                long want = Engine.latest();
+                post(() -> { if (have > 0 && want > have) { engineButton.setText("Update the engine to build " + want); engineState.setText("Installed: build " + have + ". Build " + want + " is out."); } });
+            } catch (Exception ignored) { }   // no connection, or no build published yet: the button asks again
+        });
+    }
+    private void installEngine() {
+        if (!Installer.allowed(this)) { engineState.setText("Turn on Allow from this source for this app, then come back and tap the button again."); Installer.askToAllow(this); return; }
+        engineButton.setEnabled(false); engineState.setText("Checking for the engine"); engineState.setTextColor(TEXT);
+        bg(() -> {
+            try {
+                long want = Engine.latest(), have = Engine.installed(this);
+                if (have > 0 && want <= have) { post(() -> { engineState.setText("Installed: build " + have + ", the newest."); engineState.setTextColor(GOOD); engineButton.setEnabled(true); }); return; }
+                File dir = new File(getCacheDir(), "engine"); delete(dir);
+                File apk = Engine.download(dir, (what, done, total) -> post(() -> engineState.setText(what + (total > 0 ? ": " + done * 100 / total + " %" : ""))));
+                post(() -> engineState.setText("Tap Install on the popup."));
+                Installer.install(this, apk, Engine.PKG, null);
+                post(() -> engineButton.setEnabled(true));
+            } catch (Exception e) {
+                post(() -> { engineState.setText("The engine's download stopped: " + e.getMessage() + ". Tap the button again to try again."); engineButton.setEnabled(true); });
+            }
+        });
+    }
+    private void playGame() {
+        String f = prefs.getString("folder", null);
+        if (f == null) { engineState.setText("Choose the game's folder first."); return; }
+        if (Engine.installed(this) == 0) { engineState.setText("Install the engine first."); return; }
+        try { startActivity(Engine.play(f)); } catch (RuntimeException e) { engineState.setText("The engine did not start: " + e.getMessage()); }
+    }
+    private void addToHome() {
+        String f = prefs.getString("folder", null);
+        if (f == null) { engineState.setText("Choose the game's folder first."); return; }
+        if (!Engine.canPin(this)) { engineState.setText("This home screen cannot add icons."); return; }
+        String fallback = gameName != null && !gameName.isEmpty() ? gameName : new File(f).getName();
+        EditText name = new EditText(this); name.setText(fallback); name.setSingleLine(true); name.setSelectAllOnFocus(true);
+        new AlertDialog.Builder(this).setTitle("Add to home screen").setMessage("An icon that starts the game straight away, with the game's own picture. Its name:").setView(name)
+            .setPositiveButton("Add", (d, w) -> {
+                String label = name.getText().toString().trim();
+                try { Engine.pin(this, f, gameId, label.isEmpty() ? fallback : label, Engine.icon(env, gameId)); engineState.setText("Confirm on the popup, and the icon goes on your home screen."); }
+                catch (RuntimeException e) { engineState.setText("The icon was not added: " + e.getMessage()); }
+            })
+            .setNegativeButton("Cancel", null).show();
+    }
+
     // ---- 1. tools ----
     private void downloadTools() {
         setBusy(true); stepText.setText("Checking the tools");
@@ -434,7 +502,10 @@ public final class MainActivity extends Activity implements PortService.Listener
                     + (o.optString("reason").isEmpty() ? "" : "\n" + o.optString("reason")));
             } catch (Exception e) { shown = "Could not read this folder:\n" + out.substring(0, Math.min(out.length(), 300)); }
             String t = folder + "\n" + shown; boolean sw = s2;
-            post(() -> { gameState.setText(t); isSwitch2 = sw; });
+            String id = null, nm = null;
+            try { JSONObject o = new JSONObject(out.substring(out.indexOf('{'))); id = o.optString("title_id", null); nm = o.optString("name", null); } catch (Exception ignored) { }
+            String gid = id, gnm = nm;
+            post(() -> { gameState.setText(t); isSwitch2 = sw; gameId = gid; gameName = gnm; engineCard.setVisibility(sw ? View.VISIBLE : View.GONE); if (sw) refreshEngine(true); });
         });
     }
 

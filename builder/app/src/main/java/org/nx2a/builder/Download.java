@@ -21,8 +21,10 @@ final class Download {
 
     interface Progress { void at(String what, long done, long total); }
 
-    static String text(String name) throws IOException {
-        HttpURLConnection c = open(BASE + name, 0);
+    static String text(String name) throws IOException { return textFrom(BASE, name); }
+    /** A small file of another release (base: its download URL, ending in /), as text */
+    static String textFrom(String base, String name) throws IOException {
+        HttpURLConnection c = open(base + name, 0);
         try (InputStream in = c.getInputStream(); java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream()) {
             byte[] b = new byte[4096]; for (int n; (n = in.read(b)) > 0; ) o.write(b, 0, n);
             return new String(o.toByteArray(), StandardCharsets.UTF_8).trim();
@@ -63,13 +65,15 @@ final class Download {
         throw new IOException("too many redirects: " + url);
     }
 
-    static File download(String name, File dir, Progress p) throws IOException {
+    static File download(String name, File dir, Progress p) throws IOException { return downloadFrom(BASE, name, dir, p); }
+    /** A file of another release (base: its download URL, ending in /), resuming a cut-off download */
+    static File downloadFrom(String base, String name, File dir, Progress p) throws IOException {
         dir.mkdirs();
         File part = new File(dir, name + ".part");
         for (int attempt = 0; ; attempt++) {
             long have = part.length();
             try {
-                HttpURLConnection c = open(BASE + name, have);
+                HttpURLConnection c = open(base + name, have);
                 boolean resumed = c.getResponseCode() == 206;
                 if (!resumed) have = 0;
                 long total = have + c.getContentLengthLong();

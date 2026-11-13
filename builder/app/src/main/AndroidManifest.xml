@@ -11,11 +11,16 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES"/>
+    <!-- the Switch 2 engine (Engine.java): its version, and its frontend entry that starts a game -->
+    <queries><package android:name="org.nx2a.launcher"/></queries>
     <application android:label="nx2android Builder" android:icon="@drawable/ic_app" android:theme="@style/Theme"
         android:requestLegacyExternalStorage="true" android:extractNativeLibs="true" android:allowBackup="false">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <!-- a home-screen icon's game (Engine.pin): starts it on the Switch 2 engine, draws nothing -->
+        <activity android:name=".PlayActivity" android:exported="false" android:noHistory="true" android:excludeFromRecents="true" android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
         <service android:name=".PortService" android:exported="false"/>
         <service android:name=".PairService" android:exported="false"/>
         <receiver android:name=".Installer$Result" android:exported="false"/>
