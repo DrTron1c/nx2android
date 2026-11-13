@@ -48,6 +48,10 @@ final class SidePanel extends FrameLayout {
     private static final int TAB_PERF = 0, TAB_DISPLAY = 1, TAB_CONTROLS = 2, TAB_GENERAL = 3;
     private int tab = TAB_PERF;
     private static final int FOCUS = 0xFFFFD54F;   // the tab bar's selected tab and the focus frame: a banana yellow, dark text on it
+    // nx2android's launcher (BuildConfig.NX_FORK): its pause menu's colours, as in the player's HUD (the builder app's too): pastel lilac with plum text on near black
+    private static final boolean NX = BuildConfig.NX_FORK;
+    private static final int SEL = NX ? 0xFFB79BD6 : FOCUS, ON_SEL = NX ? 0xFF401E36 : 0xFF000000, SEL_GLOW = NX ? 0x26B79BD6 : 0x26FFD54F,
+            SHEET = NX ? 0xF00E0D12 : 0xF0202124, TABS = NX ? 0xFF26242C : 0xFF2D2E31;
 
     // A controller: its confirm and back keys (padButtons), the held direction and its repeat
     private int confirm = KeyEvent.KEYCODE_BUTTON_B, back = KeyEvent.KEYCODE_BUTTON_A;
@@ -83,10 +87,10 @@ final class SidePanel extends FrameLayout {
         scroll.addView(box);
         LinearLayout sh = new LinearLayout(a);   // the tab bar fixed at the top, the tab's rows scrolling under it
         sh.setOrientation(LinearLayout.VERTICAL);
-        sh.setBackgroundColor(0xF0202124);
+        sh.setBackgroundColor(SHEET);
         tabs = new LinearLayout(a);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
-        tabs.setBackgroundColor(0xFF2D2E31);
+        tabs.setBackgroundColor(TABS);
         sh.addView(tabs, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         sh.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         addView(sh, new LayoutParams(PanelLook.widthPx(Prefs.panelSize(a), dp, a.getResources().getDisplayMetrics().widthPixels), LayoutParams.MATCH_PARENT, Gravity.END));
@@ -233,8 +237,8 @@ final class SidePanel extends FrameLayout {
         if (now == null || !inside(now) || isInTouchMode()) return;
         float dp = getResources().getDisplayMetrics().density;
         android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
-        d.setColor(0x26FFD54F);
-        d.setStroke(Math.round(2.5f * dp), FOCUS);
+        d.setColor(SEL_GLOW);
+        d.setStroke(Math.round(2.5f * dp), SEL);
         d.setCornerRadius(6 * dp);
         now.setForeground(d);
         lit = now;
@@ -274,8 +278,8 @@ final class SidePanel extends FrameLayout {
             t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);   // one size for every tab, set once the bar is laid out (tabTextSize)
             t.setPadding(pad, 0, pad, 0);
             t.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-            t.setTextColor(on ? 0xFF000000 : 0xFFE8EAED);
-            t.setBackgroundColor(on ? FOCUS : 0);
+            t.setTextColor(on ? ON_SEL : 0xFFE8EAED);
+            t.setBackgroundColor(on ? SEL : 0);
             t.setSelected(on);
             t.setFocusable(true);
             t.setOnClickListener(v -> showTab(k));

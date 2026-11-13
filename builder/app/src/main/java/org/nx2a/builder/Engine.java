@@ -43,6 +43,11 @@ final class Engine {
         return new Intent(Intent.ACTION_MAIN).setClassName(PKG, LAUNCH).putExtra("game", folder).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
     }
 
+    /** The engine's own pages (its Home: Prepare, every game's settings, the GPU driver, Lossless.dll), which have no icon in the app list (bananative/android/app/build.gradle) */
+    static Intent home() {
+        return new Intent(Intent.ACTION_MAIN).setClassName(PKG, "dev.nxnative.android.MainActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
     /** The profile's icon of the game, as its own app had (null when the profile has none: the shortcut then gets this app's icon) */
     static Bitmap icon(Env env, String titleId) {
         if (titleId == null) return null;

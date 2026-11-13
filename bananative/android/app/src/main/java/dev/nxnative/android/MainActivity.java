@@ -65,6 +65,7 @@ public final class MainActivity extends Activity {
         FrameLayout frame = new FrameLayout(this);
         bananas = new BananaBackgroundView(this);
         frame.addView(bananas, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        if (BuildConfig.NX_FORK) bananas.setVisibility(View.GONE);   // nx2android's engine: the plain near black of its builder app
         setContentView(frame);
         build();
         if (saved == null) { setIntent(gated(getIntent())); fromIntent(getIntent()); }   // start() reads no_pause from getIntent() too

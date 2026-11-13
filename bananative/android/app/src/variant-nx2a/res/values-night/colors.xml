@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- nx2android's engine (-PnxFork, over main's): the builder app's palette, from the player's HUD: near black, pastel lilac with plum text. Day and night alike -->
+    <color name="ic_launcher_background">#FF14161A</color>
+    <color name="bn_bg">#FF0E0D12</color>
+    <color name="bn_card">#FF26242C</color>
+    <color name="bn_card_stroke">#FF5F676B</color>
+    <color name="bn_tint">#FF3A3742</color>
+    <color name="bn_banana">#FFB79BD6</color>
+    <color name="bn_banana_deep">#FF9C7FC0</color>
+    <color name="bn_on_banana">#FF401E36</color>
+    <color name="bn_text">#FFFFFFFF</color>
+    <color name="bn_text_2">#FFC9CDD0</color>
+    <color name="bn_accent">#FFB79BD6</color>
+    <color name="bn_leaf">#FF94D2A6</color>
+    <color name="bn_on_leaf">#FF13241A</color>
+    <color name="bn_danger">#FFF49BA0</color>
+    <color name="bn_danger_tint">#FF3D2026</color>
+    <color name="bn_warn_tint">#FF3A3020</color>
+</resources>

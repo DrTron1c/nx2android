@@ -31,7 +31,7 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="${nxLauncherCategory}" />
             </intent-filter>
         </activity>
         <!-- Emulator frontends (FRONTENDS.md): reached only by the exported alias <application ID>.Launch (dev.bananative.android/.Launch); draws nothing of its own -->

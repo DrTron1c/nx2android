@@ -140,6 +140,10 @@ public final class MainActivity extends Activity implements PortService.Listener
         LinearLayout playRow = new LinearLayout(this);
         grow(playRow, button("Play", true, v -> playGame())); grow(playRow, button("Add to home screen", false, v -> addToHome()));
         add(engineCard, playRow, 8);
+        add(engineCard, button("Game settings and Prepare", false, v -> {
+            if (Engine.installed(this) == 0) { engineState.setText("Install the engine first."); return; }
+            try { startActivity(Engine.home()); } catch (RuntimeException e) { engineState.setText("The engine did not open: " + e.getMessage()); }
+        }), 8);
         add(root, engineCard, 12);
 
         LinearLayout c3 = card("3. prod.keys");

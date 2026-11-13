@@ -219,7 +219,10 @@ android {
 
     defaultConfig {
         applicationId nxFork ? 'org.nx2a.launcher' : nxLive ? 'dev.bananative.android' : nxPlay ? 'dev.nxnative.android.play' : nxApp ? "dev.nxnative.android.$nxApp" : 'dev.nxnative.android'
-        resValue 'string', 'app_name', nxFork ? 'nx2android' : nxPlay || nxLive ? 'Banana Native' : nxApp ? nxLabel : 'Banana Native test'
+        resValue 'string', 'app_name', nxFork ? 'nx2android engine' : nxPlay || nxLive ? 'Banana Native' : nxApp ? nxLabel : 'Banana Native test'
+        // nx2android's engine has no icon of its own in the app list: its builder app is the front (it starts the games and pins their home-screen icons) and opens
+        // it when a game needs Prepare or its settings (an INFO activity is still reachable by an explicit intent)
+        manifestPlaceholders = [nxLauncherCategory: nxFork ? 'android.intent.category.INFO' : 'android.intent.category.LAUNCHER']
         minSdk 33
         targetSdk 35
         versionCode nxVersionCode
@@ -235,6 +238,8 @@ android {
         buildConfigField 'boolean', 'NX_PLAY', "${nxPlay || nxLive || nxFork}"
         // The public release (dev.bananative.android) alone checks GitHub for a newer release at start (Updater; a test app only through its update.txt)
         buildConfigField 'boolean', 'NX_LIVE', "$nxLive"
+        // nx2android's engine (-PnxFork): its builder app's colours (SidePanel, the launcher's pages: src/variant-nx2a/res)
+        buildConfigField 'boolean', 'NX_FORK', "$nxFork"
         // The shader library the host loads: <pack>/shaders/v-<DMSH_VK_CHAIN>/dmsh_vk.lib (vka_shader.c); the launcher checks a pack has it before starting the game
         buildConfigField 'String', 'NX_DMSH_CHAIN', "\"${defineOf('dm/gfx/nvn/dmsh_chain.h', 'DMSH_CHAIN')}\""
         buildConfigField 'String', 'NX_DMSH_VK_CHAIN', "\"${defineOf('dm/gfx/nvn/dmsh_chain_vk.h', 'DMSH_VK_CHAIN')}\""
@@ -265,7 +270,10 @@ android {
             java.srcDirs += 'src/ondevice/java'
         }
         // The service and its permissions, merged over the main manifest (a build type's manifest is an overlay)
-        release { manifest.srcFile 'src/ondevice/AndroidManifest.xml' }
+        release {
+            manifest.srcFile 'src/ondevice/AndroidManifest.xml'
+            if (nxFork) res.srcDirs += 'src/variant-nx2a/res'   // over main's: nx2android's palette and icon
+        }
         debug { manifest.srcFile 'src/ondevice/AndroidManifest.xml' }
     }
     signingConfigs {
