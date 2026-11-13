@@ -111,7 +111,7 @@ for st in ('inputs', 'extract', 'rewrite', 'shaders', 'host', 'apk', 'data', 'in
 check('all documented stages exist in pipeline.py', all(re.search(rf'def {st}\(self', pipe) for st in ('inputs', 'extract', 'rewrite', 'shaders', 'host', 'apk', 'data', 'install')))
 check('host stage: --release unless --debug', "['--release']" in pipe and 'host-debug' in pipe)
 check('porter imports upstream build_ipa_from_nsp (not a copy)', any('build_ipa_from_nsp' in (R / f).read_text(encoding='utf-8') for f in porter)
-      and not any(Path(f).name == 'build_ipa_from_nsp.py' for f in files if not f.startswith('nxnative/')))
+      and not any(Path(f).name == 'build_ipa_from_nsp.py' for f in files if not f.startswith(('nxnative/', 'bananative/'))))   # bananative/: Banana Native's own engine, copied whole
 
 # 8. Toolchains: not shipped, checked by doctor
 ship = [f for f in files if re.search(r'(^|/)(android-ndk|platform-tools|dotnet)(/|$)', f) or f.startswith('tools/')]
@@ -122,7 +122,7 @@ check('doctor checks NDK, .NET, adb, keys', all(w in tc for w in ('ndk', 'dotnet
 # 9. Keys and game files never in the repository
 leak = [f for f in files if re.search(r'\.(nsp|nsz|xci|nca|keys)$|prod\.keys|title\.keys|signing-key', f, re.I)]
 check('no keys, game files or signing keys committed', not leak, ', '.join(leak))
-gen = [f for f in files if Path(f).name in ('game_profile.h', 'android_profile.h')]
+gen = [f for f in files if Path(f).name in ('game_profile.h', 'android_profile.h') and not f.startswith('bananative/dm/host/tests/')]   # its memory_profile test's fixture
 check('generated profile headers not committed', not gen, ', '.join(gen))
 
 # 10. Repository layout
