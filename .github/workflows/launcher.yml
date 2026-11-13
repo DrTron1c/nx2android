@@ -1,0 +1,97 @@
+# nx2android's launcher for Switch 2 games: Banana Native's app (bananative/, copied whole: bananative/UPSTREAM.md) built as org.nx2a.launcher, "nx2android"
+# (-PnxFork=true), with every game Banana Native runs on Android and its on-device Prepare. Published to the release "launcher" as nx2android-launcher.apk.
+# A macOS runner, as Banana Native builds on a Mac: its scripts (zsh, shasum) run unchanged. The packer's stage (CPython for Android, the translator built with
+# NativeAOT for bionic, SPIRV-Tools) is kept in the cache until its sources change.
+name: launcher
+
+on:
+  push:
+    branches: [switch2-android]
+    paths: ['bananative/**', '.github/workflows/launcher.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: launcher
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NDK_VERSION: 28.2.13676358
+      WORK: ${{ github.workspace }}/../packwork
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Android SDK parts (NDK, CMake, platform 36) and Ninja
+        run: |
+          SDK=${ANDROID_HOME:-$HOME/Library/Android/sdk}
+          SM=$(ls -d $SDK/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          yes | $SM --licenses > /dev/null || true
+          $SM --install "ndk;$NDK_VERSION" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+          echo "ANDROID_HOME=$SDK" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$SDK" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$SDK/ndk/$NDK_VERSION" >> $GITHUB_ENV
+          command -v ninja || brew install ninja
+          command -v cmake || brew install cmake
+          python3 --version; dotnet --version; cmake --version | head -1; ninja --version
+      - name: The packer's stage, from the cache
+        id: stage
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WORK }}/stage
+          key: stage-${{ hashFiles('bananative/android/ondevice/**', 'bananative/dm/gfx/tools/dmsh_xlate_android/**', 'bananative/dm/gfx/tools/dmsh_xlate/**', 'bananative/dm/third_party/ryujinx/src/**', 'bananative/dm/gfx/tools/xlate_tree.py', 'bananative/dm/third_party/zstd-zbic/**') }}
+      - name: The packer's stage (CPython for Android, Capstone, lz4, the translator, SPIRV-Tools)
+        if: steps.stage.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$WORK"
+          zsh bananative/android/ondevice/build.sh "$WORK" all 2>&1 | tail -60
+          test -f "$WORK/stage/lib/libdmsh_xlate.so"
+      - name: The app's signing key (the builder's, the same one every build, so updates install over the app)
+        run: |
+          mkdir -p "$RUNNER_TEMP/key"
+          gh release download builder-signing --repo "$GITHUB_REPOSITORY" -p builder.jks -D "$RUNNER_TEMP/key"
+          echo "NX_SIGN_STORE=$RUNNER_TEMP/key/builder.jks" >> $GITHUB_ENV
+          echo "NX_SIGN_ALIAS=builder" >> $GITHUB_ENV
+          echo "NX_SIGN_PASS=nx2android" >> $GITHUB_ENV
+      - name: The launcher
+        run: |
+          cd bananative/android/app
+          ./gradlew apk --no-daemon --stacktrace -PnxFork=true -PnxPackStage="$WORK/stage" -PnxVersion="0.3.14-nx2a.$GITHUB_RUN_NUMBER" -PnxVersionCode=$GITHUB_RUN_NUMBER 2>&1 | tail -120
+          ls -la out/
+          test -f out/nx2android-launcher.apk
+      - name: Check the APK
+        run: |
+          A=bananative/android/app/out/nx2android-launcher.apk
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/aapt2 dump badging $A | head -3
+          $BT/apksigner verify --print-certs $A | head -3
+          unzip -l $A | grep -E 'lib/arm64-v8a/lib(nxhost|nxlaunch|dmsh_xlate|python)' | awk '{print $1, $4}'
+      - name: Publish
+        run: |
+          gh release view launcher --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create launcher --repo "$GITHUB_REPOSITORY" --prerelease --title "nx2android launcher (Switch 2)" --notes "Banana Native's engine as nx2android's own app (org.nx2a.launcher): every Switch 2 game it runs, prepared on the phone. Install nx2android-launcher.apk; it installs beside Banana Native. Built from bananative/ (bananative/UPSTREAM.md)." --target "$GITHUB_SHA"
+          echo "$GITHUB_SHA $GITHUB_RUN_NUMBER 0.3.14-nx2a.$GITHUB_RUN_NUMBER" > launcher.txt
+          gh release upload launcher bananative/android/app/out/nx2android-launcher.apk launcher.txt --clobber --repo "$GITHUB_REPOSITORY"
+      - name: The build's logs, on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-logs
+          path: |
+            ${{ env.WORK }}/*.log
+            ${{ env.WORK }}/xlate.log
+            ${{ env.WORK }}/spvtools.log
+            ${{ env.WORK }}/build/*.log
+            bananative/android/app/build/intermediates/cxx/**/*.txt
+          if-no-files-found: ignore
