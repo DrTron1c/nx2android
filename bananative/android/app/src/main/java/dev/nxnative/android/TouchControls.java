@@ -92,6 +92,24 @@ final class TouchControls extends View {
     private final Runnable longPress = () -> { toggleLong = true; performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); settings(); };
 
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), line = new Paint(Paint.ANTI_ALIAS_FLAG), text = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    // nx2android's themed gamepad (ThemePad): its layout's controls in place of the automatic ones, drawn from the theme's sprites; the menu control opens the panel
+    private ThemePad theme;
+    private int themeLay, menuCtl = -1;
+    private final int[] ctlOf = new int[MAX];      // each control's index in the theme's layout
+    private final float[] base = new float[MAX];   // its radius before the user's group scale (the sprites scale with it)
+    private float mx, my, mhw, mhh;               // the menu control's centre and half size
+    private final Paint bmp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+    private final android.graphics.Rect src = new android.graphics.Rect();
+    private static final long[] DIR_BITS = {RIGHT, LEFT, DOWN, UP};   // ThemePad.Sprite.dir: right, left, down, up
+
+    /** The game's theme pack (GameActivity, at start), or null for Banana Native's own controls */
+    void setTheme(ThemePad t) {
+        theme = t;
+        if (t != null && !prefs().contains("opacity")) opacity = 0.75f;   // nx2android's gamepad's own default
+        layout(getWidth(), getHeight());
+        invalidate();
+    }
     private final Path path = new Path();
     private final RectF rect = new RectF();
 
@@ -198,6 +216,7 @@ final class TouchControls extends View {
         float bar = picX * w;   // the width of each letterbox bar
         float rStick = 60 * d, rRight = 54 * d, rPad = 50 * d, rFace = 25 * d, rSh = 25 * d, rSmall = 17 * d, rClick = 17 * d, off = 1.65f * rFace;
         n = 0;
+        if (theme != null) themedLayout(w, h); else {
         // Shoulders in the band's top corners, ZL / ZR outside, L / R inside, minus / plus next to them
         float shY = y0 + m + 0.7f * rSh;
         add(BUTTON, ZL, 0, SHAPE_SHOULDER, m + rSh, shY, rSh, "ZL");
@@ -232,8 +251,10 @@ final class TouchControls extends View {
                     float move = (float) Math.sqrt(Math.max(0, need * need - dy * dy)) - Math.abs(dx);
                     cx[j] += cx[j] < w / 2f ? move : -move;
                 }
+        }
         groups(w, h, u);
         tr = 10 * u; tx = w / 2f; ty = m + tr;   // small and faint (onDraw); its touch area is larger (onToggle)
+        if (theme != null && menuCtl >= 0) { tx = mx; ty = my; tr = Math.max(mhw, mhh); }   // the theme's menu control
         // The host's units: centres normalized to the view, radii in units of its height; a stick's grab ring is its own (input_map.c)
         float[] f = new float[n * 6];
         for (int i = 0; i < n; i++) {
@@ -248,6 +269,27 @@ final class TouchControls extends View {
                 n, w, h, h / dp, u, y0, prof, custom() ? ", the user's layout" : "", picX, picY, scale, opacity, active() ? "shown" : "hidden")
                 + (stretch || pictureSize < PictureFit.SIZE_MAX ? ", picture " + (stretch ? "stretched" : "fitted") + " at " + pictureSize + " %" : ""));
         apply();
+    }
+
+    /** The theme's layout (ThemePad: overlay_default.tsv with the game's moves): each control at its anchor and centre, sized in window heights by the user's size */
+    private void themedLayout(int w, int h) {
+        themeLay = ThemePad.layoutFor(w, h); menuCtl = -1;
+        java.util.List<ThemePad.Ctl> cs = theme.layouts[themeLay].ctls;
+        for (int ci = 0; ci < cs.size(); ci++) {
+            ThemePad.Ctl t = cs.get(ci);
+            if (t.w <= 0 || t.h <= 0) continue;   // 0: not drawn and not touched (a theme without it)
+            float x = t.anchor * w + t.x * h, y = t.y * h, hw = t.w * h * scale / 2, hh = t.h * h * scale / 2, rad = Math.max(hw, hh);
+            int i;
+            switch (t.kind) {
+                case "stick_l": i = add(STICK, 0, 0, SHAPE_ROUND, x, y, rad, ""); break;
+                case "stick_r": i = add(STICK, 0, 1, SHAPE_ROUND, x, y, rad, ""); break;
+                case "dpad": i = add(DPAD, UP | DOWN | LEFT | RIGHT, 0, SHAPE_ROUND, x, y, rad, ""); break;
+                case "button": i = add(BUTTON, ThemePad.bit(t.button), 0, hw > hh * 1.3f ? SHAPE_SHOULDER : SHAPE_ROUND, x, y, rad, t.label); break;
+                case "menu": menuCtl = ci; mx = x; my = y; mhw = hw; mhh = hh; continue;
+                default: continue;
+            }
+            if (i >= 0) { ctlOf[i] = ci; base[i] = rad; }
+        }
     }
 
     // ---- The user's layout: groups moved and scaled, the picture placed, kept per screen shape ----
@@ -434,7 +476,10 @@ final class TouchControls extends View {
     // ---- Touches: the show / hide button is the launcher's; every other pointer goes to the host ----
     private void send(int action, int id, float x, float y) { if (input) Native.touch(action, id, x / getWidth(), y / getHeight()); }
 
-    private boolean onToggle(float x, float y) { float dx = x - tx, dy = y - ty, g = tr * 2.4f; return button && visible() && dx * dx + dy * dy <= g * g; }   // 24 units: a 48 dp target
+    private boolean onToggle(float x, float y) {   // 24 units: a 48 dp target; the theme's menu control: its own size, always there
+        float dx = x - tx, dy = y - ty, g = theme != null && menuCtl >= 0 ? tr * 1.2f : tr * 2.4f;
+        return (button || theme != null && menuCtl >= 0) && visible() && dx * dx + dy * dy <= g * g;
+    }
 
     @Override public boolean onTouchEvent(MotionEvent e) {
         if (editing) return editTouch(e);
@@ -446,6 +491,7 @@ final class TouchControls extends View {
                 if (toggleId < 0 && onToggle(e.getX(i), e.getY(i))) {
                     toggleId = id; toggleLong = false;
                     postDelayed(longPress, 600);
+                    invalidate();   // the theme's menu control shows held
                     if (haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                     return true;
                 }
@@ -461,7 +507,8 @@ final class TouchControls extends View {
                 if (id == toggleId) {
                     toggleId = -1;
                     removeCallbacks(longPress);
-                    if (!toggleLong && onToggle(e.getX(i), e.getY(i))) toggle();
+                    if (!toggleLong && onToggle(e.getX(i), e.getY(i))) { if (theme != null && menuCtl >= 0) settings(); else toggle(); }   // the theme's menu control opens the panel
+                    invalidate();
                     return true;
                 }
                 send(act, id, e.getX(i), e.getY(i));
@@ -502,6 +549,7 @@ final class TouchControls extends View {
         float dp = getResources().getDisplayMetrics().density;
         line.setStrokeWidth(Math.max(1.5f, 1.6f * dp));
         if (editing) { drawControls(c); drawEditor(c, dp); return; }
+        if (theme != null && menuCtl >= 0) { drawMenu(c); if (active()) drawControls(c); return; }   // the theme's menu control, always; the controls when shown
         // The show / hide button (when it is on): a small pad outline, mostly transparent over the game, fainter still while the controls are hidden
         boolean on = active();
         if (button) {
@@ -519,6 +567,7 @@ final class TouchControls extends View {
     }
 
     private void drawControls(Canvas c) {
+        if (theme != null) { drawTheme(c); return; }
         for (int i = 0; i < n; i++) {
             boolean held = pressed[i] != 0;
             fill.setColor(held ? Color.argb(alpha(0.55f), 255, 255, 255) : Color.argb(alpha(0.35f), 0, 0, 0));
@@ -539,6 +588,47 @@ final class TouchControls extends View {
                 c.drawText(label[i], cx[i], cy[i] - (text.descent() + text.ascent()) / 2, text);
             }
         }
+    }
+
+    /** The theme's sprites, as nx2android's engine drew them (gfx_vk_present.c ov_theme_draw): the decorations, then each control idle or held, a stick's knob moved with it */
+    private void drawTheme(Canvas c) {
+        ThemePad.Layout L = theme.layouts[themeLay]; android.graphics.Bitmap a = theme.atlas(themeLay);
+        if (a == null) return;
+        float k = getHeight() / L.designH * scale;
+        bmp.setAlpha(alpha(theme.alpha));
+        for (ThemePad.Sprite s : L.sprites) {
+            if (s.state != ThemePad.DECOR) continue;
+            if (s.ctl == menuCtl) { sprite(c, a, L, s, mx, my, k); continue; }
+            for (int i = 0; i < n; i++) if (ctlOf[i] == s.ctl) { sprite(c, a, L, s, cx[i], cy[i], k * r[i] / base[i]); break; }
+        }
+        for (int i = 0; i < n; i++) {
+            float kc = k * r[i] / base[i], kx = 0, ky = 0;
+            boolean isStick = kind[i] == STICK, held = isStick ? sticks[2 * stick[i]] != 0 || sticks[2 * stick[i] + 1] != 0 : pressed[i] != 0;
+            if (isStick) { kx = sticks[2 * stick[i]] * L.travel * kc; ky = -sticks[2 * stick[i] + 1] * L.travel * kc; }   // the host's y is up
+            for (ThemePad.Sprite s : L.sprites) {
+                if (s.ctl != ctlOf[i] || s.state == ThemePad.DECOR) continue;
+                if (s.state == ThemePad.KNOB) { sprite(c, a, L, s, cx[i] + kx, cy[i] + ky, kc); continue; }
+                boolean on = kind[i] == DPAD ? s.dir >= 0 && (pressed[i] & DIR_BITS[s.dir]) != 0 : held;
+                if (s.state == (on ? ThemePad.HELD : ThemePad.IDLE)) sprite(c, a, L, s, cx[i], cy[i], kc);
+            }
+        }
+    }
+
+    /** The theme's menu control: idle, or held while a finger is on it */
+    private void drawMenu(Canvas c) {
+        ThemePad.Layout L = theme.layouts[themeLay]; android.graphics.Bitmap a = theme.atlas(themeLay);
+        if (a == null || !visible()) return;
+        float k = getHeight() / L.designH * scale;
+        bmp.setAlpha(alpha(theme.alpha));
+        for (ThemePad.Sprite s : L.sprites) if (s.ctl == menuCtl && s.state == (toggleId >= 0 ? ThemePad.HELD : ThemePad.IDLE)) sprite(c, a, L, s, mx, my, k);
+    }
+
+    /** One sprite: at its offset from (x, y), its atlas pixels at k screen pixels a design pixel */
+    private void sprite(Canvas c, android.graphics.Bitmap a, ThemePad.Layout L, ThemePad.Sprite s, float x, float y, float k) {
+        float x0 = x + s.ox * k, y0 = y + s.oy * k;
+        src.set(Math.round(s.u), Math.round(s.v), Math.round(s.u + s.w), Math.round(s.v + s.h));
+        rect.set(x0, y0, x0 + s.w / L.scale * k, y0 + s.h / L.scale * k);
+        c.drawBitmap(a, src, rect, bmp);
     }
 
     /** The editor: the picture's outline, each group's frame (the one held filled), the buttons along the top and what to do */

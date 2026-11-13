@@ -301,6 +301,45 @@ def nxDigest = tasks.register('nxDigestAssets', Sync) {
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/nxdigest/assets'))
 tasks.named('preBuild') { dependsOn nxDigest }
 
+// nx2android's on-screen gamepad themes (bananative/UPSTREAM.md, ThemePad.java): the player's own designs in nx2android's engine, ../nxnative/dm/android/themes, whose
+// themes.tsv names each game's pack. Each game this APK runs that has one gets assets/overlay/<title ID>/: the pack's theme.tsv and atlases, and layout.tsv, its gamepad
+// layout (overlay_default.tsv with the overlay rows of the game's android.tsv, as dm/android/tools/android_profile.py overlay_table makes it). A tree without
+// ../nxnative (Banana Native on its own) puts none in, and the launcher draws its own controls
+def nxThemes = tasks.register('nxThemeAssets') {
+    def nx = new File(repo, '../nxnative/dm')
+    def out = layout.buildDirectory.dir('generated/nxthemes/assets')
+    if (new File(nx, 'android/themes').isDirectory()) inputs.dir(new File(nx, 'android/themes'))
+    nxGames.each { g -> def a = new File(nx, "games/$g/android.tsv"); if (a.isFile()) inputs.file(a) }
+    outputs.dir out
+    doLast {
+        def o = out.get().asFile; project.delete(o); o.mkdirs()
+        def themes = new File(nx, 'android/themes/themes.tsv'), lay = new File(nx, 'android/overlay_default.tsv')
+        if (!themes.isFile() || !lay.isFile()) { logger.lifecycle('nxThemeAssets: no ../nxnative/dm/android/themes: no gamepad themes'); return }
+        def packOf = [:]
+        themes.readLines().findAll { it && !it.startsWith('#') }.each { def c = it.split('\t'); if (c.size() >= 2) packOf[c[0].toUpperCase()] = c[1] }
+        def rows = lay.readLines().findAll { it && !it.startsWith('#') }.collect { it.split('\t') }.findAll { it.size() == 10 }
+        nxGames.each { g ->
+            def pack = packOf[g]; if (!pack) return
+            def pd = new File(nx, "android/themes/$pack"); if (!new File(pd, 'theme.tsv').isFile()) return
+            def d = new File(o, "overlay/$g"); d.mkdirs()
+            ['theme.tsv', 'tablet.png', 'phone.png'].each { n -> def f = new File(pd, n); if (f.isFile()) java.nio.file.Files.copy(f.toPath(), new File(d, n).toPath()) }
+            def by = rows.collect { it.clone() }
+            def at = new File(nx, "games/$g/android.tsv")
+            if (at.isFile()) at.readLines().findAll { it.startsWith('overlay\t') }.each { line ->
+                def c = line.substring(8).trim().split(/\s+/)
+                def r = by.find { it[0] == c[0] && it[1] == c[1] }
+                if (r == null || c.size() < 4) return
+                r[3] = c[2]; r[4] = '0'; r[5] = c[3]   // a moved control: its x a fraction of the width (its anchor, no offset)
+                if (c.size() >= 6) { r[6] = c[4]; r[7] = c[5] }
+            }
+            new File(d, 'layout.tsv').text = "# the gamepad layout of $g (nxThemeAssets: overlay_default.tsv with the game's android.tsv moves)\n" + by.collect { it.join('\t') }.join('\n') + '\n'
+            logger.lifecycle("nxThemeAssets: $g, the $pack gamepad")
+        }
+    }
+}
+android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/nxthemes/assets'))
+tasks.named('preBuild') { dependsOn nxThemes }
+
 // ./gradlew apk → out/nxnative-android.apk (-PnxPlay=true: nxnative-android-play.apk; -PnxApp=<suffix>: nxnative-android-<suffix>.apk)
 tasks.register('apk', Copy) {
     dependsOn 'assembleRelease'
