@@ -1,10 +1,11 @@
-# Frame generation's pacer (nxnative/dm/android/lsfg/lsfg_pacer.c), compiled with the steps gfx_vk_lsfg.c takes around it: a game at a 20 fps lock with a frame over
+# Frame generation's pacer (nxnative/dm/android/lsfg/lsfg_pacer.c, and Banana Native's in bananative/dm/gfx/vk_android/lsfg for the Switch 2 launcher), compiled with the steps gfx_vk_lsfg.c takes around it: a game at a 20 fps lock with a frame over
 # 100 ms about once a second (Pokopia on Turnip) still gets its generated frames, a hitch costs only its own frame, and a stall (a load, the menu) starts the second of
 # stabilisation again. Before, every frame over 100 ms restarted that second and the session had one generated frame in all ("20 > 20 FPS").
 import shutil, subprocess, tempfile, unittest
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / 'nxnative/dm/android/lsfg'
+REPO = Path(__file__).resolve().parents[1]
+SRCS = [REPO / 'nxnative/dm/android/lsfg', REPO / 'bananative/dm/gfx/vk_android/lsfg']
 
 HARNESS = r'''
 #include <stdio.h>
@@ -41,12 +42,13 @@ int main(void) {
 class Pacer(unittest.TestCase):
     @unittest.skipUnless(shutil.which('cc'), 'a host C compiler is required')
     def test_hitches_and_stalls(self):
-        with tempfile.TemporaryDirectory(prefix='nx2a-lsfg-') as tmp:
-            c, exe = Path(tmp) / 'pacer.c', Path(tmp) / 'pacer'
-            c.write_text(HARNESS)
-            subprocess.run(['cc', '-std=gnu11', '-Wall', '-Werror', '-I', str(SRC), str(c), str(SRC / 'lsfg_pacer.c'), '-lm', '-o', str(exe)], check=True)
-            r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=15)
-            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for src in SRCS:
+            with self.subTest(src=src.relative_to(REPO)), tempfile.TemporaryDirectory(prefix='nx2a-lsfg-') as tmp:
+                c, exe = Path(tmp) / 'pacer.c', Path(tmp) / 'pacer'
+                c.write_text(HARNESS)
+                subprocess.run(['cc', '-std=gnu11', '-Wall', '-Werror', '-I', str(src), str(c), str(src / 'lsfg_pacer.c'), '-lm', '-o', str(exe)], check=True)
+                r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=15)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 if __name__ == '__main__':
