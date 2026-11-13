@@ -1,7 +1,8 @@
 # nx2android's launcher for Switch 2 games: Banana Native's app (bananative/, copied whole: bananative/UPSTREAM.md) built as org.nx2a.launcher, "nx2android"
 # (-PnxFork=true), with every game Banana Native runs on Android and its on-device Prepare. Published to the release "launcher" as nx2android-launcher.apk.
-# A macOS runner, as Banana Native builds on a Mac: its scripts (zsh, shasum) run unchanged. The packer's stage (CPython for Android, the translator built with
-# NativeAOT for bionic, SPIRV-Tools) is kept in the cache until its sources change.
+# A Linux runner with zsh, so Banana Native's Mac scripts (zsh, shasum) run unchanged with the NDK's linux-x86_64 clang (GitHub's macOS arm64 runners were out of
+# capacity: "the job was not acquired by Runner of type hosted", twice, 2026-11-13). The packer's stage (CPython for Android, the translator built with NativeAOT for
+# bionic, SPIRV-Tools) is kept in the cache until its sources change.
 name: launcher
 
 on:
@@ -19,7 +20,7 @@ concurrency:
 
 jobs:
   apk:
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       GH_TOKEN: ${{ github.token }}
@@ -34,18 +35,17 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Android SDK parts (NDK, CMake, platform 36) and Ninja
+      - name: Android SDK parts (NDK, CMake, platform 36), zsh and Ninja
         run: |
-          SDK=${ANDROID_HOME:-$HOME/Library/Android/sdk}
+          sudo apt-get update -qq && sudo apt-get install -y -qq zsh ninja-build > /dev/null
+          SDK=${ANDROID_HOME:-/usr/local/lib/android/sdk}
           SM=$(ls -d $SDK/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
           yes | $SM --licenses > /dev/null || true
           $SM --install "ndk;$NDK_VERSION" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0" > /dev/null
           echo "ANDROID_HOME=$SDK" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$SDK" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$SDK/ndk/$NDK_VERSION" >> $GITHUB_ENV
-          command -v ninja || brew install ninja
-          command -v cmake || brew install cmake
-          python3 --version; dotnet --version; cmake --version | head -1; ninja --version
+          python3 --version; dotnet --version; cmake --version | head -1; ninja --version; zsh --version; command -v shasum
       - name: The packer's stage, from the cache
         id: stage
         uses: actions/cache@v4
@@ -55,8 +55,9 @@ jobs:
       - name: The packer's stage (CPython for Android, Capstone, lz4, the translator, SPIRV-Tools)
         if: steps.stage.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "$WORK"
-          zsh bananative/android/ondevice/build.sh "$WORK" all 2>&1 | tail -60
+          mkdir -p "$WORK" "$RUNNER_TEMP/home"
+          # HOME away from the work folder: build.sh refuses a library that names the home folder, and the runner's work folder lies inside it
+          HOME="$RUNNER_TEMP/home" zsh bananative/android/ondevice/build.sh "$WORK" all 2>&1 | tail -60
           test -f "$WORK/stage/lib/libdmsh_xlate.so"
       - name: The app's signing key (the builder's, the same one every build, so updates install over the app)
         run: |
