@@ -23,6 +23,7 @@ import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.PointerIcon;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -120,6 +121,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             controls.setHud(hud);
         }
         root.addView(controls, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        hidePointer(surface, controls);   // Xiaomi: no mouse in the game (NO_MOUSE)
+        if (NO_MOUSE) Native.note("input: Xiaomi device: no mouse in the game (its arrow hidden, its clicks dropped; the panel still takes it)");
         // The build tag: an overlay item, on by default (fpsTick follows the switches); bold, flush in the top-left corner
         tag = overlayText(Gravity.TOP | Gravity.START, 1f);
         tag.setText(Prefs.buildTag(this));
@@ -1331,6 +1334,30 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         have = Arrays.copyOf(tmp, n);
         deviceAxes.put(d.getId(), have);
         return have;
+    }
+
+    // ---- No mouse in the game on Xiaomi's devices (Xiaomi, Redmi, POCO: the manufacturer Xiaomi), as the player asked: HyperOS makes a pointer of a controller's touchpad
+    // (a DualSense's), a keyboard cover's trackpad or a mouse, with an arrow over the game and clicks that land on the gamepad and the game's touchscreen. In the game its
+    // events are dropped and the arrow hidden; the in-game panel and the pages still take it ----
+    static final boolean NO_MOUSE = "xiaomi".equalsIgnoreCase(Build.MANUFACTURER);
+
+    static boolean mouse(MotionEvent e) {
+        int s = e.getSource();
+        return (s & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE || (s & InputDevice.SOURCE_MOUSE_RELATIVE) == InputDevice.SOURCE_MOUSE_RELATIVE
+                || (s & InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD || (e.getPointerCount() > 0 && e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE);
+    }
+
+    private boolean dropMouse(MotionEvent e) { return NO_MOUSE && panel != null && !panel.isOpen() && mouse(e); }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent e) { return dropMouse(e) || super.dispatchTouchEvent(e); }
+
+    @Override public boolean dispatchGenericMotionEvent(MotionEvent e) { return dropMouse(e) || super.dispatchGenericMotionEvent(e); }
+
+    /** The arrow hidden over the game (its views), not over the panel or the pages */
+    private void hidePointer(View... vs) {
+        if (!NO_MOUSE || Build.VERSION.SDK_INT < 24) return;
+        PointerIcon none = PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL);
+        for (View v : vs) if (v != null) v.setPointerIcon(none);
     }
 
     @Override public boolean onGenericMotionEvent(MotionEvent e) {
