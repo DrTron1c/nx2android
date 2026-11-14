@@ -6,8 +6,16 @@ replay (`dm/gfx/vk_android`), its host, its shader translator and its on-device 
 | | |
 |---|---|
 | Source | `moceure/BananaNative` on git.eden-emu.dev, through its GitHub mirror `hidayat077/BananaNative` (commits by moceure, checked against the Eden repository's history) |
-| Version | v0.3.14 (`849d2fb`) and the issue digest commits after it, `0bac816` (2026-11-12) |
-| Copied | 2026-11-13, unchanged (less `.github/` and `.forgejo/`, whose workflows run only at a repository's root) |
+| Version | v0.3.23 (`dc7c420`, 2026-11-14); first copied at v0.3.14 and the issue digest commits after it, `0bac816` (2026-11-12) |
+| Copied | 2026-11-13, unchanged (less `.github/` and `.forgejo/`, whose workflows run only at a repository's root); each release since merged in from the branch `bananative-upstream` (below) |
+
+## Keeping up with Banana Native
+
+The branch `bananative-upstream` holds Banana Native as it is, one release after another, on top of the first copy (`fee8a90`); `UPSTREAM.ref` names the release
+in the tree. `.github/workflows/bananative-sync.yml` looks for a new release tag every few hours: it adds it to that branch, merges the branch into `switch2-android`
+(git's three-way merge keeps this fork's changes), runs the engine's tests, pushes, and starts the launcher's build, so the engine follows Banana Native's releases.
+When the merge conflicts or a test fails, nothing is pushed to `switch2-android`: the workflow pushes the merge as far as it got to the branch `bananative-update`
+and opens an issue saying what to resolve.
 
 ## What this fork changes
 

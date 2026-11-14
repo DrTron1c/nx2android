@@ -37,7 +37,9 @@ static void *selftest_main(void *arg);
 void nxhost_set_window(ANativeWindow *w) {
     static int first = 1;
     if (w) ANativeWindow_acquire(w);
-    vka_init();
+    // No vka_init() here: this runs on the launcher's UI thread (Native.start, surfaceCreated), and creating the device inside the driver can take over 10 s
+    // (issue 251: Exynos Xclipse RADV, ioctl in vkCreateDevice), which Android reports as an ANR. The host thread's first Vulkan call makes the device; the present
+    // thread starts with it and takes the window from g_win_new (window_take), so a window that came first waits there.
     pthread_mutex_lock(&g_pmu);
     if (g_win_new) ANativeWindow_release(g_win_new);   // never taken by the present thread
     g_win_new = w; uint64_t gen = ++g_win_gen;
@@ -1035,7 +1037,7 @@ static void *present_main(void *arg) {
         pq_item it = g_pq[g_pq_read % PQ]; g_pq_read++;
         pthread_mutex_unlock(&g_pmu);
         vka_img *gen[VKA_FG_MAX]; double hold = 0, out_period = 0;   // frame generation: the images shown before this frame, each for hold seconds
-        int ng = g_surf ? vka_fg_frame(it.t.serial, it.has_crop ? it.crop : NULL, it.period, it.fence, gen, &hold, &out_period) : 0;
+        int ng = g_surf ? vka_fg_frame(it.t.serial, it.has_crop ? it.crop : NULL, it.period, it.fence, (int)it.t.d.format, gen, &hold, &out_period) : 0;
         double game_period = it.period;
         g_fg_on = out_period > 0;
         if (out_period > 0) it.period = out_period;
