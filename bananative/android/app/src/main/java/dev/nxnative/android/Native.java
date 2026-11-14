@@ -104,6 +104,16 @@ final class Native {
     /** 1 = the present has drawn the overlay (the launcher's views hide), 0 = not yet, -1 = the present does not draw it (DM_VK_OVERLAY=0, a failure, or not in this host) */
     static native int overlayState();
 
+    /** nx2android's themed gamepad drawn by the present (vk_android.h nxhost_pad_atlas): the atlas, premultiplied RGBA8 rows in a direct buffer (null drops it). False: the present
+     *  does not draw it (TouchControls draws it). */
+    static native boolean padAtlas(java.nio.ByteBuffer px, int w, int h, int stride);
+
+    /** The gamepad's sprites now: n quads of 8 floats (the view's x0, y0, x1, y1 as fractions, the atlas's u0, v0, u1, v1 normalized). */
+    static native boolean padQuads(float[] q, int n);
+
+    /** 1 the present draws the gamepad, 0 not yet, -1 it does not (TouchControls does). */
+    static native int padState();
+
     /** Frame generation's settings for the next frames (nxhost_framegen_set): on, images per game frame 2..4, target rate (0 = fixed), flow scale % (0 = auto). */
     static native void frameGenSet(boolean on, int multiplier, int targetRate, int flowPct);
 

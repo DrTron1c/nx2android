@@ -556,6 +556,158 @@ static void ovl_draw(VkCommandBuffer cb, unsigned k, uint32_t idx) {
     if (atomic_load(&g_ostate) == 0) { atomic_store(&g_ostate, 1); VLOG("overlay: drawn by the present (DM_VK_OVERLAY=0: the launcher's views)"); }
 }
 
+// ---------- nx2android's themed gamepad, drawn into the swapchain image ----------
+// The fork's launcher (TouchControls with a ThemePad: bananative/UPSTREAM.md) hands over the theme's atlas once, with its colours and opacity baked in as nx2android's own
+// engine showed them, and the sprites to draw whenever a press, a stick or the layout changes them (nxhost_pad_atlas, nxhost_pad_quads); each present draws them over the
+// picture with the rotated copy's shaders and the premultiplied blend, as nx2android's engine drew its gamepad into its own images. As an Android view over the SurfaceView
+// the gamepad made the app's window draw a new buffer at every touch and the compositor take a second changing layer (issue #34's cost), and on the Xiaomi Pad 6S Pro the
+// screen flashed black at each touch. DM_VK_PAD=0 (live) leaves it to the launcher's view again
+enum { PAD_MAX = 128 };
+static pthread_mutex_t g_padmu = PTHREAD_MUTEX_INITIALIZER;
+static struct { uint8_t *px; int w, h; uint64_t gen; float q[PAD_MAX * 8]; int n; } g_pin;   // as set (under g_padmu): the atlas (taken by the next present), the sprites
+static _Atomic int g_pstate;                                                                 // 1 = drawn into an image, 0 = not yet, -1 = cannot
+static struct {
+    VkImage img; VkDeviceMemory mem; VkImageView view; int w, h, fresh; uint64_t gen;   // the atlas on the GPU
+    VkBuffer sbuf; VkDeviceMemory smem; unsigned sk;                                    // its upload, in frame sk's submission (freed once that frame's fence was waited for)
+    VkPipeline pipe; VkFormat fmt; VkDescriptorPool pool; VkDescriptorSet set;
+} g_pad;
+static int pad_wanted(void) { return VKA_ENV("DM_VK_PAD", 1) != 0; }
+int nxhost_pad_atlas(const void *px, int w, int h, int stride) {
+    if (!px || w <= 0 || h <= 0 || stride < w * 4 || w > 8192 || h > 8192) w = h = 0;
+    uint8_t *p = w ? malloc((size_t)w * h * 4) : NULL;
+    if (w && !p) return 0;
+    for (int y = 0; y < h; y++) memcpy(p + (size_t)y * w * 4, (const uint8_t *)px + (size_t)y * stride, (size_t)w * 4);
+    pthread_mutex_lock(&g_padmu);
+    free(g_pin.px); g_pin.px = p; g_pin.w = w; g_pin.h = h; g_pin.gen++;
+    pthread_mutex_unlock(&g_padmu);
+    return nxhost_pad_state() >= 0;
+}
+int nxhost_pad_quads(const float *q, int n) {
+    if (!q || n < 0) n = 0;
+    if (n > PAD_MAX) n = PAD_MAX;
+    pthread_mutex_lock(&g_padmu);
+    if (n) memcpy(g_pin.q, q, (size_t)n * 8 * sizeof *q);
+    g_pin.n = n;
+    pthread_mutex_unlock(&g_padmu);
+    return nxhost_pad_state() >= 0;
+}
+int nxhost_pad_state(void) { return !pad_wanted() ? -1 : atomic_load(&g_pstate); }
+static void pad_fail(const char *what, VkResult r) { VRED("gamepad: %s: %d; the launcher draws it", what, r); atomic_store(&g_pstate, -1); }
+static void pad_free_stage(void) {
+    if (g_pad.sbuf) vk.vkDestroyBuffer(V.dev, g_pad.sbuf, NULL);
+    if (g_pad.smem) vk.vkFreeMemory(V.dev, g_pad.smem, NULL);
+    g_pad.sbuf = VK_NULL_HANDLE; g_pad.smem = VK_NULL_HANDLE;
+}
+static void pad_free_image(void) {
+    if (g_pad.view) vk.vkDestroyImageView(V.dev, g_pad.view, NULL);
+    if (g_pad.img) vk.vkDestroyImage(V.dev, g_pad.img, NULL);
+    if (g_pad.mem) vk.vkFreeMemory(V.dev, g_pad.mem, NULL);
+    g_pad.view = VK_NULL_HANDLE; g_pad.img = VK_NULL_HANDLE; g_pad.mem = VK_NULL_HANDLE; g_pad.w = g_pad.h = 0;
+}
+// The atlas image w x h, its descriptor (linear filtering: sprites are scaled) and the upload's buffer holding px: 1 = ready (the copy is recorded by pad_draw)
+static int pad_image(int w, int h, const uint8_t *px) {
+    VkResult r = VK_SUCCESS;
+    if (!g_pad.img || g_pad.w != w || g_pad.h != h) {
+        if (g_pad.img) vka_queue_idle();   // earlier presents still read the old atlas
+        pad_free_image();
+        VkImageCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {(uint32_t)w, (uint32_t)h, 1}, .mipLevels = 1,
+            .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
+        r = vk.vkCreateImage(V.dev, &ci, NULL, &g_pad.img);
+        VkMemoryRequirements mr = {0}; if (!r) vk.vkGetImageMemoryRequirements(V.dev, g_pad.img, &mr);
+        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mr.size, .memoryTypeIndex = vka_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0)};
+        if (!r && ai.memoryTypeIndex == UINT32_MAX) r = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        if (!r) r = vk.vkAllocateMemory(V.dev, &ai, NULL, &g_pad.mem);
+        if (!r) r = vk.vkBindImageMemory(V.dev, g_pad.img, g_pad.mem, 0);
+        VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = g_pad.img, .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        if (!r) r = vk.vkCreateImageView(V.dev, &vi, NULL, &g_pad.view);
+        if (!r && !g_pad.pool) {
+            VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+            VkDescriptorPoolCreateInfo pi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 1, .poolSizeCount = 1, .pPoolSizes = &ps};
+            r = vk.vkCreateDescriptorPool(V.dev, &pi, NULL, &g_pad.pool);
+            VkDescriptorSetAllocateInfo sa = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = g_pad.pool, .descriptorSetCount = 1, .pSetLayouts = &g_rot.dsl};
+            if (!r) r = vk.vkAllocateDescriptorSets(V.dev, &sa, &g_pad.set);
+        }
+        if (r) { pad_free_image(); pad_fail("atlas image", r); return 0; }
+        VkDescriptorImageInfo ii = {g_rot.samp[1], g_pad.view, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet wr = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = g_pad.set, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii};
+        vk.vkUpdateDescriptorSets(V.dev, 1, &wr, 0, NULL);   // the queue is idle, or the set was never used
+        g_pad.w = w; g_pad.h = h; g_pad.fresh = 1;
+    }
+    VkDeviceSize bsz = (VkDeviceSize)w * h * 4; void *map = NULL;
+    VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = bsz, .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    r = vk.vkCreateBuffer(V.dev, &bi, NULL, &g_pad.sbuf);
+    VkMemoryRequirements br = {0}; if (!r) vk.vkGetBufferMemoryRequirements(V.dev, g_pad.sbuf, &br);
+    VkMemoryAllocateInfo ba = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = br.size,
+        .memoryTypeIndex = vka_mem_type(br.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
+    if (!r && ba.memoryTypeIndex == UINT32_MAX) r = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    if (!r) r = vk.vkAllocateMemory(V.dev, &ba, NULL, &g_pad.smem);
+    if (!r) r = vk.vkBindBufferMemory(V.dev, g_pad.sbuf, g_pad.smem, 0);
+    if (!r) r = vk.vkMapMemory(V.dev, g_pad.smem, 0, VK_WHOLE_SIZE, 0, &map);
+    if (r) { pad_free_stage(); pad_fail("atlas upload buffer", r); return 0; }
+    memcpy(map, px, (size_t)bsz);
+    vk.vkUnmapMemory(V.dev, g_pad.smem);
+    return 1;
+}
+// Frame k: a new atlas copied in (the last one's upload freed once frame k's fence was waited for), then each sprite over swapchain image idx (in PRESENT_SRC, the picture
+// in it) at its place on the display, turned with the image's preTransform. Nothing at all while there is no atlas or no sprite
+static void pad_draw(VkCommandBuffer cb, unsigned k, uint32_t idx) {
+    if (!pad_wanted() || atomic_load(&g_pstate) < 0) return;
+    if (g_pad.sbuf && g_pad.sk == k) pad_free_stage();   // that frame's fence was waited for before this one was recorded: its copy is done
+    static float q[PAD_MAX * 8];
+    pthread_mutex_lock(&g_padmu);
+    uint64_t gen = g_pin.gen; int n = g_pin.n, w = g_pin.w, h = g_pin.h; uint8_t *px = NULL;
+    if (gen != g_pad.gen) { px = g_pin.px; g_pin.px = NULL; }   // the new atlas, taken (freed below)
+    if (n) memcpy(q, g_pin.q, (size_t)n * 8 * sizeof *q);
+    pthread_mutex_unlock(&g_padmu);
+    if (gen != g_pad.gen) {
+        if (g_pad.sbuf) { vka_queue_idle(); pad_free_stage(); }   // a second atlas while the first one's copy is in flight (a fold, an opacity change)
+        if (!px || !w) { if (g_pad.img) { vka_queue_idle(); pad_free_image(); } g_pad.gen = gen; free(px); return; }
+        if (!rot_ready(g_swap_fmt)) { free(px); pad_fail("the rotated copy's layout", VK_ERROR_INITIALIZATION_FAILED); return; }
+        int ok = pad_image(w, h, px);
+        free(px);
+        if (!ok) return;
+        vka_img_barrier(cb, g_pad.img, VK_IMAGE_ASPECT_COLOR_BIT, g_pad.fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);   // earlier presents' reads
+        g_pad.fresh = 0;
+        VkBufferImageCopy rg = {0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {(uint32_t)w, (uint32_t)h, 1}};
+        vk.vkCmdCopyBufferToImage(cb, g_pad.sbuf, g_pad.img, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+        vka_barrier(cb);
+        g_pad.sk = k; g_pad.gen = gen;
+        VLOG("gamepad: the theme's atlas %dx%d taken by the present", w, h);
+    }
+    if (!g_pad.img || !n) return;
+    if (!g_sview[idx]) { pad_fail("no attachment view of the swapchain image", VK_ERROR_INITIALIZATION_FAILED); return; }
+    if (!rot_ready(g_swap_fmt)) { pad_fail("the rotated copy's layout", VK_ERROR_INITIALIZATION_FAILED); return; }
+    if (!g_pad.pipe || g_pad.fmt != g_swap_fmt) {
+        if (g_pad.pipe) { vka_queue_idle(); rk.vkDestroyPipeline(V.dev, g_pad.pipe, NULL); g_pad.pipe = VK_NULL_HANDLE; }
+        VkResult r = rot_pipeline(g_swap_fmt, 1, &g_pad.pipe);
+        if (r) { g_pad.pipe = VK_NULL_HANDLE; pad_fail("pipeline", r); return; }
+        g_pad.fmt = g_swap_fmt;
+    }
+    int W = (int)g_ext.width, H = (int)g_ext.height;
+    int ew = rot_quarter(g_pre) ? H : W, eh = rot_quarter(g_pre) ? W : H;   // the display, as the user sees it
+    vka_img_barrier(cb, g_simg[idx], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo ca = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = g_sview[idx], .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
+    VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {(uint32_t)W, (uint32_t)H}}, .layerCount = 1, .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    vk.vkCmdBeginRendering(cb, &ri);
+    rk.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pad.pipe);
+    rk.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_rot.lay, 0, 1, &g_pad.set, 0, NULL);
+    for (int i = 0; i < n; i++) {
+        const float *e = q + 8 * i; vko_fdraw d;
+        if (!vko_rect((int)g_pre, W, H, ew, eh, e[0] * ew, e[1] * eh, (e[2] - e[0]) * ew, (e[3] - e[1]) * eh, e[4], e[5], e[6], e[7], &d)) continue;
+        VkViewport v = {d.vx, d.vy, d.vw, d.vh, 0, 1};
+        VkRect2D sc = {{d.sx, d.sy}, {(uint32_t)d.sw, (uint32_t)d.sh}};
+        rk.vkCmdPushConstants(cb, g_rot.lay, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof d.pc, d.pc);
+        rk.vkCmdSetViewport(cb, 0, 1, &v);
+        rk.vkCmdSetScissor(cb, 0, 1, &sc);
+        rk.vkCmdDraw(cb, 3, 1, 0, 0);
+    }
+    vk.vkCmdEndRendering(cb);
+    vka_img_barrier(cb, g_simg[idx], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    if (atomic_load(&g_pstate) == 0) { atomic_store(&g_pstate, 1); VLOG("gamepad: drawn by the present (%d sprites; DM_VK_PAD=0: the launcher's view)", n); }
+}
+
 static void swap_destroy(int surface_too) {
     if (!V.dev) return;
     vka_queue_idle();
@@ -798,6 +950,7 @@ static int present_one(const pq_item *it) {
                           (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) && !VKA_ENV("DM_VK_PRESENT_NEAREST", 0) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     } else if (im && !blit) VRED_ONCE("window texture serial %llu (format %#x) cannot be blitted to the swapchain: presented black", (unsigned long long)im->serial, im->d.format);
     if (blit >= 0) vka_img_barrier(cb, g_simg[idx], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    pad_draw(cb, k, idx);   // nx2android's themed gamepad over the picture (generated frames too)
     ovl_draw(cb, k, idx);   // the launcher's overlay over the picture (generated frames too)
     if (!it->src) vka_ctl_shot_record(cb, im, g_pfmt, cx, cy, cw, ch);   // the game's own frames only
     vk.vkEndCommandBuffer(cb);

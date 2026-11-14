@@ -29,6 +29,14 @@ __attribute__((visibility("default"))) void nxhost_picture_place(float x, float 
 __attribute__((visibility("default"))) int nxhost_overlay_set(int slot, const void *px, int w, int h, int stride);
 // 1 = the present has drawn the overlay (the launcher hides its own views), 0 = not yet, -1 = it does not (the launcher's views show it)
 __attribute__((visibility("default"))) int nxhost_overlay_state(void);
+// nx2android's themed gamepad drawn into each presented image (vka_present.c pad_draw), as nx2android's own engine drew it, so the app's window over the SurfaceView stays
+// still while it is used. The theme's atlas: w x h premultiplied RGBA8 pixels in rows of stride bytes, its colours and opacity baked in by the launcher, copied and uploaded
+// at the next present (px NULL drops it). The sprites to draw now: n quads of 8 floats, the display's rectangle x0, y0, x1, y1 as fractions of the view as the user sees it,
+// then the atlas's u0, v0, u1, v1 (normalized); n 0 draws none. 1 = the present takes them, 0 = it does not (DM_VK_PAD=0, or its image or pipeline failed): the launcher draws
+__attribute__((visibility("default"))) int nxhost_pad_atlas(const void *px, int w, int h, int stride);
+__attribute__((visibility("default"))) int nxhost_pad_quads(const float *q, int n);
+// 1 = the present has drawn the gamepad (the launcher's view draws nothing of it), 0 = not yet, -1 = it does not (the launcher's view draws it)
+__attribute__((visibility("default"))) int nxhost_pad_state(void);
 // The readiness check (vka_readiness.c): what the Vulkan device and driver report, as "key=value" lines in buf (n bytes, at least 64), on the driver the replay would load
 // (DM_VK_DRIVER, read at the first call in the process: set it before). Its own instance, no device; callable before nxhost_main. 0 = facts written, 1 = an "error=" line
 // says why the facts stop there, -1 = no buffer

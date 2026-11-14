@@ -1,5 +1,6 @@
 package org.nx2a.builder;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -8,6 +9,7 @@ import android.content.pm.ShortcutManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.Icon;
+import android.os.Environment;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collections;
@@ -53,6 +55,39 @@ final class Engine {
         if (titleId == null) return null;
         File f = new File(env.engine, "nxnative/dm/games/" + titleId.toUpperCase(Locale.ROOT) + "/icon.png");
         return f.isFile() ? BitmapFactory.decodeFile(f.getPath()) : null;
+    }
+
+    // ---- the save from the game's old per-game app (nx2android's own engine, org.nx2a.t<title ID>) to the engine ----
+    /** The old per-game app's package (porter's: org.nx2a.t<title ID>) */
+    static String oldPkg(String titleId) { return "org.nx2a.t" + titleId.toLowerCase(Locale.ROOT); }
+
+    static boolean oldInstalled(Context c, String titleId) {
+        if (titleId == null) return false;
+        try { c.getPackageManager().getPackageInfo(oldPkg(titleId), 0); return true; } catch (PackageManager.NameNotFoundException e) { return false; }
+    }
+
+    /** The marker the old app writes when it hands its save over (dm/host/save_sync.c save_sync_export): <storage>/nx2android/save-sync/<title ID>/take.txt */
+    static File takeFile(String titleId) {
+        return new File(Environment.getExternalStorageDirectory(), "nx2android/save-sync/" + titleId.toUpperCase(Locale.ROOT) + "/take.txt");
+    }
+
+    /** What the marker says now ("" for none): a new hand-over changes it */
+    static String take(String titleId) {
+        try { return new String(java.nio.file.Files.readAllBytes(takeFile(titleId).toPath()), java.nio.charset.StandardCharsets.UTF_8); } catch (IOException | RuntimeException e) { return ""; }
+    }
+
+    /**
+     * Starts the old app in its export mode (front_android.c save_export: its committed save into the sync folder with the marker, a toast, and the app ends without
+     * starting the game). Both apps' background processes end first: the old app's, so it starts fresh and no game of it is running; the engine's, so its next start
+     * mounts the save again and takes the one handed over (a running game would keep its own)
+     */
+    static void export(Context c, String titleId) {
+        ActivityManager am = c.getSystemService(ActivityManager.class);
+        if (am != null) { am.killBackgroundProcesses(oldPkg(titleId)); am.killBackgroundProcesses(PKG); }
+        Intent i = c.getPackageManager().getLaunchIntentForPackage(oldPkg(titleId));
+        if (i == null) throw new IllegalStateException("the old app has no start screen");
+        i.putExtra("org.nx2a.EXPORT_SAVE", true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        c.startActivity(i);
     }
 
     static boolean canPin(Context c) {

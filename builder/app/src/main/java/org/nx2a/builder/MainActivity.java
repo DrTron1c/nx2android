@@ -59,7 +59,7 @@ public final class MainActivity extends Activity implements PortService.Listener
     private String gameId, gameName;   // the chosen folder's title ID and name (porter inspect)
     private LinearLayout engineCard;
     private TextView engineState;
-    private Button engineButton;
+    private Button engineButton, copySave;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -140,6 +140,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         LinearLayout playRow = new LinearLayout(this);
         grow(playRow, button("Play", true, v -> playGame())); grow(playRow, button("Add to home screen", false, v -> addToHome()));
         add(engineCard, playRow, 8);
+        copySave = button("Copy the save from the old app", false, v -> copySave()); add(engineCard, copySave, 8);
         add(engineCard, button("Game settings and Prepare", false, v -> {
             if (Engine.installed(this) == 0) { engineState.setText("Install the engine first."); return; }
             try { startActivity(Engine.home()); } catch (RuntimeException e) { engineState.setText("The engine did not open: " + e.getMessage()); }
@@ -334,6 +335,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         engineState.setText(have > 0 ? "Installed: build " + have + "." : "Not installed yet: about 200 MB to download.");
         engineState.setTextColor(have > 0 ? GOOD : DIM);
         engineButton.setText(have > 0 ? "Check for an engine update" : "Install the engine");
+        copySave.setVisibility(Engine.oldInstalled(this, gameId) ? View.VISIBLE : View.GONE);   // the game's old per-game app is on this tablet
         if (network) bg(() -> {
             try {
                 long want = Engine.latest();
@@ -363,6 +365,31 @@ public final class MainActivity extends Activity implements PortService.Listener
         if (f == null) { engineState.setText("Choose the game's folder first."); return; }
         if (Engine.installed(this) == 0) { engineState.setText("Install the engine first."); return; }
         try { startActivity(Engine.play(f)); } catch (RuntimeException e) { engineState.setText("The engine did not start: " + e.getMessage()); }
+    }
+    /** The old per-game app's save to the engine: the old app hands it over through the shared sync folder, and the engine takes it at its next start (Engine.export) */
+    private void copySave() {
+        if (gameId == null || !Engine.oldInstalled(this, gameId)) { engineState.setText("The game's old app is not installed."); return; }
+        new AlertDialog.Builder(this).setTitle("Copy the save from the old app")
+            .setMessage("The old app (this project's own engine) puts its save in the shared folder nx2android/save-sync, and the Switch 2 engine takes it the next time the game starts there. "
+                + "The engine's own save is kept as a backup. Both apps are closed first if they are open in the background. The old app needs All files access (it asks), "
+                + "and it must have been ported with this builder after 14 November 2026.")
+            .setPositiveButton("Copy", (d, w) -> {
+                String before = Engine.take(gameId);
+                try { Engine.export(this, gameId); } catch (RuntimeException e) { engineState.setText("The old app did not start: " + e.getMessage()); return; }
+                engineState.setText("The old app is copying its save…"); engineState.setTextColor(TEXT); copySave.setEnabled(false);
+                bg(() -> {
+                    boolean done = false;
+                    for (int i = 0; i < 60 && !done; i++) { try { Thread.sleep(500); } catch (InterruptedException e) { break; } done = !Engine.take(gameId).equals(before) && !Engine.take(gameId).isEmpty(); }
+                    boolean ok = done;
+                    post(() -> {
+                        copySave.setEnabled(true);
+                        if (ok) { engineState.setText("Save copied. Tap Play: the engine takes it as the game starts (its own save is kept as a backup)."); engineState.setTextColor(GOOD); }
+                        else engineState.setText("The old app did not hand its save over. If it asked for All files access, allow it and tap Copy again; "
+                            + "otherwise port the game again with this builder (older ports cannot copy their save), then tap Copy.");
+                    });
+                });
+            })
+            .setNegativeButton("Cancel", null).show();
     }
     private void addToHome() {
         String f = prefs.getString("folder", null);

@@ -36,6 +36,10 @@ void save_sync_mount(const char *save, const char *title);   // the game's first
 void save_sync_committed(void);           // a Commit went through (hle_fs.c, under its locks: it only wakes the sender)
 int save_sync_flush(int timeout_ms);      // sends now what was committed and not sent (the iPhone app going to the background): 1 = in step with the cloud, 0 = not (yet)
 int save_sync_after_exit(const char *save, const char *title);   // the Mac launcher once the host has exited (a crash included): 1 = in step, 0 = not
+// The committed save handed over to the game's other versions on purpose (nx2android: the builder's "Copy the save from the old app" starts the old per-game app to do it,
+// with no game running): sent to the sync folder whatever is there (the folder's save kept in the backups first), with <folder>/<title ID>/take.txt naming it, so each
+// other version takes it at its next start even when its own save changed (kept in its backups). 1 = handed over, 0 = no save here, -1 = failed (sync off, not writable)
+int save_sync_export(const char *save, const char *title);
 
 // ---- what the platform provides (weak defaults in save_sync.c: plain file copies, which the Mac's iCloud Drive takes) ----
 // Copies the cloud's file to a local one; the iPhone app goes through NSFileCoordinator, which downloads a file iCloud has only listed (SaveSync.m).

@@ -55,6 +55,9 @@ void nxhost_env_changed(void);
 #pragma weak nxhost_fps
 #pragma weak nxhost_overlay_set
 #pragma weak nxhost_overlay_state
+#pragma weak nxhost_pad_atlas
+#pragma weak nxhost_pad_quads
+#pragma weak nxhost_pad_state
 #pragma weak nxhost_framegen_set
 #pragma weak nxhost_framegen_status
 #pragma weak nxhost_picture_place
@@ -380,6 +383,24 @@ JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_overlaySet(JNIEnv *e
     return nxhost_overlay_set(slot, p, p ? w : 0, p ? h : 0, stride) ? JNI_TRUE : JNI_FALSE;
 }
 JNIEXPORT jint JNICALL Java_dev_nxnative_android_Native_overlayState(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_overlay_state ? nxhost_overlay_state() : -1; }
+// nx2android's themed gamepad for the present to draw (nxhost_pad_atlas, nxhost_pad_quads): the atlas a direct ByteBuffer of stride-byte rows of premultiplied RGBA8 (null
+// drops it), the sprites 8 floats each; false = the present does not draw it (or a host without it): the launcher's view does. The state: 1 drawn, 0 not yet, -1 not
+JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_padAtlas(JNIEnv *env, jclass cls, jobject px, jint w, jint h, jint stride) {
+    (void)cls; if (!nxhost_pad_atlas) return JNI_FALSE;
+    const void *p = px ? (*env)->GetDirectBufferAddress(env, px) : NULL;
+    if (p && (w <= 0 || h <= 0 || stride < w * 4 || (jlong)stride * h > (*env)->GetDirectBufferCapacity(env, px))) p = NULL;
+    return nxhost_pad_atlas(p, p ? w : 0, p ? h : 0, stride) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_padQuads(JNIEnv *env, jclass cls, jfloatArray q, jint n) {
+    (void)cls; if (!nxhost_pad_quads) return JNI_FALSE;
+    if (!q || n <= 0) return nxhost_pad_quads(NULL, 0) ? JNI_TRUE : JNI_FALSE;
+    jsize len = (*env)->GetArrayLength(env, q); if (n * 8 > len) n = len / 8;
+    jfloat *f = (*env)->GetFloatArrayElements(env, q, NULL); if (!f) return JNI_FALSE;
+    int ok = nxhost_pad_quads(f, n);
+    (*env)->ReleaseFloatArrayElements(env, q, f, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jint JNICALL Java_dev_nxnative_android_Native_padState(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_pad_state ? nxhost_pad_state() : -1; }
 
 // Frame generation (nxhost_framegen_set / _status): the in-game settings, and the state with its reason as "<state> <reason>" (state 0 off, 1 generating, 2 on and not
 // generating, -1 unavailable; "-2 ..." when this host has no frame generation)

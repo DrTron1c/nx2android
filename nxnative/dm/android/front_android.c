@@ -1398,6 +1398,39 @@ static void save_sync_access(ANativeActivity *act, int sdk) {   // after env.txt
         v, asked ? " (allow it in Settings > Apps > the game > All files access)" : ": the app opens Android's page for it (once); allow it and start the game again");
     if (!asked) { FILE *f = fopen(marker, "w"); if (f) fclose(f); if (sdk >= 30) open_access_page(act, sdk); }
 }
+// ---- the save handed over to the game's other versions (the builder's "Copy the save from the old app"): the builder starts the app with the extra
+// org.nx2a.EXPORT_SAVE, the app puts its committed save in the sync folder with a marker that makes the Switch 2 engine (and Banana Native) take it at their next start
+// (save_sync_export: save_handover), says so in a toast and ends: the game does not start. The builder waits for the marker ----
+static int intent_flag(ANativeActivity *act, const char *name) {
+    JNIEnv *E = act->env; jclass cA = (*E)->GetObjectClass(E, act->clazz); int on = 0;
+    jmethodID gi = cA ? (*E)->GetMethodID(E, cA, "getIntent", "()Landroid/content/Intent;") : NULL;
+    jobject it = gi ? (*E)->CallObjectMethod(E, act->clazz, gi) : NULL;
+    if (!jx(E) && it) {
+        jclass cI = (*E)->GetObjectClass(E, it); jmethodID gb = cI ? (*E)->GetMethodID(E, cI, "getBooleanExtra", "(Ljava/lang/String;Z)Z") : NULL;
+        if (gb) on = (*E)->CallBooleanMethod(E, it, gb, (*E)->NewStringUTF(E, name), JNI_FALSE);
+    }
+    if (jx(E)) on = 0;
+    return on;
+}
+static void toast(ANativeActivity *act, const char *msg) {   // (onCreate: the main thread)
+    JNIEnv *E = act->env; jclass cT = (*E)->FindClass(E, "android/widget/Toast");
+    jmethodID mk = cT ? (*E)->GetStaticMethodID(E, cT, "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;") : NULL;
+    jobject t = mk ? (*E)->CallStaticObjectMethod(E, cT, mk, act->clazz, (*E)->NewStringUTF(E, msg), 1) : NULL;
+    jmethodID sh = t && !jx(E) ? (*E)->GetMethodID(E, cT, "show", "()V") : NULL;
+    if (sh) (*E)->CallVoidMethod(E, t, sh);
+    jx(E);
+}
+static void save_handover(ANativeActivity *act, int sdk) {
+    LOG("[saves] export: the builder asked for the save to go to the game's other versions");
+    if (all_files_access(act, sdk) == 0) {
+        LOG("[RED] [saves] export: the app does not have All files access, so it cannot reach the sync folder: allow it and tap Copy again");
+        toast(act, "Allow All files access for this app, then tap Copy the save again in the builder");
+        if (sdk >= 30) open_access_page(act, sdk);
+        return;
+    }
+    int r = save_sync_export(getenv("DM_SAVE"), DM_GAME_ID);
+    toast(act, r > 0 ? "Save copied: the Switch 2 engine takes it the next time the game starts there" : r == 0 ? "This app has no save yet: nothing copied" : "The save could not be copied (the log says why)");
+}
 static int romfs_readable(ANativeActivity *act, int sdk) {   // 0: the game cannot read its RomFS, and the app ends
     const char *r = getenv("DM_ROMFS"), *own[] = {g_root, act->internalDataPath}; char rr[4096], orr[4096];
     const char *rp = r && realpath(r, rr) ? rr : r;   // canonical paths: /sdcard/… is the /storage/emulated/0/… Android names the files folder by
@@ -1448,6 +1481,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
 #ifdef DM_RELEASE
     unsetenv("DM_CTL");   // a release build takes no remote key presses (the control file is a development tool)
 #endif
+    if (intent_flag(act, "org.nx2a.EXPORT_SAVE")) { save_handover(act, sdk); g_quit = 1; return; }   // the save to the game's other versions, and the app ends
     // the save manager's requests (saves_android.c), before the host mounts the save: an import chosen in the menu or pushed by porter, an export porter asks for
     if (dm_saves_start(g_root)) { LOG("[saves] the request asked the app to end: the game is not started"); g_quit = 1; return; }
     if (!romfs_readable(act, sdk)) { g_quit = 1; return; }   // after the save manager's requests, which need no RomFS

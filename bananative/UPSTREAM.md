@@ -23,9 +23,13 @@ Each change is its own commit after the copy (`git log -- bananative`), so a new
 - Frame generation through a game's hitches (`dm/gfx/vk_android/lsfg/lsfg_pacer.c`).
 - nx2android's touch rules for its themed gamepad (`dm/host/android/input_map.c` NXT_STYLE_NX2A, `touchControlsSetStyle`), as its own engine has them
   (`../nxnative/dm/android/front_android.c` touch_event): full tilt at a stick's ring with no dead zone, each control the rounded box it is drawn as with its reach,
-  the spot between two face buttons pressing both, the D-pad's eight equal sectors, any number of fingers on a control, and floating sticks (the panel's controls rows).
+  the spot between two face buttons pressing both, the D-pad's eight equal sectors, any number of fingers on a control, and floating sticks (on by default; the
+  panel's controls rows). The themed gamepad is drawn by the present (`dm/gfx/vk_android/vka_present.c` pad_draw, `nxhost_pad_*`, `vka_ovl.h` vko_rect), so the
+  window over the SurfaceView stays still (as a view it flashed the screen black at each touch on a Xiaomi Pad 6S Pro), its atlas baked in the colours nx2android's
+  engine showed (`ThemePad.bake`: the sRGB curve its sRGB swapchain applied to the sprites); the view draws it only when the present does not (`DM_VK_PAD=0`).
 - The save in step with the game's other versions: the fork's app sets `DM_SAVE_SYNC` to `<storage>/nx2android/save-sync` (a user line wins), as nx2android's
-  per-game apps do, and sends the save when the app leaves the screen and before Stop ends it (`nxhost_save_flush`; `dm/host/save_sync.c` is Banana Native's).
+  per-game apps do, and sends the save when the app leaves the screen and before Stop ends it (`nxhost_save_flush`). `dm/host/save_sync.c` also takes a save handed
+  over on purpose (`save_sync_export`, `take.txt`: the builder's Copy the save from the old app), the same code as `../nxnative/dm/host/save_sync.c`.
 
 ## Licences
 

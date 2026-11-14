@@ -125,7 +125,7 @@ final class TouchControls extends View {
         opacity = prefs().getFloat("opacity", 0.6f);
         scale = prefs().getFloat("scale", 1f);
         haptics = prefs().getBoolean("haptics", true);
-        floating = prefs().getBoolean("float", false);
+        floating = prefs().getBoolean("float", true);   // on by default: each half of the screen takes its stick wherever the thumb lands (not on another control)
         shown = prefs().getBoolean("shown", true);
         line.setStyle(Paint.Style.STROKE);
         text.setTextAlign(Paint.Align.CENTER);
@@ -176,8 +176,9 @@ final class TouchControls extends View {
 
     private void apply() {
         if (input) Native.touchControlsEnable(active() && !editing);   // off: every touch in the picture is the game's touchscreen
-        Arrays.fill(pressed, 0); Arrays.fill(prev, 0); Arrays.fill(sticks, 0);
+        Arrays.fill(pressed, 0); Arrays.fill(prev, 0); Arrays.fill(sticks, 0); Arrays.fill(fl, -1);
         invalidate();
+        if (theme != null) { padAtlas(); pushPad(); }   // (shown or hidden, a new layout, the editor)
     }
 
     private void toggle() {
@@ -536,7 +537,7 @@ final class TouchControls extends View {
                 if (toggleId < 0 && onToggle(e.getX(i), e.getY(i))) {
                     toggleId = id; toggleLong = false;
                     postDelayed(longPress, 600);
-                    invalidate();   // the theme's menu control shows held
+                    changed();   // the theme's menu control shows held
                     if (haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                     return true;
                 }
@@ -553,7 +554,7 @@ final class TouchControls extends View {
                     toggleId = -1;
                     removeCallbacks(longPress);
                     if (!toggleLong && onToggle(e.getX(i), e.getY(i))) { if (theme != null && menuCtl >= 0) settings(); else toggle(); }   // the theme's menu control opens the panel
-                    invalidate();
+                    changed();
                     return true;
                 }
                 send(act, id, e.getX(i), e.getY(i));
@@ -588,7 +589,8 @@ final class TouchControls extends View {
             if (f0 != fl[0] || f1 != fl[1] || f2 != fl[2] || f3 != fl[3]) changed = true;
         }
         if (tick && haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-        if (changed) invalidate();
+        if (changed) changed();
+        padCheck(false);
     }
 
     // ---- Drawing ----
@@ -598,8 +600,8 @@ final class TouchControls extends View {
         if (!available || !visible() && !editing) return;
         float dp = getResources().getDisplayMetrics().density;
         line.setStrokeWidth(Math.max(1.5f, 1.6f * dp));
-        if (editing) { drawControls(c); drawEditor(c, dp); return; }
-        if (theme != null && menuCtl >= 0) { drawMenu(c); if (active()) drawControls(c); return; }   // the theme's menu control, always; the controls when shown
+        if (editing) { if (theme == null) drawControls(c); else if (!padHost) drawTheme(c, true); drawEditor(c, dp); return; }
+        if (theme != null && menuCtl >= 0) { if (!padHost && visible()) drawTheme(c, active()); return; }   // the theme's menu control, always; the controls when shown (the present draws them: nothing)
         // The show / hide button (when it is on): a small pad outline, mostly transparent over the game, fainter still while the controls are hidden
         boolean on = active();
         if (button) {
@@ -617,7 +619,7 @@ final class TouchControls extends View {
     }
 
     private void drawControls(Canvas c) {
-        if (theme != null) { drawTheme(c); return; }
+        if (theme != null) { if (!padHost) drawTheme(c, true); return; }
         for (int i = 0; i < n; i++) {
             boolean held = pressed[i] != 0;
             fill.setColor(held ? Color.argb(alpha(0.55f), 255, 255, 255) : Color.argb(alpha(0.35f), 0, 0, 0));
@@ -640,52 +642,135 @@ final class TouchControls extends View {
         }
     }
 
-    /** The theme's sprites, as nx2android's engine drew them (gfx_vk_present.c ov_theme_draw): the decorations, then each control idle or held, a stick's knob moved with it */
-    private void drawTheme(Canvas c) {
-        ThemePad.Layout L = theme.layouts[themeLay]; android.graphics.Bitmap a = theme.atlas(themeLay);
-        if (a == null) return;
-        float k = getHeight() / L.designH * scale;
-        bmp.setAlpha(alpha(theme.alpha));
-        for (ThemePad.Sprite s : L.sprites) {
-            if (s.state != ThemePad.DECOR) continue;
-            if (s.ctl == menuCtl) { sprite(c, a, L, s, mx, my, k); continue; }
-            for (int i = 0; i < n; i++) if (ctlOf[i] == s.ctl) { sprite(c, a, L, s, cx[i], cy[i], k * r[i] / base[i]); break; }
-        }
-        long all = 0;   // every button held now: a button shows held when its bit is (a spot between two face buttons holds both)
-        for (int i = 0; i < n; i++) if (kind[i] != STICK) all |= pressed[i];
-        for (int i = 0; i < n; i++) {
-            float kc = k * r[i] / base[i], kx = 0, ky = 0, x = cx[i], y = cy[i];
-            boolean isStick = kind[i] == STICK, held = isStick ? pressed[i] != 0 || sticks[2 * stick[i]] != 0 || sticks[2 * stick[i] + 1] != 0 : (all & buttons[i]) != 0;
-            if (isStick && floating) {   // a floating stick: only under the finger
-                if (!held || fl[2 * stick[i]] < 0) continue;
-                x = fl[2 * stick[i]] * getWidth(); y = fl[2 * stick[i] + 1] * getHeight();
-            }
-            if (isStick) { kx = sticks[2 * stick[i]] * L.travel * kc; ky = -sticks[2 * stick[i] + 1] * L.travel * kc; }   // the host's y is up
-            for (ThemePad.Sprite s : L.sprites) {
-                if (s.ctl != ctlOf[i] || s.state == ThemePad.DECOR) continue;
-                if (s.state == ThemePad.KNOB) { sprite(c, a, L, s, x + kx, y + ky, kc); continue; }
-                boolean on = kind[i] == DPAD ? s.dir >= 0 && (all & DIR_BITS[s.dir]) != 0 : held;
-                if (s.state == (on ? ThemePad.HELD : ThemePad.IDLE)) sprite(c, a, L, s, x, y, kc);
-            }
-        }
-    }
+    /** A sprite to show: the theme's sprite and where it goes in the view (pixels) */
+    private interface SpriteSink { void put(ThemePad.Sprite s, float x0, float y0, float x1, float y1); }
 
-    /** The theme's menu control: idle, or held while a finger is on it */
-    private void drawMenu(Canvas c) {
-        ThemePad.Layout L = theme.layouts[themeLay]; android.graphics.Bitmap a = theme.atlas(themeLay);
-        if (a == null || !visible()) return;
+    /**
+     * The theme's sprites, as nx2android's engine drew them (gfx_vk_present.c ov_theme_draw): the decorations, then each control idle or held, a stick's knob moved with it
+     * (a floating stick only under its finger), the menu control last (idle, or held while a finger is on it). controls: the controls too, not only the menu control
+     */
+    private void sprites(boolean controls, SpriteSink out) {
+        ThemePad.Layout L = theme.layouts[themeLay];
         float k = getHeight() / L.designH * scale;
-        bmp.setAlpha(alpha(theme.alpha));
-        for (ThemePad.Sprite s : L.sprites) if (s.ctl == menuCtl && s.state == (toggleId >= 0 ? ThemePad.HELD : ThemePad.IDLE)) sprite(c, a, L, s, mx, my, k);
+        if (controls) {
+            for (ThemePad.Sprite s : L.sprites) {
+                if (s.state != ThemePad.DECOR || s.ctl == menuCtl) continue;
+                for (int i = 0; i < n; i++) if (ctlOf[i] == s.ctl) { sprite(out, L, s, cx[i], cy[i], k * r[i] / base[i]); break; }
+            }
+            long all = 0;   // every button held now: a button shows held when its bit is (a spot between two face buttons holds both)
+            for (int i = 0; i < n; i++) if (kind[i] != STICK) all |= pressed[i];
+            for (int i = 0; i < n; i++) {
+                float kc = k * r[i] / base[i], kx = 0, ky = 0, x = cx[i], y = cy[i];
+                boolean isStick = kind[i] == STICK, held = isStick ? pressed[i] != 0 || sticks[2 * stick[i]] != 0 || sticks[2 * stick[i] + 1] != 0 : (all & buttons[i]) != 0;
+                if (isStick && floating && !editing) {   // a floating stick: only under the finger
+                    if (!held || fl[2 * stick[i]] < 0) continue;
+                    x = fl[2 * stick[i]] * getWidth(); y = fl[2 * stick[i] + 1] * getHeight();
+                }
+                if (isStick) { kx = sticks[2 * stick[i]] * L.travel * kc; ky = -sticks[2 * stick[i] + 1] * L.travel * kc; }   // the host's y is up
+                for (ThemePad.Sprite s : L.sprites) {
+                    if (s.ctl != ctlOf[i] || s.state == ThemePad.DECOR) continue;
+                    if (s.state == ThemePad.KNOB) { sprite(out, L, s, x + kx, y + ky, kc); continue; }
+                    boolean on = kind[i] == DPAD ? s.dir >= 0 && (all & DIR_BITS[s.dir]) != 0 : held;
+                    if (s.state == (on ? ThemePad.HELD : ThemePad.IDLE)) sprite(out, L, s, x, y, kc);
+                }
+            }
+        }
+        if (menuCtl >= 0)
+            for (ThemePad.Sprite s : L.sprites)
+                if (s.ctl == menuCtl && (s.state == ThemePad.DECOR || s.state == (toggleId >= 0 ? ThemePad.HELD : ThemePad.IDLE))) sprite(out, L, s, mx, my, k);
     }
 
     /** One sprite: at its offset from (x, y), its atlas pixels at k screen pixels a design pixel */
-    private void sprite(Canvas c, android.graphics.Bitmap a, ThemePad.Layout L, ThemePad.Sprite s, float x, float y, float k) {
+    private static void sprite(SpriteSink out, ThemePad.Layout L, ThemePad.Sprite s, float x, float y, float k) {
         float x0 = x + s.ox * k, y0 = y + s.oy * k;
-        src.set(Math.round(s.u), Math.round(s.v), Math.round(s.u + s.w), Math.round(s.v + s.h));
-        rect.set(x0, y0, x0 + s.w / L.scale * k, y0 + s.h / L.scale * k);
-        c.drawBitmap(a, src, rect, bmp);
+        out.put(s, x0, y0, x0 + s.w / L.scale * k, y0 + s.h / L.scale * k);
     }
+
+    /** The view's own drawing of the theme (the present does not draw it): the baked atlas, its opacity in it */
+    private void drawTheme(Canvas c, boolean controls) {
+        if (padBmp == null || padBmpLay != themeLay) return;
+        bmp.setAlpha(255);
+        sprites(controls, (s, x0, y0, x1, y1) -> {
+            src.set(Math.round(s.u), Math.round(s.v), Math.round(s.u + s.w), Math.round(s.v + s.h));
+            rect.set(x0, y0, x1, y1);
+            c.drawBitmap(padBmp, src, rect, bmp);
+        });
+    }
+
+    // ---- nx2android's gamepad drawn by the game's present (vk_android.h nxhost_pad_*), as that engine drew it into its own images: the window over the SurfaceView then
+    // stays still while it is used (as a view it made the window draw a new buffer at each touch, and the screen flashed black on the Xiaomi Pad 6S Pro). The atlas goes over
+    // once, baked in the engine's colours with the opacity (ThemePad.bake), and the sprites whenever a press, a stick or the layout changes them; the view draws the gamepad
+    // itself only while the present does not (Native.padState() -1: DM_VK_PAD=0, a failure, a host without it) ----
+    private boolean padHost;                       // the present draws it: the view draws nothing of it
+    private int padLay = -1; private float padOp = -1;   // what the atlas was last baked for (layout, opacity)
+    private int padBaking;                         // bakes started (a newer one makes the older one's result stale)
+    private boolean padInFlight;                   // the newest bake has not come back yet
+    private android.graphics.Bitmap padBmp; private int padBmpLay = -1;   // the view's own copy, only while the present does not draw it
+    private int padW = 1, padH = 1;                // the atlas's size, for the sprites' texture coordinates
+    private float[] padQ = new float[0], padLast; private int padLastN = -1;
+    private final Runnable padWatch = () -> padCheck(true);
+
+    /** A bake of the layout's atlas for the opacity in force, when it is not the one sent (off the main thread; padTaken gets it) */
+    private void padAtlas() {
+        if (theme == null || getWidth() <= 0) return;
+        float menuOp = Math.max(opacity, 0.5f);
+        if (padLay == themeLay && padOp == opacity && (padHost || padBmp != null || padInFlight)) return;
+        int l = themeLay, mc = menuCtl, seq = ++padBaking; float op = opacity; ThemePad t = theme;
+        padLay = l; padOp = op; padInFlight = true;
+        new Thread(() -> {
+            ThemePad.Baked b = t.bake(l, op, menuOp, mc);
+            post(() -> padTaken(seq, l, b));
+        }, "pad-bake").start();
+    }
+
+    private void padTaken(int seq, int l, ThemePad.Baked b) {
+        if (seq != padBaking || theme == null) return;   // a newer bake is on its way
+        padInFlight = false;
+        if (b == null) { padHost = false; return; }
+        padW = b.w; padH = b.h; padLast = null;
+        boolean host = input && Native.padAtlas(b.px, b.w, b.h, b.w * 4) && Native.padState() >= 0;
+        if (padHost != host) Native.note("on-screen controls: the gamepad theme is drawn by " + (host ? "the game's present" : "the launcher's view"));
+        padHost = host;
+        if (host) { padBmp = null; padBmpLay = -1; } else { padBmp = b.bitmap(); padBmpLay = l; }
+        pushPad();
+        invalidate();   // the view's copy drawn, or the view's last drawing cleared
+        removeCallbacks(padWatch); if (host) postDelayed(padWatch, 1000);
+    }
+
+    /** The present stopped drawing it (a failure, DM_VK_PAD=0 live): the view draws it from the next bake. again: keep checking while the present draws it */
+    private void padCheck(boolean again) {
+        if (!padHost) return;
+        if (Native.padState() < 0) {
+            padHost = false; padOp = -1;
+            Native.note("on-screen controls: the game's present no longer draws the gamepad theme: the launcher's view does");
+            padAtlas();
+            return;
+        }
+        if (again) postDelayed(padWatch, 1000);
+    }
+
+    /** The sprites to the present when they changed (none while the controls and the menu control are not shown) */
+    private void pushPad() {
+        if (!padHost || theme == null) return;
+        int w = getWidth(), h = getHeight();
+        int[] cnt = {0};
+        if (w > 0 && h > 0 && (visible() || editing)) {
+            float fw = w, fh = h, uw = padW, vh = padH;
+            sprites(editing || active(), (s, x0, y0, x1, y1) -> {
+                int i = cnt[0]++ * 8;
+                if (i + 8 > padQ.length) padQ = Arrays.copyOf(padQ, Math.max(64, padQ.length * 2));
+                padQ[i] = x0 / fw; padQ[i + 1] = y0 / fh; padQ[i + 2] = x1 / fw; padQ[i + 3] = y1 / fh;
+                padQ[i + 4] = s.u / uw; padQ[i + 5] = s.v / vh; padQ[i + 6] = (s.u + s.w) / uw; padQ[i + 7] = (s.v + s.h) / vh;
+            });
+        }
+        int q = cnt[0];
+        if (q == padLastN && padLast != null && Arrays.equals(Arrays.copyOf(padQ, q * 8), padLast)) return;
+        padLast = Arrays.copyOf(padQ, q * 8); padLastN = q;
+        Native.padQuads(padQ, q);
+    }
+
+    /** Something the gamepad shows changed: the present gets the sprites, or the view draws again */
+    private void changed() { if (theme != null && padHost) pushPad(); else invalidate(); }
 
     /** The editor: the picture's outline, each group's frame (the one held filled), the buttons along the top and what to do */
     private void drawEditor(Canvas c, float dp) {
@@ -787,11 +872,11 @@ final class TouchControls extends View {
                 opacity = (os.getProgress() + 10) / 100f;
                 float ns = (ss.getProgress() + 60) / 100f;
                 if (ns != scale) { scale = ns; layout(getWidth(), getHeight()); }
-                invalidate();
+                if (theme == null) invalidate(); else if (!user) padAtlas();   // the theme's opacity is baked into its atlas: once the slider is let go (or set: Reset)
                 save();
             }
             @Override public void onStartTrackingTouch(SeekBar b) {}
-            @Override public void onStopTrackingTouch(SeekBar b) {}
+            @Override public void onStopTrackingTouch(SeekBar b) { if (theme != null) padAtlas(); }
         };
         os.setOnSeekBarChangeListener(live);
         ss.setOnSeekBarChangeListener(live);

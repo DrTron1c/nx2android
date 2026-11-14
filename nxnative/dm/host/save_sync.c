@@ -268,6 +268,7 @@ ss_way ss_decide(const char *local, const char *base, const char *remote, int64_
 }
 
 // ---------- the sync state, backups, the cloud's file ----------
+static char g_exported[SS_HASH + 1];   // save_sync_export: the hash send_save_f handed over
 static void read_base(const char *save, char *out) {   // <save>.sync: the hash of the save last known to be the same here and in the cloud ("" for none)
     char p[PATH_MAX], ln[128]; out[0] = 0;
     snprintf(p, sizeof p, "%s.sync", save);
@@ -289,6 +290,35 @@ static void write_base(const char *save, const char *hash) {   // written beside
         if (err) unlink(t);
     }
     if (err) SRED("cannot write %s (errno=%d): the next start compares with the sync before", p, err);
+}
+
+// A save handed over on purpose (save_sync_export: the builder's "Copy the save from the old app"): <cloud folder>/take.txt names it ("take\t<hash>\t<token>"), and each
+// other version takes it at its next start even when its own save changed since the last sync (its own kept in its backups), once per hand-over: <save>.take keeps the
+// last token taken. A later save sent by anyone changes the cloud's hash, and the marker no longer names it
+static int read_take(const char *cloud, const char *hash, char *token, size_t n) {   // 1 = the marker names this cloud save (token filled)
+    char p[PATH_MAX], ln[160]; int ok = 0;
+    snprintf(p, sizeof p, "%s", cloud); char *sl = strrchr(p, '/'); if (!sl) return 0;
+    snprintf(sl + 1, sizeof p - (size_t)(sl + 1 - p), "take.txt");
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    while (fgets(ln, sizeof ln, f)) {
+        if (strncmp(ln, "take\t", 5) || strspn(ln + 5, "0123456789abcdef") != SS_HASH || ln[5 + SS_HASH] != '\t' || strncmp(ln + 5, hash, SS_HASH)) continue;
+        const char *t = ln + 6 + SS_HASH; size_t L = strcspn(t, "\r\n");
+        if (L && L < n) { memcpy(token, t, L); token[L] = 0; ok = 1; }
+    }
+    fclose(f);
+    return ok;
+}
+static int took(const char *save, const char *token) {   // 1 = this token was taken here already
+    char p[PATH_MAX], ln[160]; int yes = 0;
+    snprintf(p, sizeof p, "%s.take", save);
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    while (fgets(ln, sizeof ln, f)) { ln[strcspn(ln, "\r\n")] = 0; if (!strcmp(ln, token)) yes = 1; }
+    fclose(f);
+    return yes;
+}
+static void mark_took(const char *save, const char *token) {
+    char p[PATH_MAX]; snprintf(p, sizeof p, "%s.take", save);
+    FILE *f = fopen(p, "w"); if (f) { fprintf(f, "%s\n", token); fclose(f); }
 }
 
 // A backup this file made for `side`: "YYYY-MM-DD HH.MM.SS <side>", or with " <k>" after it (backup_dir); anything else in <save>-backups is the player's
@@ -411,7 +441,7 @@ static int pull(const char *save, const char *bundle, ss_meta *r, char *kept, si
 
 // What this device committed goes to the cloud, unless the cloud already has it. A cloud save changed since this device's last sync (another device sent it) is kept first.
 // 1 = in step with the cloud, 0 = not: the cloud cannot be read or written now (the next Commit, a flush or the Mac launcher tries again)
-static int send_save(const char *save, const char *title, const char *cloud) {
+static int send_save_f(const char *save, const char *title, const char *cloud, int force) {   // force: the export's (save_sync_export), 2 = no save here
     char tmp[PATH_MAX], snap[PATH_MAX], packed[PATH_MAX], theirs[PATH_MAX], base[SS_HASH + 1], dir[PATH_MAX], kept[PATH_MAX], t[32];
     ss_meta mine, other; int ok = 0, got;
     snprintf(tmp, sizeof tmp, "%s.sync-tmp/out", save); snprintf(snap, sizeof snap, "%s/s", tmp);
@@ -424,11 +454,13 @@ static int send_save(const char *save, const char *title, const char *cloud) {
     }
     if (ss_pack(snap, title, packed, &mine)) { SRED("packing %s failed (errno=%d)", save, errno); goto done; }
     read_base(save, base);
-    if (!mine.files || !strcmp(mine.hash, base)) { ok = 1; goto done; }   // no save yet, or the one already in step
+    if (!mine.files) { ok = force ? 2 : 1; goto done; }
+    if (!force && !strcmp(mine.hash, base)) { ok = 1; goto done; }   // no save yet, or the one already in step
+    if (force) snprintf(g_exported, sizeof g_exported, "%s", mine.hash);
     if ((got = fetch_timed(cloud, theirs, FETCH_MS)) < 0) { SLOG("the cloud's save %s cannot be read now; sending later", cloud); goto done; }
     if (got && ss_read(theirs, NULL, &other)) SRED("the cloud's save %s is damaged; this device's replaces it", cloud);
     else if (got && !strcmp(other.hash, mine.hash)) { write_base(save, mine.hash); ok = 1; goto done; }
-    else if (got && other.files && strcmp(other.hash, base)) {
+    else if (got && other.files && (force || strcmp(other.hash, base))) {
         if (backup_dir(save, "cloud", kept, sizeof kept) || ss_read(theirs, kept, &other)) { SRED("cannot keep the cloud's save before replacing it (errno=%d); not sent", errno); goto done; }
         when(other.saved, t, sizeof t);
         SLOG("the cloud's save (from %s, saved %s) changed since this device's last sync; this device's newer one replaces it, and it is kept in %s", other.device, t, kept);
@@ -441,6 +473,27 @@ static int send_save(const char *save, const char *title, const char *cloud) {
 done:
     rm_tree(tmp); *strrchr(tmp, '/') = 0; rmdir(tmp);   // <save>.sync-tmp too, once nothing else is in it (a fetch that came too late may still be)
     return ok;
+}
+static int send_save(const char *save, const char *title, const char *cloud) { return send_save_f(save, title, cloud, 0); }
+
+int save_sync_export(const char *save, const char *title) {
+    char cloud[PATH_MAX], dd[PATH_MAX], p[PATH_MAX], t[PATH_MAX + 8], token[64];
+    if (!save || !*save) return -1;
+    snprintf(dd, sizeof dd, "%s", save); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
+    if (!cloud_file(title, cloud, sizeof cloud)) { SRED("export: sync is off (DM_SAVE_SYNC): nothing handed over"); return -1; }
+    g_exported[0] = 0;
+    int r = send_save_f(dd, title, cloud, 1);
+    if (r == 2) { SLOG("export: no save here to hand over"); return 0; }
+    if (r != 1 || !g_exported[0]) { SRED("export: the save did not reach %s", cloud); return -1; }
+    snprintf(token, sizeof token, "%lld-%d", (long long)time(NULL), (int)getpid());
+    snprintf(p, sizeof p, "%s", cloud); *strrchr(p, '/') = 0; strncat(p, "/take.txt", sizeof p - strlen(p) - 1); snprintf(t, sizeof t, "%s.tmp", p);
+    FILE *f = fopen(t, "w");
+    int err = !f || fprintf(f, "# save sync (dm/host/save_sync.h): a save handed over on purpose; each other version takes it at its next start\ntake\t%s\t%s\n", g_exported, token) < 0;
+    if (f && fclose(f)) err = 1;
+    if (err || rename(t, p)) { unlink(t); SRED("export: cannot write %s (errno=%d)", p, errno); return -1; }
+    mark_took(dd, token);   // (this version has it already)
+    SLOG("export: handed over %s to %s; the game's other versions take it at their next start", g_exported, cloud);
+    return 1;
 }
 
 // ---------- the host: the first mount, the sender, flushes ----------
@@ -486,7 +539,20 @@ static void mount_once(const char *save, const char *title) {
     if (got > 0 && ss_read(theirs, NULL, &other)) { SRED("the cloud's save %s is damaged: playing on with this device's, which replaces it", cloud); got = 0; }
     else if (got > 0 && strcasecmp(other.title, title)) { SRED("the cloud's save %s is %s's, not %s's: not used", cloud, other.title, title); got = -1; }
     if (got < 0) { SLOG("playing on with this device's save; it is sent after the game saves, unless the cloud's has changed meanwhile (then that one is kept)"); failed = 1; }
-    switch (got < 0 ? SS_KEEP : ss_decide(mine.hash, base, got ? other.hash : "", mine.saved, other.saved, &both)) {
+    char token[64];
+    if (got > 0 && read_take(cloud, other.hash, token, sizeof token) && !took(save, token)) {   // handed over on purpose (save_sync_export)
+        if (!strcmp(mine.hash, other.hash)) mark_took(save, token);
+        else if (strcmp(base, other.hash)) {   // (in step with it since, and changed here after: this device's newer save stays, as without the marker)
+            when(other.saved, t, sizeof t);
+            if (pull(save, theirs, &other, kept, sizeof kept)) { SRED("taking the save handed over failed (errno=%d): playing on with this device's", errno); failed = 1; got = -1; }
+            else {
+                write_base(save, other.hash); mark_took(save, token);
+                SLOG("took the save handed over from %s (saved %s)%s%s", other.device, t, *kept ? "; this device's is kept in " : "", kept);
+                got = -2;   // done: not decided again below
+            }
+        } else mark_took(save, token);
+    }
+    if (got != -2) switch (got < 0 ? SS_KEEP : ss_decide(mine.hash, base, got ? other.hash : "", mine.saved, other.saved, &both)) {
     case SS_PULL:
         when(other.saved, t, sizeof t);
         if (pull(save, theirs, &other, kept, sizeof kept)) { SRED("bringing the cloud's save in failed (errno=%d): playing on with this device's", errno); failed = 1; break; }

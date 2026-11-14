@@ -44,7 +44,18 @@ final class ThemePad {
     static final class Layout {
         final List<Ctl> ctls = new ArrayList<>();
         final List<Sprite> sprites = new ArrayList<>();
-        float designH, scale = 1, travel; String atlasName; Bitmap atlas;
+        float designH, scale = 1, travel; String atlasName;
+    }
+    /** A layout's atlas as nx2android's engine showed it (bake): premultiplied RGBA8 rows, w * 4 bytes each, in a direct buffer the host copies (Native.padAtlas) */
+    static final class Baked {
+        final java.nio.ByteBuffer px; final int w, h;
+        Baked(java.nio.ByteBuffer px, int w, int h) { this.px = px; this.w = w; this.h = h; }
+        /** The same as a bitmap, for the view's own drawing (when the present does not draw the gamepad) */
+        Bitmap bitmap() {
+            Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);   // premultiplied RGBA in memory, as px
+            px.rewind(); b.copyPixelsFromBuffer(px); px.rewind();
+            return b;
+        }
     }
 
     final Layout[] layouts = {new Layout(), new Layout()};
@@ -93,18 +104,64 @@ final class ThemePad {
     /** 0 tablet, 1 phone, by the window's shape */
     static int layoutFor(int w, int h) { return h > 0 && (float) w / h >= PHONE_ASPECT ? 1 : 0; }
 
-    /** The layout's atlas, read when it is first drawn (only the layout in use takes memory); null when it cannot be read */
-    Bitmap atlas(int l) {
+    /**
+     * The layout's atlas baked as nx2android's own engine showed it, so the gamepad keeps the player's pastel colours. That engine drew the theme's 8-bit sprites (UNORM)
+     * into the game's sRGB swapchain (Pokopia presents sRGB: its log's "swapchain ... format 43"), which encodes what is written to it: each colour came out through the sRGB
+     * curve, lighter than the PNG's, blended with the picture at the player's opacity in linear light. Banana Native's present (and an Android view) write bytes as they are,
+     * so the curve is baked in here: colour c becomes srgb(c), and the opacity op times the texel's alpha a becomes srgb(op * a), which keeps the sprites as light over a dark
+     * picture as they were (over a light one within a few percent). The menu button at max(op, 0.5), as there (findable at any opacity). Null when it cannot be read.
+     * Slow (about a quarter of a second): off the main thread.
+     */
+    Baked bake(int l, float op, float menuOp, int menuCtl) {
         Layout L = layouts[l];
-        if (L.atlas == null) {
-            try (InputStream in = ctx.getAssets().open(dir + L.atlasName)) {
-                BitmapFactory.Options o = new BitmapFactory.Options(); o.inScaled = false; o.inPreferredConfig = Bitmap.Config.ARGB_8888;
-                L.atlas = BitmapFactory.decodeStream(in, null, o);
-            } catch (IOException e) {
-                Native.note("[RED] on-screen controls: the gamepad theme's " + L.atlasName + " cannot be read: " + e.getMessage());
+        Bitmap a;
+        try (InputStream in = ctx.getAssets().open(dir + L.atlasName)) {
+            BitmapFactory.Options o = new BitmapFactory.Options(); o.inScaled = false; o.inPreferredConfig = Bitmap.Config.ARGB_8888; o.inPremultiplied = false;   // the PNG's own colours
+            a = BitmapFactory.decodeStream(in, null, o);
+        } catch (IOException e) {
+            Native.note("[RED] on-screen controls: the gamepad theme's " + L.atlasName + " cannot be read: " + e.getMessage());
+            return null;
+        }
+        if (a == null) { Native.note("[RED] on-screen controls: the gamepad theme's " + L.atlasName + " cannot be decoded"); return null; }
+        int w = a.getWidth(), h = a.getHeight();
+        java.nio.ByteBuffer px = java.nio.ByteBuffer.allocateDirect(w * h * 4);
+        int[] enc = new int[256];
+        for (int i = 0; i < 256; i++) enc[i] = Math.round(255 * srgb(i / 255f));
+        int[] pad = alphas(op * alpha), menu = alphas(menuOp * alpha);
+        int rows = Math.max(1, 65536 / w); int[] row = new int[w * rows]; byte[] out = new byte[w * rows * 4];
+        for (int y = 0; y < h; y += rows) {   // a band of rows at a time (no second copy of the whole atlas)
+            int n = Math.min(rows, h - y);
+            a.getPixels(row, 0, w, 0, y, w, n);
+            px.put(out, 0, put(row, w * n, out, enc, pad));
+        }
+        for (Sprite sp : L.sprites) {   // the menu button's sprites again, at its own opacity
+            if (sp.ctl != menuCtl) continue;
+            int x0 = Math.max(0, (int) Math.floor(sp.u)), y0 = Math.max(0, (int) Math.floor(sp.v)), x1 = Math.min(w, (int) Math.ceil(sp.u + sp.w)), y1 = Math.min(h, (int) Math.ceil(sp.v + sp.h));
+            if (x1 <= x0 || y1 <= y0) continue;
+            int[] r = new int[x1 - x0]; byte[] b = new byte[r.length * 4];
+            for (int y = y0; y < y1; y++) {
+                a.getPixels(r, 0, r.length, x0, y, r.length, 1);
+                px.position((y * w + x0) * 4); px.put(b, 0, put(r, r.length, b, enc, menu));
             }
         }
-        return L.atlas;
+        a.recycle();
+        px.rewind();
+        return new Baked(px, w, h);
+    }
+    /** sRGB's encoding curve (IEC 61966-2-1), 0..1 */
+    static float srgb(float x) { return x <= 0.0031308f ? 12.92f * x : (float) (1.055 * Math.pow(x, 1 / 2.4) - 0.055); }
+    private static int[] alphas(float op) {   // a texel's alpha 0..255 → the baked alpha, srgb(op * a)
+        int[] t = new int[256]; op = Math.max(0, Math.min(1, op));
+        for (int i = 0; i < 256; i++) t[i] = Math.round(255 * srgb(op * i / 255f));
+        return t;
+    }
+    private static int put(int[] argb, int n, byte[] out, int[] enc, int[] alpha) {   // n straight ARGB texels → premultiplied RGBA bytes; returns the byte count
+        for (int i = 0, o = 0; i < n; i++, o += 4) {
+            int c = argb[i], A = alpha[c >>> 24];
+            out[o] = (byte) ((enc[(c >> 16) & 255] * A + 127) / 255); out[o + 1] = (byte) ((enc[(c >> 8) & 255] * A + 127) / 255);
+            out[o + 2] = (byte) ((enc[c & 255] * A + 127) / 255); out[o + 3] = (byte) A;
+        }
+        return n * 4;
     }
 
     /** A DM_BTN_* name's bit (dm/host/dm_input.h: nn::hid::NpadButton's order) */

@@ -11,6 +11,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES"/>
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES"/>
     <!-- the Switch 2 engine (Engine.java): its version, and its frontend entry that starts a game -->
     <queries><package android:name="org.nx2a.launcher"/></queries>
     <application android:label="nx2android Builder" android:icon="@drawable/ic_app" android:theme="@style/Theme"
