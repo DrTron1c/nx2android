@@ -1,0 +1,60 @@
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/uni2celes/tablet.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/uni2celes/phone.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/unicornoverlord/tablet.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/unicornoverlord/phone.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/unielatclr/tablet.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/unielatclr/phone.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/viractal/tablet.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/viractal/phone.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/xc3/tablet.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/xc3/phone.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/work/nx2android/nx2android/tests/test_porter.py:92: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/zeldatotk/tablet.png'>
+  im = Image.open(pack / row[4]); self.assertIn(im.mode, ('P', 'RGBA'), pack.name)   # what overlay_theme.c decodes
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/unittest/case.py:589: ResourceWarning: unclosed file <_io.BufferedReader name='/home/runner/work/nx2android/nx2android/nxnative/dm/android/themes/zeldatotk/phone.png'>
+  if method() is not None:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......................[15:25:03] alias region: mem_alias 0x118000000 → 0x518000000 (+16 GB, --alias-headroom): /tmp/nx2a_test_build_sql_kzku/profile-mem/0100000000AAA000
+..................................................[15:25:17] packing /tmp/tmpq_gul9ne/game/updates/131072/romfs → /tmp/tmpq_gul9ne/work/extract/v131072/RomFS.img
+[15:25:17]   2 entries, 0.00 GB
+[15:25:17] packing /tmp/tmpq_gul9ne/game/dlc/0400A3A01EE4D001/0/romfs → /tmp/tmpq_gul9ne/work/aoc/1.img
+[15:25:17]   2 entries, 0.00 GB
+.......[memdiag] readback coverage: 1 range submissions / 1 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 2 range submissions / 2 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 3 range submissions / 3 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 1 range submissions / 1 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 2 range submissions / 2 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 3 range submissions / 3 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 1 range submissions / 1 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 2 range submissions / 2 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 3 range submissions / 3 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 1 range submissions / 1 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 2 range submissions / 2 total (others retain full cached-pool merges)
+[memdiag] readback coverage: 3 range submissions / 3 total (others retain full cached-pool merges)
+..................
+----------------------------------------------------------------------
+Ran 227 tests in 42.834s
+
+OK

@@ -1,0 +1,3 @@
+nxnative/dm/tools/patch_nso.py:21:1: 'from capstone import *' used; unable to detect undefined names
+nxnative/dm/tools/patch_nso.py:24:1: 'from nso_asm import *' used; unable to detect undefined names
+nxnative/dm/tools/sdis.py:9:1: 'from capstone import *' used; unable to detect undefined names
