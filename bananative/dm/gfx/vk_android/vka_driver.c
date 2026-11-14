@@ -10,6 +10,7 @@
 // A driver that fails to load falls back to the system one, with a [RED] line saying why.
 #if defined(__ANDROID__)
 #include "vka.h"
+#include "vka_ubwc.h"
 #include <ctype.h>
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -61,14 +62,14 @@ void *vka_driver_open(void) {
 // system driver flips it under SurfaceFlinger, and what the system then composites from compressed buffers comes out garbled: the picture flickers while Android
 // composites on the GPU (a screenshot, an overlay). So Turnip on a 740 gets FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=<1 or 0> from the system driver's version
 // (the "V@0863" of libGLESv2_adreno.so: 863, at least 700), as DroidDeck does (its #963). The environment's own FD_DEV_FEATURES wins; DM_VK_TU_UBWC_HINT=0 leaves it alone
-static int adreno_system_version(void) {   // the system driver's version (863 for 512.863), 0 when not found
+static int adreno_system_version(int *patch) {   // the system driver's version (676 for 512.676.76, *patch 76), 0 when not found
     int fd = open("/vendor/lib64/libGLESv2_adreno.so", O_RDONLY | O_CLOEXEC); if (fd < 0) return 0;
     static char buf[1 << 20]; size_t keep = 0; int v = 0; ssize_t n;
+    *patch = 0;
     while (!v && (n = read(fd, buf + keep, sizeof buf - keep)) > 0) {
         size_t len = keep + (size_t)n;
-        for (size_t i = 0; i + 7 <= len && !v; i++)
-            if (buf[i] == 'V' && buf[i + 1] == '@' && isdigit((unsigned char)buf[i + 2]) && isdigit((unsigned char)buf[i + 5])) v = atoi(buf + i + 2);
-        keep = len < 8 ? len : 8; memmove(buf, buf + len - keep, keep);
+        if (vka_ubwc_scan(buf, len, &v, patch) < 0) v = 0;
+        keep = len < 12 ? len : 12; memmove(buf, buf + len - keep, keep);
     }
     close(fd); return v;
 }
@@ -87,10 +88,10 @@ static void ubwc_hint(void) {
         else snprintf(m, sizeof m, "unreadable; SoC %s %s", soc, plat);
     }
     if (strncmp(m, "Adreno740", 9)) { snprintf(g_ubwc_note, sizeof g_ubwc_note, "Turnip: not an Adreno 740 (gpu_model \"%s\"): FD_DEV_FEATURES left alone", m); return; }
-    int v = adreno_system_version();
+    int patch = 0, v = adreno_system_version(&patch);
     if (!v) { snprintf(g_ubwc_note, sizeof g_ubwc_note, "Turnip on an Adreno 740: the system driver's version was not found, FD_DEV_FEATURES left alone"); return; }
-    setenv("FD_DEV_FEATURES", v >= 700 ? "enable_tp_ubwc_flag_hint=1" : "enable_tp_ubwc_flag_hint=0", 0);
-    snprintf(g_ubwc_note, sizeof g_ubwc_note, "Turnip on an Adreno 740 (%s), system driver V@%04d: FD_DEV_FEATURES=%s (DM_VK_TU_UBWC_HINT)", m, v, getenv("FD_DEV_FEATURES"));
+    setenv("FD_DEV_FEATURES", vka_ubwc_hint_for(v, patch) ? "enable_tp_ubwc_flag_hint=1" : "enable_tp_ubwc_flag_hint=0", 0);   // (vka_ubwc.h: v7xx and late 676 builds set it)
+    snprintf(g_ubwc_note, sizeof g_ubwc_note, "Turnip on an Adreno 740 (%s), system driver V@%04d.%d: FD_DEV_FEATURES=%s (DM_VK_TU_UBWC_HINT)", m, v, patch, getenv("FD_DEV_FEATURES"));
 }
 void vka_driver_notes(void) { if (g_ubwc_note[0]) { VLOG("%s", g_ubwc_note); g_ubwc_note[0] = 0; } }   // at device creation, once the log is open
 

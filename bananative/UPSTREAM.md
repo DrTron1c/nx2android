@@ -21,7 +21,8 @@ Each change is its own commit after the copy (`git log -- bananative`), so a new
   `nxThemeAssets` and drawn by `ThemePad.java` and `TouchControls.java`; the builder's palette for the in-game panel and the pages (`src/variant-nx2a/res`,
   `SidePanel.java`, BuildConfig.NX_FORK).
 - Frame generation through a game's hitches (`dm/gfx/vk_android/lsfg/lsfg_pacer.c`).
-- Turnip's UBWC flag hint on an Adreno 740 whose KGSL model file apps cannot read: the SoC from the system's properties (`dm/gfx/vk_android/vka_driver.c` ubwc_hint).
+- Turnip's UBWC flag hint on an Adreno 740 (`dm/gfx/vk_android/vka_driver.c` ubwc_hint, `vka_ubwc.h`): the SoC from the system's properties when apps cannot read KGSL's
+  model file, and on for late 676 drivers too (512.676.71 and .76 set it: the Xiaomi Pad 6S Pro's picture flickered under the volume panel and the shade with it off).
 - nx2android's touch rules for its themed gamepad (`dm/host/android/input_map.c` NXT_STYLE_NX2A, `touchControlsSetStyle`), as its own engine has them
   (`../nxnative/dm/android/front_android.c` touch_event): full tilt at a stick's ring with no dead zone, each control the rounded box it is drawn as with its reach,
   the spot between two face buttons pressing both, the D-pad's eight equal sectors, any number of fingers on a control, and floating sticks (on by default; the
