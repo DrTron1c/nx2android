@@ -55,22 +55,35 @@ void nxin_stick(float x, float y, float deadzone, int32_t *ox, int32_t *oy);   /
 // so circles stay round on any aspect ratio. Touches that land on a control drive it; every other touch inside the game's picture is a touchscreen finger
 enum { NXT_BUTTON = 0, NXT_STICK = 1, NXT_DPAD = 2 };
 #define NXT_MAX 24
-typedef struct { int kind; uint64_t buttons; int stick; float x, y, r; char label[8]; } nxhost_touch_control;   // stick: 0 left, 1 right (NXT_STICK only)
+// stick: 0 left, 1 right (NXT_STICK only). hw, hh, corner, reach: the control as a rounded box, for NXT_STYLE_NX2A (0 in the other style): half its width and height,
+// its corners' radius and how far outside its edge it still takes a touch, all in units of the screen height
+typedef struct { int kind; uint64_t buttons; int stick; float x, y, r; char label[8]; float hw, hh, corner, reach; } nxhost_touch_control;
 typedef struct { int id, ctl, slot; float x, y; } nxin_pointer;   // ctl: control index, or -1 for a touchscreen finger in slot (dm_touch id), -2 for a touch outside both
+// How touches drive the controls. 0, Banana Native's: round controls with grab rings, a stick at full tilt at 0.8 of its radius past a dead zone, one finger a control.
+// NXT_STYLE_NX2A, nx2android's own engine's (nxnative/dm/android/front_android.c touch_event, overlay_layout.h ctl_at), for its themed gamepad (TouchControls with a
+// ThemePad): a control is the rounded box it is drawn as, with its reach, a touch between two takes the one it is deeper into, a spot between two adjacent face buttons
+// presses both, a stick is at full tilt at its ring (its half width) with no dead zone, the D-pad has a quarter of its half width dead in the middle and eight equal
+// sectors, and any number of fingers may hold a control (each event is worked out again from every finger). NXT_STYLE_FLOAT (with NX2A): the sticks float, a touch
+// on no control takes the stick of its half of the screen, centred where it lands (kept a stick's half width inside the screen)
+enum { NXT_STYLE_NX2A = 1, NXT_STYLE_FLOAT = 2 };
 typedef struct {
     nxhost_touch_control c[NXT_MAX]; int n;
     int enabled;                    // 0: the controls are hidden and every touch goes to the game's touchscreen
+    int style;                      // NXT_STYLE_* bits
     float sw, sh;                   // screen size in pixels (aspect for hit tests; any unit)
     float gx, gy, gw, gh;           // the game's picture inside the screen, normalized
     nxin_pointer p[16]; int np;
-    uint64_t pressed[NXT_MAX];      // what each control holds now (buttons), for the launcher's drawing
+    uint64_t pressed[NXT_MAX];      // what each control holds now (buttons), for the launcher's drawing; in NXT_STYLE_NX2A a stick a finger holds has 1 (not a button)
     float sx[2], sy[2];             // stick deflection, -1..1, y up
+    int fptr[2]; float fx[2], fy[2];   // NXT_STYLE_FLOAT: the pointer id on each floating stick (-1 none) and its centre (normalized screen coordinates)
 } nxin_touch;
 void nxin_touch_init(nxin_touch *t);              // the default layout, enabled, 16:9 screen, picture full screen
 void nxin_touch_default_layout(nxin_touch *t);
+int nxin_touch_floating(const nxin_touch *t, float c[4]);   // the floating sticks' centres (lx, ly, rx, ry, normalized; -1 for a stick no finger holds); 0 when they do not float
 // A layout of the launcher's own (it draws the controls): n controls (at most NXT_MAX), or the default layout when n <= 0. Pointers on the old layout are let go
 // (bit 1 / 2 of the return say whether the pad / touchscreen changed, as nxin_touch_event); *kept is the number of controls now
 int nxin_touch_set_layout(nxin_touch *t, const nxhost_touch_control *c, int n, int *kept);
+int nxin_touch_set_style_layout(nxin_touch *t, int style, const nxhost_touch_control *c, int n, int *kept);   // the same with the style (NXT_STYLE_* bits)
 // One pointer event: action is MotionEvent's (masked), id its pointer id, x / y normalized screen coordinates. Returns bit 1 when the pad state changed, bit 2 when the touchscreen did
 int nxin_touch_event(nxin_touch *t, int action, int id, float x, float y);
 void nxin_touch_pad(const nxin_touch *t, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);

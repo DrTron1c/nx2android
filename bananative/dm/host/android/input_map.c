@@ -145,13 +145,109 @@ int nxin_touch_set_layout(nxin_touch *t, const nxhost_touch_control *c, int n, i
         for (int i = 0; i < t->n; i++) { t->c[i] = c[i]; t->c[i].label[sizeof t->c[i].label - 1] = 0; if (t->c[i].stick != 1) t->c[i].stick = 0; }
     }
     memset(t->pressed, 0, sizeof t->pressed); t->sx[0] = t->sy[0] = t->sx[1] = t->sy[1] = 0;
+    t->fptr[0] = t->fptr[1] = -1;
     if (kept) *kept = t->n;
+    return r;
+}
+int nxin_touch_set_style_layout(nxin_touch *t, int style, const nxhost_touch_control *c, int n, int *kept) {
+    int r = nxin_touch_set_layout(t, c, n, kept);   // (lets go of every pointer: none is left driving a control by the old style's rules)
+    t->style = style & NXT_STYLE_NX2A ? style & (NXT_STYLE_NX2A | NXT_STYLE_FLOAT) : 0;
     return r;
 }
 void nxin_touch_init(nxin_touch *t) {
     memset(t, 0, sizeof *t);
-    t->enabled = 1; t->sw = 16; t->sh = 9; t->gw = t->gh = 1;
+    t->enabled = 1; t->sw = 16; t->sh = 9; t->gw = t->gh = 1; t->fptr[0] = t->fptr[1] = -1;
     nxin_touch_default_layout(t);
+}
+int nxin_touch_floating(const nxin_touch *t, float c[4]) {
+    int on = (t->style & NXT_STYLE_FLOAT) != 0;
+    for (int s = 0; s < 2; s++) { int held = on && t->fptr[s] >= 0; c[2 * s] = held ? t->fx[s] : -1; c[2 * s + 1] = held ? t->fy[s] : -1; }
+    return on;
+}
+
+// ---------- nx2android's semantics (NXT_STYLE_NX2A): nxnative/dm/android/front_android.c touch_event and ctl_at, overlay_layout.h, in units of the screen height ----------
+#define NX_FACE (DM_BTN_A | DM_BTN_B | DM_BTN_X | DM_BTN_Y)
+static float nx_aspect(const nxin_touch *t) { return t->sh > 0 ? t->sw / t->sh : 1; }
+// the signed distance from (dx, dy), an offset from a rounded box's centre, to its edge (negative inside); hw, hh: half its width and height, rad: its corners (ov_box_sdf)
+static float nx_box_sdf(float dx, float dy, float hw, float hh, float rad) {
+    float qx = fabsf(dx) - hw + rad, qy = fabsf(dy) - hh + rad, px = qx > 0 ? qx : 0, py = qy > 0 ? qy : 0;
+    return sqrtf(px * px + py * py) + fminf(fmaxf(qx, qy), 0) - rad;
+}
+// a small spot between two adjacent face buttons presses both, without changing their own areas (ov_face_combo); X, Y in height units
+static uint64_t nx_face_combo(const nxin_touch *t, float X, float Y) {
+    float a = nx_aspect(t);
+    for (int i = 0; i < t->n; i++) {
+        const nxhost_touch_control *p = &t->c[i]; if (p->kind != NXT_BUTTON || !(p->buttons & NX_FACE) || p->hw <= 0) continue;
+        for (int j = i + 1; j < t->n; j++) {
+            const nxhost_touch_control *q = &t->c[j]; uint64_t pair = p->buttons | q->buttons;
+            if (q->kind != NXT_BUTTON || !(q->buttons & NX_FACE) || q->hw <= 0 || p->buttons == q->buttons || pair == (DM_BTN_A | DM_BTN_Y) || pair == (DM_BTN_X | DM_BTN_B)) continue;
+            float px = p->x * a, qx = q->x * a, distance = hypotf(px - qx, p->y - q->y);
+            float radius = fminf(fminf(p->hw, p->hh), fminf(q->hw, q->hh));
+            if (distance < radius || distance > radius * 3.5f) continue;
+            if (hypotf(X - (px + qx) * 0.5f, Y - (p->y + q->y) * 0.5f) <= radius * 0.35f) return pair;
+        }
+    }
+    return 0;
+}
+// the control a touch takes (ctl_at): the one it is deepest into for its size, within each control's reach; a spot between two face buttons takes the first of them
+static int nx_hit(const nxin_touch *t, float x, float y) {
+    float a = nx_aspect(t), X = x * a, bd = 1e9f; int best = -1;
+    for (int i = 0; i < t->n; i++) {
+        const nxhost_touch_control *c = &t->c[i]; if (c->hw <= 0 || c->hh <= 0) continue;
+        if (c->kind == NXT_STICK && (t->style & NXT_STYLE_FLOAT)) continue;   // floating sticks: wherever the finger lands (nx_down)
+        float d = nx_box_sdf(X - c->x * a, y - c->y, c->hw, c->hh, c->corner), m = fminf(c->hw, c->hh);
+        if (d < c->reach && (d + m) / (m + c->reach) < bd) { bd = (d + m) / (m + c->reach); best = i; }
+    }
+    if (best < 0 || (t->c[best].kind == NXT_BUTTON && (t->c[best].buttons & NX_FACE))) {
+        uint64_t pair = nx_face_combo(t, X, y);
+        if (pair) for (int i = 0; i < t->n; i++) if (t->c[i].kind == NXT_BUTTON && (t->c[i].buttons & pair)) return i;
+    }
+    return best;
+}
+// every control's state from every finger on one, as each event leaves them (touch_event): buttons (a face button with the pair its spot presses), the D-pad's eight
+// sectors past a quarter of its half width, a stick's offset in its half widths up to its ring
+static void nx_drive(nxin_touch *t) {
+    static const uint64_t dir[8] = {DM_BTN_RIGHT, DM_BTN_RIGHT | DM_BTN_DOWN, DM_BTN_DOWN, DM_BTN_DOWN | DM_BTN_LEFT, DM_BTN_LEFT, DM_BTN_LEFT | DM_BTN_UP, DM_BTN_UP, DM_BTN_UP | DM_BTN_RIGHT};
+    float a = nx_aspect(t);
+    memset(t->pressed, 0, sizeof t->pressed); t->sx[0] = t->sy[0] = t->sx[1] = t->sy[1] = 0;
+    for (int i = 0; i < t->np; i++) {
+        const nxin_pointer *p = &t->p[i]; if (p->ctl < 0 || p->ctl >= t->n) continue;
+        const nxhost_touch_control *c = &t->c[p->ctl]; if (c->hw <= 0) continue;
+        float cx = c->x, cy = c->y;
+        if (c->kind == NXT_STICK && (t->style & NXT_STYLE_FLOAT) && t->fptr[c->stick] >= 0) { cx = t->fx[c->stick]; cy = t->fy[c->stick]; }
+        float X = p->x * a, Y = p->y, dx = (X - cx * a) / c->hw, dy = (Y - cy) / c->hw, m = sqrtf(dx * dx + dy * dy);
+        if (c->kind == NXT_BUTTON) {
+            uint64_t pair = (c->buttons & NX_FACE) ? nx_face_combo(t, X, Y) : 0;
+            t->pressed[p->ctl] |= pair && (pair & c->buttons) ? pair : c->buttons;
+        } else if (c->kind == NXT_DPAD) {
+            if (m > 0.25f) t->pressed[p->ctl] |= dir[(int)lroundf(atan2f(dy, dx) / (3.14159265f / 4)) & 7];   // 0 = right, clockwise (y grows downward)
+        } else {
+            if (m > 1) { dx /= m; dy /= m; }
+            t->sx[c->stick] = dx; t->sy[c->stick] = -dy; t->pressed[p->ctl] = 1;   // (the later finger, when two hold it)
+        }
+    }
+}
+static int nx_down(nxin_touch *t, nxin_pointer *p) {   // returns as nxin_touch_event
+    int c = t->enabled ? nx_hit(t, p->x, p->y) : -1;
+    if (c < 0 && t->enabled && (t->style & NXT_STYLE_FLOAT)) {   // a touch on no control takes the stick of its half of the screen, centred where it landed
+        int s = p->x >= 0.5f, st = -1;
+        if (t->fptr[s] < 0) {
+            for (int k = 0; k < t->n; k++) if (t->c[k].kind == NXT_STICK && t->c[k].stick == s && t->c[k].hw > 0) st = k;
+            if (st >= 0) {
+                float a = nx_aspect(t), hw = t->c[st].hw, X = fminf(fmaxf(p->x * a, hw), a - hw), Y = fminf(fmaxf(p->y, hw), 1 - hw);
+                t->fx[s] = X / a; t->fy[s] = Y; t->fptr[s] = p->id; c = st;
+            }
+        }
+    }
+    if (c >= 0) { p->ctl = c; nx_drive(t); return 1; }
+    return -1;   // not a control: the touchscreen's (nxin_touch_event)
+}
+static int nx_up(nxin_touch *t, int k) {
+    int r = t->p[k].ctl >= 0 ? 1 : t->p[k].ctl == -1 ? 2 : 0;
+    for (int s = 0; s < 2; s++) if (t->fptr[s] == t->p[k].id) t->fptr[s] = -1;
+    t->p[k] = t->p[--t->np];
+    if (r & 1) nx_drive(t);
+    return r;
 }
 // Distance from a control's centre in units of the screen height
 static float dist(const nxin_touch *t, const nxhost_touch_control *c, float x, float y, float *dx, float *dy) {
@@ -196,13 +292,17 @@ int nxin_touch_event(nxin_touch *t, int action, int id, float x, float y) {
     int k = -1; for (int i = 0; i < t->np; i++) if (t->p[i].id == id) k = i;
     if (action == AM_CANCEL) {   // the whole gesture is gone
         int r = 0; for (int i = 0; i < t->np; i++) r |= t->p[i].ctl >= 0 ? 1 : t->p[i].ctl == -1 ? 2 : 0, release(t, t->p[i].ctl);
-        t->np = 0; return r;
+        t->np = 0; t->fptr[0] = t->fptr[1] = -1; return r;
     }
+    int nx = (t->style & NXT_STYLE_NX2A) != 0;
     if (action == AM_DOWN || action == AM_POINTER_DOWN) {
         if (k >= 0 || t->np >= 16) return 0;
-        nxin_pointer *p = &t->p[t->np++]; p->id = id; p->x = x; p->y = y; p->slot = -1;
-        p->ctl = t->enabled ? hit(t, x, y) : -1;
-        if (p->ctl >= 0) { for (int i = 0; i < t->np - 1; i++) if (t->p[i].ctl == p->ctl) { p->ctl = -2; return 0; } drive(t, p); return 1; }   // a control has one pointer
+        nxin_pointer *p = &t->p[t->np++]; p->id = id; p->x = x; p->y = y; p->slot = -1; p->ctl = -1;
+        if (nx) { if (nx_down(t, p) > 0) return 1; }   // any number of fingers may hold a control
+        else {
+            p->ctl = t->enabled ? hit(t, x, y) : -1;
+            if (p->ctl >= 0) { for (int i = 0; i < t->np - 1; i++) if (t->p[i].ctl == p->ctl) { p->ctl = -2; return 0; } drive(t, p); return 1; }   // a control has one pointer
+        }
         if (!in_game(t, x, y)) { p->ctl = -2; return 0; }
         p->ctl = -1;
         uint32_t used = 0; for (int i = 0; i < t->np - 1; i++) if (t->p[i].ctl == -1) used |= 1u << t->p[i].slot;
@@ -212,13 +312,13 @@ int nxin_touch_event(nxin_touch *t, int action, int id, float x, float y) {
     if (k < 0) return 0;
     nxin_pointer *p = &t->p[k]; p->x = x; p->y = y;
     int r = p->ctl >= 0 ? 1 : p->ctl == -1 ? 2 : 0;
-    if (action == AM_MOVE) { if (p->ctl >= 0) drive(t, p); return r; }
-    if (action == AM_UP || action == AM_POINTER_UP) { release(t, p->ctl); t->p[k] = t->p[--t->np]; return r; }
+    if (action == AM_MOVE) { if (p->ctl >= 0) { if (nx) nx_drive(t); else drive(t, p); } return r; }
+    if (action == AM_UP || action == AM_POINTER_UP) { if (nx) return nx_up(t, k); release(t, p->ctl); t->p[k] = t->p[--t->np]; return r; }
     return 0;
 }
 static int32_t axis(float v) { return (int32_t)lrintf(v * DM_STICK_MAX); }
 void nxin_touch_pad(const nxin_touch *t, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
-    uint64_t b = 0; for (int i = 0; i < t->n; i++) b |= t->pressed[i];
+    uint64_t b = 0; for (int i = 0; i < t->n; i++) if (t->c[i].kind != NXT_STICK) b |= t->pressed[i];   // (a held stick's 1 is not a button)
     *buttons = b; *lx = axis(t->sx[0]); *ly = axis(t->sy[0]); *rx = axis(t->sx[1]); *ry = axis(t->sy[1]);
 }
 int nxin_touch_fingers(const nxin_touch *t, nxin_finger *out, int max) {

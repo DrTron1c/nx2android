@@ -14,6 +14,7 @@ import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.system.ErrnoException;
@@ -677,6 +678,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             skipStart();
             // DM_TEST_CRASH (a test crash, ExitWatch): the test app only
             if (!testApp() && user.removeIf(kv -> kv.startsWith("DM_TEST_CRASH="))) unknownNotes.add("[nxlaunch] DM_TEST_CRASH not taken: the test app only");
+            if (BuildConfig.NX_FORK) env.add(saveSyncLine());   // nx2android's engine: the save in step with the game's other versions (a DM_SAVE_SYNC line of the user's comes later and wins)
             env.addAll(user);
             for (String k : Readiness.unknownSwitches(user, KNOWN_SWITCHES)) unknownNotes.add(Readiness.unknownLine(k, switchFrom(k, files, id), KNOWN_SWITCHES));
             boolean stretch = false;
@@ -848,6 +850,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
 
     private void end() {
+        if (started) Native.saveFlush(3000);   // the last save to the sync folder before the process ends (nxhost_save_flush)
         ExitWatch.stopped();
         backToFrontend();
         finish();
@@ -897,6 +900,20 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         if (saveLock != null) saveLock.close();
         saveLock = l;
         saveLocked = save;
+    }
+
+    /**
+     * nx2android's shared save folder (dm/host/save_sync.h): each game's committed save as &lt;storage&gt;/nx2android/save-sync/&lt;title ID&gt;/save.dmsync, which nx2android's
+     * per-game apps (its own engine) use too, and Banana Native when its game settings add the same DM_SAVE_SYNC line. A game takes the newest save there at its first
+     * save mount and sends its own a few seconds after each save and when the app leaves the screen; both sides changed: the newer wins, the other is kept in
+     * &lt;save&gt;-backups. Needs All files access (the app reads game folders with it already); without it the host logs that sync is off.
+     */
+    private String saveSyncLine() {
+        File dir = new File(Environment.getExternalStorageDirectory(), "nx2android/save-sync");
+        boolean access = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager();
+        if (access && !dir.isDirectory() && !dir.mkdirs()) Native.note("[RED] save sync: cannot make " + dir);
+        Native.note("[nxlaunch] save sync: " + dir + (access ? "" : " (no All files access: the host cannot reach it, so the save is not synced; allow it in Settings › Apps › nx2android engine)"));
+        return "DM_SAVE_SYNC=" + dir;
     }
 
     /** Environment keys only the launcher sets: a line of env.txt, env-<id>.txt or the game's own lines that names one is refused (DM_SAVE: see allowSave) */

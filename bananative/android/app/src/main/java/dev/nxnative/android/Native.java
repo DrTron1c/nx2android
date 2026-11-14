@@ -63,6 +63,13 @@ final class Native {
      *  to the view), r (in units of the view's height). The number the host kept; -1 when this host has no such entry point (no controls are drawn). */
     static native int touchControlsSet(float[] controls);
 
+    /** nx2android's themed gamepad: ten floats per control (the six above, then hw, hh, corner, reach: the control as a rounded box, in units of the view's height) and
+     *  how touches drive them (input_map.h NXT_STYLE_*: 1 nx2android's engine's rules, | 2 floating sticks). As touchControlsSet; -1 without the entry point. */
+    static native int touchControlsSetStyle(float[] controls, int style);
+
+    /** The floating sticks' centres (lx, ly, rx, ry, normalized; -1 for a stick no finger holds); false when the sticks do not float. */
+    static native boolean touchControlsFloating(float[] out);
+
     /** What each control holds now (DM_BTN_* bits) and the sticks (lx, ly, rx, ry; -1..1, y up). */
     static native void touchControlsState(long[] pressed, float[] stick);
 
@@ -75,6 +82,9 @@ final class Native {
 
     /** 0 onPause, 1 onStop, 2 onStart, 3 onResume, 4 pause (the game suspended while its screen shows), 5 continue (input_android.h). */
     static native void lifecycle(int event);
+
+    /** Sends the save to the sync folder (DM_SAVE_SYNC) now if a save has not gone yet, waiting at most timeoutMs: before Stop ends the process. True when it is there (or sync is off). */
+    static native boolean saveFlush(int timeoutMs);
 
     /** Whether the host is paused (4 until 5; nxhost_paused): 1 or 0, -1 when this host has no such entry point. */
     static native int paused();

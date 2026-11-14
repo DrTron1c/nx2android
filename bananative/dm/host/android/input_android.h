@@ -35,6 +35,11 @@ NXHOST_API void nxhost_touch_controls_state(uint64_t *pressed, int max, float st
 // The launcher's own layout (it draws the controls; the host still decides what each touch drives): n controls in the units above, at most NXT_MAX; n <= 0 or NULL brings
 // the default layout back. Touches held on the old layout are let go. Returns the number of controls now
 NXHOST_API int nxhost_touch_controls_set(const nxhost_touch_control *c, int n);
+// The same with how touches drive them (input_map.h NXT_STYLE_*: nx2android's themed gamepad takes NXT_STYLE_NX2A, and NXT_STYLE_FLOAT for floating sticks, with each
+// control's hw / hh / corner / reach); nxhost_touch_controls_set is style 0
+NXHOST_API int nxhost_touch_controls_set_style(int style, const nxhost_touch_control *c, int n);
+// The floating sticks' centres now (lx, ly, rx, ry, normalized to the view; -1 for a stick no finger holds); false when the sticks do not float
+NXHOST_API bool nxhost_touch_controls_floating(float c[4]);
 
 // ---- Motion ----
 // The phone's gyro and accelerometer through ASensorManager, at 100 Hz, as player 1's six-axis sensor, and phone shakes as DM_BTN_SHAKE. Start in onResume, stop in onPause.
@@ -65,6 +70,9 @@ int android_text_input(const char *title, const char *sub, const char *guide, co
 // audio suspended, the guest clock frozen, the graphics drained and gated, the guest threads stopped at their next SVC (dm_guest_suspend), the game told Background; it
 // comes back OutOfFocus and InFocus once resumed (3). Each change of suspension logs a "[lifecycle] …" line with the threads' CPU since the last one. Audio focus loss (AUDIOFOCUS_LOSS / LOSS_TRANSIENT) is an interruption: nxhost_audio_interrupt(true), and false when focus comes back
 NXHOST_API void nxhost_lifecycle(int event);
+// Sends the save to the sync folder now (DM_SAVE_SYNC, save_sync.h) if a save since the last send has not gone yet, waiting at most timeout_ms (Stop, before the
+// process ends; onStop sends it on a thread of its own). True when the folder has this save (or sync is off)
+NXHOST_API bool nxhost_save_flush(int timeout_ms);
 // Whether the game is paused (4 until 5), whatever the screen: a game screen created again while the game runs (the activity recreated) shows the pause it finds
 NXHOST_API int nxhost_paused(void);
 NXHOST_API void nxhost_audio_interrupt(bool on);

@@ -4,6 +4,7 @@
 #include "../front.h"
 #include "../hle_haptics.h"
 #include "../pad_slots.h"
+#include "../save_sync.h"
 #include "input_android.h"
 #include <android/looper.h>
 #include <dirent.h>
@@ -142,14 +143,22 @@ void nxhost_touch_controls_enable(bool on) {
     if (g_touch.enabled != on) { touch_release_all(); g_touch.enabled = on; }
     pthread_mutex_unlock(&g_mu);
 }
-int nxhost_touch_controls_set(const nxhost_touch_control *c, int n) {
+int nxhost_touch_controls_set_style(int style, const nxhost_touch_control *c, int n) {
     pthread_mutex_lock(&g_mu); touch_once();
-    int kept = 0, r = nxin_touch_set_layout(&g_touch, c, n, &kept);
+    int kept = 0, was = g_touch.style, r = nxin_touch_set_style_layout(&g_touch, style, c, n, &kept), now = g_touch.style;
     if (r & 1) publish_touch_pad();
     if (r & 2) publish_fingers();
     pthread_mutex_unlock(&g_mu);
-    LOG("input: on-screen controls: %d, %s layout", kept, c && n > 0 ? "the launcher's" : "the default");
+    LOG("input: on-screen controls: %d, %s layout%s", kept, c && n > 0 ? "the launcher's" : "the default",
+        !(now != was || now) ? "" : !(now & NXT_STYLE_NX2A) ? ", Banana Native's touch rules" : (now & NXT_STYLE_FLOAT) ? ", nx2android's touch rules, floating sticks" : ", nx2android's touch rules");
     return kept;
+}
+int nxhost_touch_controls_set(const nxhost_touch_control *c, int n) { return nxhost_touch_controls_set_style(0, c, n); }
+bool nxhost_touch_controls_floating(float c[4]) {
+    pthread_mutex_lock(&g_mu); touch_once();
+    int on = nxin_touch_floating(&g_touch, c);
+    pthread_mutex_unlock(&g_mu);
+    return on;
 }
 int nxhost_touch_controls(nxhost_touch_control *out, int max) {
     pthread_mutex_lock(&g_mu); touch_once();
@@ -359,7 +368,18 @@ static void input_release(void) {   // what is held when the app leaves the scre
     touch_release_all();
     pthread_mutex_unlock(&g_mu);
 }
+// The save goes to the sync folder (DM_SAVE_SYNC) when the app leaves the screen, as the iPhone app sends it when it goes to the background (front_ios.m): a game
+// saved within the sender's quiet time, then the player switched to another version of it (nx2android's own engine, Banana Native), which takes it at its first
+// save mount. On a thread of its own: onStop does not wait for it, and a process Android ends right after has usually sent it by then
+static void *flush_thread(void *arg) {
+    (void)arg;
+    if (!save_sync_flush(15000)) LOG("save sync: the save did not reach the sync folder on the way to the background; it goes after the next save or at the next start");
+    return NULL;
+}
+bool nxhost_save_flush(int timeout_ms) { return save_sync_flush(timeout_ms) != 0; }
+static void flush_save(void) { pthread_t t; if (!pthread_create(&t, NULL, flush_thread, NULL)) pthread_detach(t); }
 void nxhost_lifecycle(int ev) {
+    if (ev == 1) flush_save();
     pthread_mutex_lock(&g_lc_mu);
     switch (ev) {
     case 0: g_resumed = 0; input_release(); if (!g_susp) dm_focus_set(2); dm_haptics_suspend(DM_HAPTICS_INACTIVE, 1); break;   // onPause

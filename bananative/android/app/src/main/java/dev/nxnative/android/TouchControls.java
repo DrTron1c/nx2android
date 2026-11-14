@@ -98,6 +98,12 @@ final class TouchControls extends View {
     private int themeLay, menuCtl = -1;
     private final int[] ctlOf = new int[MAX];      // each control's index in the theme's layout
     private final float[] base = new float[MAX];   // its radius before the user's group scale (the sprites scale with it)
+    private final float[] hw0 = new float[MAX], hh0 = new float[MAX];   // half its width and height then (px): the host hit-tests the box it is drawn as
+    private final boolean[] boxy = new boolean[MAX];   // not as wide as high: a rounded box (the shoulders, − and +), not a circle
+    // Floating sticks (the panel's Controls rows, with a theme; nx2android's pause menu had them): a touch on no control takes the stick of its half of the screen,
+    // centred where it lands, drawn only while a finger holds it (input_map.h NXT_STYLE_FLOAT)
+    private boolean floating;
+    private final float[] fl = {-1, -1, -1, -1};   // where each floating stick is (normalized; -1: no finger on it)
     private float mx, my, mhw, mhh;               // the menu control's centre and half size
     private final Paint bmp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
     private final android.graphics.Rect src = new android.graphics.Rect();
@@ -119,6 +125,7 @@ final class TouchControls extends View {
         opacity = prefs().getFloat("opacity", 0.6f);
         scale = prefs().getFloat("scale", 1f);
         haptics = prefs().getBoolean("haptics", true);
+        floating = prefs().getBoolean("float", false);
         shown = prefs().getBoolean("shown", true);
         line.setStyle(Paint.Style.STROKE);
         text.setTextAlign(Paint.Align.CENTER);
@@ -256,12 +263,16 @@ final class TouchControls extends View {
         tr = 10 * u; tx = w / 2f; ty = m + tr;   // small and faint (onDraw); its touch area is larger (onToggle)
         if (theme != null && menuCtl >= 0) { tx = mx; ty = my; tr = Math.max(mhw, mhh); }   // the theme's menu control
         // The host's units: centres normalized to the view, radii in units of its height; a stick's grab ring is its own (input_map.c)
-        float[] f = new float[n * 6];
-        for (int i = 0; i < n; i++) {
-            f[6 * i] = kind[i]; f[6 * i + 1] = buttons[i]; f[6 * i + 2] = stick[i];
-            f[6 * i + 3] = cx[i] / w; f[6 * i + 4] = cy[i] / h; f[6 * i + 5] = r[i] / h;
+        int kept;
+        if (theme != null) kept = input ? sendThemed(w, h) : -1;   // nx2android's touch rules
+        else {
+            float[] f = new float[n * 6];
+            for (int i = 0; i < n; i++) {
+                f[6 * i] = kind[i]; f[6 * i + 1] = buttons[i]; f[6 * i + 2] = stick[i];
+                f[6 * i + 3] = cx[i] / w; f[6 * i + 4] = cy[i] / h; f[6 * i + 5] = r[i] / h;
+            }
+            kept = input ? Native.touchControlsSet(f) : -1;
         }
-        int kept = input ? Native.touchControlsSet(f) : -1;
         boolean was = available;
         available = kept == n;
         if (!available && was != available) Native.note("on-screen controls: this host takes no layout (" + kept + "): not drawn");
@@ -288,8 +299,37 @@ final class TouchControls extends View {
                 case "menu": menuCtl = ci; mx = x; my = y; mhw = hw; mhh = hh; continue;
                 default: continue;
             }
-            if (i >= 0) { ctlOf[i] = ci; base[i] = rad; }
+            if (i >= 0) { ctlOf[i] = ci; base[i] = rad; hw0[i] = hw; hh0[i] = hh; boxy[i] = t.w != t.h; }
         }
+    }
+
+    /** The themed layout to the host with nx2android's engine's touch rules (input_map.h NXT_STYLE_NX2A; nxnative/dm/android/overlay_layout.h ov_corner and ov_reach): each
+     *  control the box it is drawn as (at the user's group scale), round or with corners 0.35 of its shorter half, taking touches a quarter of its size outside it
+     *  (a button: at least to 0.045 of the view's height from its centre) or half of it (a stick, the D-pad). Falls back to the plain layout on a host without it */
+    private int sendThemed(int w, int h) {
+        float[] f = new float[n * 10];
+        for (int i = 0; i < n; i++) {
+            float k = base[i] > 0 ? r[i] / base[i] : 1, hw = hw0[i] * k / h, hh = hh0[i] * k / h, m = Math.min(hw, hh);
+            f[10 * i] = kind[i]; f[10 * i + 1] = buttons[i]; f[10 * i + 2] = stick[i];
+            f[10 * i + 3] = cx[i] / w; f[10 * i + 4] = cy[i] / h; f[10 * i + 5] = r[i] / h;
+            f[10 * i + 6] = hw; f[10 * i + 7] = hh; f[10 * i + 8] = boxy[i] ? m * 0.35f : m;
+            f[10 * i + 9] = kind[i] == BUTTON ? Math.max(m * 0.25f, 0.045f * scale - m) : m * 0.5f;
+        }
+        int kept = Native.touchControlsSetStyle(f, 1 | (floating ? 2 : 0));
+        if (kept >= 0) return kept;
+        float[] g = new float[n * 6];   // an older host: Banana Native's rules
+        for (int i = 0; i < n; i++) System.arraycopy(f, 10 * i, g, 6 * i, 6);
+        return Native.touchControlsSet(g);
+    }
+
+    /** Floating sticks on or off (the panel's Controls rows; kept for every game) */
+    private void setFloating(boolean on) {
+        if (on == floating) return;
+        floating = on;
+        prefs().edit().putBoolean("float", on).commit();
+        Arrays.fill(fl, -1);
+        Native.note("on-screen controls: floating sticks " + (on ? "on" : "off"));
+        relayout();
     }
 
     // ---- The user's layout: groups moved and scaled, the picture placed, kept per screen shape ----
@@ -477,8 +517,13 @@ final class TouchControls extends View {
     private void send(int action, int id, float x, float y) { if (input) Native.touch(action, id, x / getWidth(), y / getHeight()); }
 
     private boolean onToggle(float x, float y) {   // 24 units: a 48 dp target; the theme's menu control: its own size, always there
-        float dx = x - tx, dy = y - ty, g = theme != null && menuCtl >= 0 ? tr * 1.2f : tr * 2.4f;
-        return (button || theme != null && menuCtl >= 0) && visible() && dx * dx + dy * dy <= g * g;
+        float dx = x - tx, dy = y - ty, g = tr * 2.4f;
+        if (theme != null && menuCtl >= 0) {   // the pill it is drawn as, with nx2android's reach (overlay_layout.h ov_sdf, ov_reach)
+            float m = Math.min(mhw, mhh), reach = Math.max(m * 0.25f, 0.045f * scale * getHeight() - m);
+            float qx = Math.abs(dx) - mhw + m, qy = Math.abs(dy) - mhh + m, px = Math.max(qx, 0), py = Math.max(qy, 0);
+            return visible() && (float) Math.sqrt(px * px + py * py) + Math.min(Math.max(qx, qy), 0) - m < reach;
+        }
+        return button && visible() && dx * dx + dy * dy <= g * g;
     }
 
     @Override public boolean onTouchEvent(MotionEvent e) {
@@ -534,8 +579,13 @@ final class TouchControls extends View {
         boolean changed = s0 != sticks[0] || s1 != sticks[1] || s2 != sticks[2] || s3 != sticks[3], tick = false;
         for (int i = 0; i < n; i++) {
             if (pressed[i] != prev[i]) changed = true;
-            if ((pressed[i] & ~prev[i]) != 0) tick = true;
+            if (kind[i] != STICK && (pressed[i] & ~prev[i]) != 0) tick = true;   // a tick for each button or D-pad direction a finger reaches (a stick held: none)
             prev[i] = pressed[i];
+        }
+        if (theme != null && floating) {
+            float f0 = fl[0], f1 = fl[1], f2 = fl[2], f3 = fl[3];
+            if (!Native.touchControlsFloating(fl)) Arrays.fill(fl, -1);
+            if (f0 != fl[0] || f1 != fl[1] || f2 != fl[2] || f3 != fl[3]) changed = true;
         }
         if (tick && haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
         if (changed) invalidate();
@@ -601,15 +651,21 @@ final class TouchControls extends View {
             if (s.ctl == menuCtl) { sprite(c, a, L, s, mx, my, k); continue; }
             for (int i = 0; i < n; i++) if (ctlOf[i] == s.ctl) { sprite(c, a, L, s, cx[i], cy[i], k * r[i] / base[i]); break; }
         }
+        long all = 0;   // every button held now: a button shows held when its bit is (a spot between two face buttons holds both)
+        for (int i = 0; i < n; i++) if (kind[i] != STICK) all |= pressed[i];
         for (int i = 0; i < n; i++) {
-            float kc = k * r[i] / base[i], kx = 0, ky = 0;
-            boolean isStick = kind[i] == STICK, held = isStick ? sticks[2 * stick[i]] != 0 || sticks[2 * stick[i] + 1] != 0 : pressed[i] != 0;
+            float kc = k * r[i] / base[i], kx = 0, ky = 0, x = cx[i], y = cy[i];
+            boolean isStick = kind[i] == STICK, held = isStick ? pressed[i] != 0 || sticks[2 * stick[i]] != 0 || sticks[2 * stick[i] + 1] != 0 : (all & buttons[i]) != 0;
+            if (isStick && floating) {   // a floating stick: only under the finger
+                if (!held || fl[2 * stick[i]] < 0) continue;
+                x = fl[2 * stick[i]] * getWidth(); y = fl[2 * stick[i] + 1] * getHeight();
+            }
             if (isStick) { kx = sticks[2 * stick[i]] * L.travel * kc; ky = -sticks[2 * stick[i] + 1] * L.travel * kc; }   // the host's y is up
             for (ThemePad.Sprite s : L.sprites) {
                 if (s.ctl != ctlOf[i] || s.state == ThemePad.DECOR) continue;
-                if (s.state == ThemePad.KNOB) { sprite(c, a, L, s, cx[i] + kx, cy[i] + ky, kc); continue; }
-                boolean on = kind[i] == DPAD ? s.dir >= 0 && (pressed[i] & DIR_BITS[s.dir]) != 0 : held;
-                if (s.state == (on ? ThemePad.HELD : ThemePad.IDLE)) sprite(c, a, L, s, cx[i], cy[i], kc);
+                if (s.state == ThemePad.KNOB) { sprite(c, a, L, s, x + kx, y + ky, kc); continue; }
+                boolean on = kind[i] == DPAD ? s.dir >= 0 && (all & DIR_BITS[s.dir]) != 0 : held;
+                if (s.state == (on ? ThemePad.HELD : ThemePad.IDLE)) sprite(c, a, L, s, x, y, kc);
             }
         }
     }
@@ -743,8 +799,15 @@ final class TouchControls extends View {
         lb.setOnCheckedChangeListener((b, v) -> prefs().edit().putBoolean("log", v).commit());
         android.widget.Button reset = new android.widget.Button(ctx);
         reset.setText("Reset the controls");
-        reset.setOnClickListener(v -> { os.setProgress(50); ss.setProgress(40); hb.setChecked(true); });   // 60 % opacity, 100 % size, the tick on
-        box.addView(ol); box.addView(os); box.addView(sl); box.addView(ss); box.addView(hb); box.addView(lb); box.addView(tb); box.addView(reset);
+        reset.setOnClickListener(v -> { os.setProgress(theme != null ? 65 : 50); ss.setProgress(40); hb.setChecked(true); });   // 60 % opacity (nx2android's gamepad: 75 %), 100 % size, the tick on
+        box.addView(ol); box.addView(os); box.addView(sl); box.addView(ss); box.addView(hb);
+        if (theme != null) {   // nx2android's gamepad: its pause menu's Floating sticks
+            CheckBox fb = new CheckBox(ctx);
+            fb.setText("Floating sticks (a stick wherever a thumb lands on its half)"); fb.setChecked(floating);
+            fb.setOnCheckedChangeListener((b, v) -> setFloating(v));
+            box.addView(fb);
+        }
+        box.addView(lb); box.addView(tb); box.addView(reset);
         android.widget.Button ed = new android.widget.Button(ctx);   // the layout editor (runs onEditStart); the picture's position is in the panel's Picture rows (positionRows)
         ed.setText("Edit the controls layout…");
         ed.setOnClickListener(v -> startEditLayout());

@@ -42,10 +42,13 @@ void nxhost_env_changed(void);
 #pragma weak nxhost_touch_controls_enable
 #pragma weak nxhost_touch_controls_set
 #pragma weak nxhost_touch_controls_state
+#pragma weak nxhost_touch_controls_set_style
+#pragma weak nxhost_touch_controls_floating
 #pragma weak nxhost_motion_start
 #pragma weak nxhost_motion_stop
 #pragma weak nxhost_motion_rotation
 #pragma weak nxhost_lifecycle
+#pragma weak nxhost_save_flush
 #pragma weak nxhost_paused
 #pragma weak nxhost_audio_interrupt
 #pragma weak nxhost_audio_route_changed
@@ -320,6 +323,27 @@ JNIEXPORT jint JNICALL Java_dev_nxnative_android_Native_touchControlsSet(JNIEnv 
     for (int i = 0; i < n; i++) { const jfloat *o = f + 6 * i; t[i].kind = (int)o[0]; t[i].buttons = (uint64_t)o[1]; t[i].stick = (int)o[2]; t[i].x = o[3]; t[i].y = o[4]; t[i].r = o[5]; }
     return nxhost_touch_controls_set(n > 0 ? t : NULL, n);
 }
+// nx2android's themed gamepad (TouchControls with a ThemePad): ten floats a control (kind, buttons, stick, x, y, r, hw, hh, corner, reach: input_map.h) and how touches
+// drive them (NXT_STYLE_*); -1 when this host has no such call (the launcher then sends the layout with touchControlsSet)
+JNIEXPORT jint JNICALL Java_dev_nxnative_android_Native_touchControlsSetStyle(JNIEnv *env, jclass cls, jfloatArray a, jint style) {
+    (void)cls; if (!nxhost_touch_controls_set_style || !nxhost_touch_controls_state) return -1;
+    int n = a ? (*env)->GetArrayLength(env, a) / 10 : 0; if (n > NXT_MAX) n = NXT_MAX;
+    jfloat f[NXT_MAX * 10]; nxhost_touch_control t[NXT_MAX]; memset(t, 0, sizeof t);
+    if (n > 0) (*env)->GetFloatArrayRegion(env, a, 0, n * 10, f);
+    for (int i = 0; i < n; i++) {
+        const jfloat *o = f + 10 * i;
+        t[i].kind = (int)o[0]; t[i].buttons = (uint64_t)o[1]; t[i].stick = (int)o[2]; t[i].x = o[3]; t[i].y = o[4]; t[i].r = o[5];
+        t[i].hw = o[6]; t[i].hh = o[7]; t[i].corner = o[8]; t[i].reach = o[9];
+    }
+    return nxhost_touch_controls_set_style(style, n > 0 ? t : NULL, n);
+}
+// The floating sticks' centres (lx, ly, rx, ry, normalized; -1 for a stick no finger holds); false when they do not float
+JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_touchControlsFloating(JNIEnv *env, jclass cls, jfloatArray out) {
+    (void)cls; if (!nxhost_touch_controls_floating || !out || (*env)->GetArrayLength(env, out) < 4) return JNI_FALSE;
+    float c[4] = {-1, -1, -1, -1}; bool on = nxhost_touch_controls_floating(c);
+    (*env)->SetFloatArrayRegion(env, out, 0, 4, c);
+    return on ? JNI_TRUE : JNI_FALSE;
+}
 // What each control holds now (pressed[i]) and the sticks' deflection (lx, ly, rx, ry; -1..1, y up), for drawing and the haptic tick
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_touchControlsState(JNIEnv *env, jclass cls, jlongArray pressed, jfloatArray stick) {
     (void)cls; if (!nxhost_touch_controls_state) return;
@@ -332,6 +356,8 @@ JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_motionStart(JNIEnv *
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_motionStop(JNIEnv *env, jclass cls) { (void)env; (void)cls; if (nxhost_motion_stop) nxhost_motion_stop(); }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_motionRotation(JNIEnv *env, jclass cls, jint r) { (void)env; (void)cls; if (nxhost_motion_rotation) nxhost_motion_rotation(r); }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_lifecycle(JNIEnv *env, jclass cls, jint ev) { (void)env; (void)cls; if (nxhost_lifecycle) nxhost_lifecycle(ev); }
+// The save to the sync folder before the process ends (Stop): true when it is there, or sync is off, or the host has no such call
+JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_saveFlush(JNIEnv *env, jclass cls, jint ms) { (void)env; (void)cls; return !nxhost_save_flush || nxhost_save_flush(ms) ? JNI_TRUE : JNI_FALSE; }
 JNIEXPORT jint JNICALL Java_dev_nxnative_android_Native_paused(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_paused ? nxhost_paused() : -1; }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_audioInterrupt(JNIEnv *env, jclass cls, jboolean on) { (void)env; (void)cls; if (nxhost_audio_interrupt) nxhost_audio_interrupt(on); }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_audioRouteChanged(JNIEnv *env, jclass cls) { (void)env; (void)cls; if (nxhost_audio_route_changed) nxhost_audio_route_changed(); }

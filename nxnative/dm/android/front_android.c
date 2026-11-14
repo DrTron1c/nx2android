@@ -11,6 +11,7 @@
 #include "dm_input.h"
 #include "overlay_layout.h"
 #include "saves_android.h"
+#include "save_sync.h"
 #include <math.h>
 #include <time.h>
 #include <android/asset_manager.h>
@@ -180,8 +181,17 @@ static void hold_sync(void) {
     pthread_mutex_unlock(&g_hold_mu);
 }
 static void shake_sensor(int on);   // the accelerometer, off in the background (input, below)
+// The save to the shared sync folder (DM_SAVE_SYNC: save_sync_default) when the app leaves the screen, as the iPhone app sends it going to the background (front_ios.m):
+// the game saved within the sender's quiet time, then the player switched to another version of it (the Switch 2 engine, Banana Native), which takes it at its first save
+// mount. On a thread of its own, so onPause does not wait for it
+static void *save_flush_thread(void *a) {
+    (void)a;
+    if (!save_sync_flush(15000)) LOG("save sync: the save did not reach the sync folder on the way to the background; it goes after the next save or at the next start");
+    return NULL;
+}
+static void save_flush_async(void) { pthread_t t; if (!pthread_create(&t, NULL, save_flush_thread, NULL)) pthread_detach(t); }
 static void go_background(void) { if (!atomic_load(&g_running) || atomic_exchange(&g_bg, 1)) return; dm_focus_set(2); dm_focus_set(3);   // through OutOfFocus, as a game sees HOME and then the suspension (front_mac.m does the same)
-    hold_sync(); dm_gfx_suspend(1); shake_sensor(0); }
+    hold_sync(); dm_gfx_suspend(1); shake_sensor(0); save_flush_async(); }
 static void go_foreground(void) { if (!atomic_load(&g_running) || !atomic_exchange(&g_bg, 0)) return; dm_gfx_suspend(0); hold_sync(); dm_focus_set(2); shake_sensor(1); }
 static void on_pause(ANativeActivity *a) { (void)a; go_background(); }
 // Back in front, the game is out of focus until the window has the input focus again (Android sends it after onResume): without this it stayed OutOfFocus for good,
@@ -197,7 +207,7 @@ static void act_finish(ANativeActivity *a) {
     if (!m || (*E)->ExceptionCheck(E)) { (*E)->ExceptionClear(E); LOG("[RED] Activity.finish() failed: the app ends itself"); _exit(0); }
 }
 static void on_resume(ANativeActivity *a) { if (g_quit) { act_finish(a); return; } go_foreground(); }
-static void on_destroy(ANativeActivity *a) { (void)a; _exit(0); }   // one game per process
+static void on_destroy(ANativeActivity *a) { (void)a; if (atomic_load(&g_running)) save_sync_flush(3000); _exit(0); }   // one game per process (the last save to the sync folder first)
 
 // ---- input ----
 static AInputQueue *g_queue; static ALooper *g_ilooper;
@@ -1224,6 +1234,7 @@ static void *host_thread(void *a) {
     atomic_store(&g_running, 1);
     int rc = main(2, argv);
     LOG("host returned %d", rc);
+    save_sync_flush(3000);   // the last save to the sync folder (DM_SAVE_SYNC)
     _exit(rc);
 }
 static void env_file(const char *path) {   // KEY=VALUE per line (# comments): switches without rebuilding, as the iOS app's Documents/env.txt
@@ -1356,16 +1367,43 @@ static void open_access_page(ANativeActivity *act, int sdk) {   // the app's All
     } while (0);
     LOG("[RED] RomFS: Android's All files access page could not be opened: open it by hand (Settings > Apps > the game)");
 }
+static int all_files_access(ANativeActivity *act, int sdk) {   // 1 / 0, -1 when it is not known (a Java call failed); below Android 11: READ_EXTERNAL_STORAGE
+    JNIEnv *E = act->env; jclass c; jmethodID m; int ok = -1;
+    if (sdk >= 30) { c = (*E)->FindClass(E, "android/os/Environment"); m = c ? (*E)->GetStaticMethodID(E, c, "isExternalStorageManager", "()Z") : NULL; if (m) ok = (*E)->CallStaticBooleanMethod(E, c, m) ? 1 : 0; }
+    else { jstring s = (*E)->NewStringUTF(E, "android.permission.READ_EXTERNAL_STORAGE"); c = (*E)->GetObjectClass(E, act->clazz);
+           m = s ? (*E)->GetMethodID(E, c, "checkSelfPermission", "(Ljava/lang/String;)I") : NULL; if (m) ok = (*E)->CallIntMethod(E, act->clazz, m, s) == 0; }   // PERMISSION_GRANTED
+    if (jx(E)) ok = -1;
+    return ok;
+}
+// ---- the save in step with the game's other versions (dm/host/save_sync.h): nx2android's shared folder, <storage>/nx2android/save-sync, where each game's committed
+// save is <title ID>/save.dmsync. The Switch 2 engine (org.nx2a.launcher) uses the same folder, and Banana Native does when its game settings add the same DM_SAVE_SYNC
+// line: a game takes the newest save there at its first save mount and sends its own a few seconds after each save and when the app leaves the screen; when both sides
+// changed, the newer wins and the other is kept in <save>-backups. env.txt's DM_SAVE_SYNC wins (0: off). The folder is shared storage, which takes All files access:
+// without it the app opens Android's page for it once (a marker in the files folder), and the game starts anyway (sync starts once it is allowed) ----
+static void save_sync_default(void) {
+    const char *ext = getenv("EXTERNAL_STORAGE"); struct stat st; char dir[512];
+    snprintf(dir, sizeof dir, "%s/nx2android/save-sync", !stat("/storage/emulated/0", &st) ? "/storage/emulated/0" : ext && *ext ? ext : "/sdcard");   // (the folder is made at the first send)
+    setenv("DM_SAVE_SYNC", dir, 0);
+}
+static void save_sync_access(ANativeActivity *act, int sdk) {   // after env.txt: only the shared folder needs the permission
+    const char *v = getenv("DM_SAVE_SYNC"); char rv[4096], own[4096], marker[700];
+    if (!v || !*v || !strcmp(v, "0")) { LOG("save sync: off (DM_SAVE_SYNC)"); return; }
+    const char *rp = realpath(v, rv) ? rv : v, *o = realpath(g_root, own) ? own : g_root; size_t n = strlen(o);
+    if (!strncmp(rp, o, n) && (rp[n] == '/' || !rp[n])) return;   // the app's own folder
+    int ok = all_files_access(act, sdk);
+    if (ok) { LOG("save sync: %s%s", v, ok < 0 ? " (whether the app has All files access is not known)" : ""); return; }
+    snprintf(marker, sizeof marker, "%s/save-sync-asked", g_root);
+    int asked = !access(marker, F_OK);
+    LOG("[RED] save sync: %s is shared storage, and the app does not have All files access, so the save is not synced with the game's other versions%s",
+        v, asked ? " (allow it in Settings > Apps > the game > All files access)" : ": the app opens Android's page for it (once); allow it and start the game again");
+    if (!asked) { FILE *f = fopen(marker, "w"); if (f) fclose(f); if (sdk >= 30) open_access_page(act, sdk); }
+}
 static int romfs_readable(ANativeActivity *act, int sdk) {   // 0: the game cannot read its RomFS, and the app ends
     const char *r = getenv("DM_ROMFS"), *own[] = {g_root, act->internalDataPath}; char rr[4096], orr[4096];
     const char *rp = r && realpath(r, rr) ? rr : r;   // canonical paths: /sdcard/… is the /storage/emulated/0/… Android names the files folder by
     for (int i = 0; i < 2; i++) { const char *o = own[i] && realpath(own[i], orr) ? orr : own[i]; size_t n = o ? strlen(o) : 0;
         if (!rp || (n && !strncmp(rp, o, n) && (rp[n] == '/' || !rp[n]))) return 1; }   // the app's own folders need no permission
-    JNIEnv *E = act->env; jclass c; jmethodID m; int ok = -1;   // -1: not known
-    if (sdk >= 30) { c = (*E)->FindClass(E, "android/os/Environment"); m = c ? (*E)->GetStaticMethodID(E, c, "isExternalStorageManager", "()Z") : NULL; if (m) ok = (*E)->CallStaticBooleanMethod(E, c, m) ? 1 : 0; }
-    else { jstring s = (*E)->NewStringUTF(E, "android.permission.READ_EXTERNAL_STORAGE"); c = (*E)->GetObjectClass(E, act->clazz);
-           m = s ? (*E)->GetMethodID(E, c, "checkSelfPermission", "(Ljava/lang/String;)I") : NULL; if (m) ok = (*E)->CallIntMethod(E, act->clazz, m, s) == 0; }   // PERMISSION_GRANTED
-    if (jx(E)) ok = -1;
+    int ok = all_files_access(act, sdk);   // -1: not known
     const char *what = sdk >= 30 ? "All files access" : "the storage permission (READ_EXTERNAL_STORAGE)";
     if (!ok) {
         LOG("[RED] RomFS: %s is outside the app's files folder, and the app does not have %s, so the game cannot read its files there: the game is not started. "
@@ -1405,6 +1443,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     snprintf(p, sizeof p, "%s/save", act->internalDataPath); mkdir(p, 0700); setenv("DM_SAVE", p, 0);
     snprintf(p, sizeof p, "%s/temp", act->internalDataPath); mkdir(p, 0700); setenv("DM_TEMP", p, 0);
     snprintf(p, sizeof p, "%s/shaders.dmsv", g_root); setenv("DM_VK_SHADERS", p, 0);
+    save_sync_default();   // before env.txt, whose DM_SAVE_SYNC wins
     snprintf(p, sizeof p, "%s/env.txt", g_root); env_file(p);
 #ifdef DM_RELEASE
     unsetenv("DM_CTL");   // a release build takes no remote key presses (the control file is a development tool)
@@ -1412,6 +1451,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     // the save manager's requests (saves_android.c), before the host mounts the save: an import chosen in the menu or pushed by porter, an export porter asks for
     if (dm_saves_start(g_root)) { LOG("[saves] the request asked the app to end: the game is not started"); g_quit = 1; return; }
     if (!romfs_readable(act, sdk)) { g_quit = 1; return; }   // after the save manager's requests, which need no RomFS
+    save_sync_access(act, sdk);
     settings_load(); dm_haptics_android_start(act, atomic_load(&g_set_rumble)); dm_lan_android_start(act);
     { pthread_t w; if (!pthread_create(&w, NULL, pad_watch, act->vm)) pthread_detach(w); }
     { pthread_t w; if (!pthread_create(&w, NULL, temp_watch, act->vm)) pthread_detach(w); }
