@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #define ADRENOTOOLS_DRIVER_CUSTOM 1   // dm/third_party/libadrenotools/include/adrenotools/priv.h
@@ -76,6 +77,15 @@ static void ubwc_hint(void) {
     if (getenv("FD_DEV_FEATURES") || !VKA_ENV("DM_VK_TU_UBWC_HINT", 1)) { snprintf(g_ubwc_note, sizeof g_ubwc_note, "Turnip: FD_DEV_FEATURES %s", getenv("FD_DEV_FEATURES") ? "set by the environment, kept" : "left alone (DM_VK_TU_UBWC_HINT=0)"); return; }
     char m[64] = ""; int fd = open("/sys/class/kgsl/kgsl-3d0/gpu_model", O_RDONLY | O_CLOEXEC);
     if (fd >= 0) { ssize_t n = read(fd, m, sizeof m - 1); close(fd); if (n > 0) m[n] = 0; }
+    m[strcspn(m, "\r\n")] = 0;
+    if (!m[0]) {   // KGSL's file not readable by apps (SELinux on some systems, the Xiaomi Pad 6S Pro's HyperOS likely): the SoC from the system's properties. Every
+                   // Snapdragon 8 Gen 2 (SM8550, its QCS/QCM kin, the "kalama" platform) has the 740; without this the hint was left alone there and the picture flickered
+                   // under the volume panel, the notification shade and any view over the game (nx2android, 2026-11-14)
+        char soc[PROP_VALUE_MAX] = "", plat[PROP_VALUE_MAX] = "";
+        __system_property_get("ro.soc.model", soc); __system_property_get("ro.board.platform", plat);
+        if (strstr(soc, "8550") || !strcmp(plat, "kalama")) snprintf(m, sizeof m, "Adreno740 by the SoC, %s %s", soc, plat);
+        else snprintf(m, sizeof m, "unreadable; SoC %s %s", soc, plat);
+    }
     if (strncmp(m, "Adreno740", 9)) { snprintf(g_ubwc_note, sizeof g_ubwc_note, "Turnip: not an Adreno 740 (gpu_model \"%s\"): FD_DEV_FEATURES left alone", m); return; }
     int v = adreno_system_version();
     if (!v) { snprintf(g_ubwc_note, sizeof g_ubwc_note, "Turnip on an Adreno 740: the system driver's version was not found, FD_DEV_FEATURES left alone"); return; }
