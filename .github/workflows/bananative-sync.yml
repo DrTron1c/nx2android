@@ -1,0 +1,137 @@
+# The Switch 2 engine follows Banana Native's releases (bananative/UPSTREAM.md, "Keeping up with Banana Native"). Every few hours: Banana Native's newest release tag
+# (v<major>.<minor>.<patch>, no -test tags), if it is not the one in bananative/UPSTREAM.ref, goes unchanged onto the branch bananative-upstream (Banana Native as it is,
+# on the first copy fee8a90, less .github/ and .forgejo/), which is merged into switch2-android: git's three-way merge keeps the fork's changes. The engine's tests run
+# on the merge; when they pass it is pushed and the launcher's build started (a push with this workflow's token starts no workflow by itself), so the builder's engine
+# card offers the update. A conflict or a failing test pushes nothing to switch2-android: the merge goes to the branch bananative-update and an issue says what to do.
+name: bananative-sync
+
+on:
+  schedule:
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "A Banana Native tag or commit to take (empty: its newest release tag)"
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: bananative-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: https://github.com/hidayat077/BananaNative
+      BASE: fee8a90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: switch2-android
+          fetch-depth: 0
+      - name: Banana Native's newest release, against the one in the engine
+        id: up
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch -q origin +refs/heads/bananative-upstream:refs/heads/bananative-upstream
+          have=$(git show HEAD:bananative/UPSTREAM.ref | awk -F'\t' '$1=="commit"{print $2}')            # what the engine has (switch2-android)
+          have_tag=$(git show HEAD:bananative/UPSTREAM.ref | awk -F'\t' '$1=="tag"{print $2}')
+          staged=$(git show bananative-upstream:bananative/UPSTREAM.ref | awk -F'\t' '$1=="commit"{print $2}')   # what bananative-upstream holds
+          git fetch -q --no-tags "$UPSTREAM" '+refs/tags/v*:refs/bnup/tags/v*' '+refs/heads/*:refs/bnup/heads/*'
+          want="${{ github.event.inputs.ref }}"
+          if [ -z "$want" ]; then
+            tag=$(git for-each-ref --format='%(refname:strip=3)' refs/bnup/tags | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            [ -n "$tag" ] || { echo "no release tag upstream"; exit 1; }
+            if [ "$(printf '%s\n%s\n' "$have_tag" "$tag" | sort -V | tail -1)" = "$have_tag" ] && [ "$tag" != "$have_tag" ]; then echo "upstream's newest, $tag, is older than the engine's $have_tag"; echo "skip=1" >> $GITHUB_OUTPUT; exit 0; fi
+            commit=$(git rev-parse "refs/bnup/tags/$tag^{commit}")
+          else
+            tag="$want"
+            commit=$(git rev-parse -q --verify "refs/bnup/tags/$want^{commit}" || git rev-parse -q --verify "refs/bnup/heads/$want^{commit}" || { git fetch -q --no-tags "$UPSTREAM" "$want" && git rev-parse FETCH_HEAD; })
+          fi
+          echo "engine: $have_tag ($have); upstream: $tag ($commit)"
+          if [ "$commit" = "$have" ]; then echo "up to date"; echo "skip=1" >> $GITHUB_OUTPUT; exit 0; fi
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"Banana Native $tag needs a hand\" in:title" --json number --jq '.[0].number')
+          if [ -n "$open" ] && [ -z "${{ github.event.inputs.ref }}" ]; then echo "issue #$open waits for a hand to merge $tag"; echo "skip=1" >> $GITHUB_OUTPUT; exit 0; fi
+          echo "tag=$tag" >> $GITHUB_OUTPUT; echo "commit=$commit" >> $GITHUB_OUTPUT; echo "staged=$([ "$commit" = "$staged" ] && echo 1 || echo 0)" >> $GITHUB_OUTPUT
+      - name: The release onto bananative-upstream, unchanged
+        if: steps.up.outputs.skip != '1' && steps.up.outputs.staged != '1'
+        env:
+          TAG: ${{ steps.up.outputs.tag }}
+          UP: ${{ steps.up.outputs.commit }}
+        run: |
+          export GIT_INDEX_FILE="$RUNNER_TEMP/bnup.idx"
+          git read-tree bananative-upstream
+          git rm -r --cached -q -f bananative
+          git read-tree --prefix=bananative/ "$UP^{tree}"
+          git rm -r --cached -q -f --ignore-unmatch bananative/.github bananative/.forgejo
+          git update-index --add --cacheinfo 100644,$(git rev-parse $BASE:bananative/UPSTREAM.md),bananative/UPSTREAM.md   # (the fork's, as at the first copy: never changed on this branch)
+          ref=$(printf 'commit\t%s\ntag\t%s\nsource\t%s\n' "$UP" "$TAG" "$UPSTREAM" | git hash-object -w --stdin)
+          git update-index --add --cacheinfo 100644,$ref,bananative/UPSTREAM.ref
+          tree=$(git write-tree); unset GIT_INDEX_FILE
+          c=$(printf 'chore(bananative): Banana Native %s (%s), unchanged\n\nFrom %s, less .github/ and .forgejo/ (.github/workflows/bananative-sync.yml).\n' "$TAG" "${UP:0:7}" "$UPSTREAM" | git commit-tree "$tree" -p bananative-upstream)
+          git branch -f bananative-upstream "$c"
+          git push -q origin bananative-upstream
+          git log --oneline -1 bananative-upstream; git diff --stat bananative-upstream~1 bananative-upstream | tail -1
+      - name: Merged into switch2-android
+        id: merge
+        if: steps.up.outputs.skip != '1'
+        env:
+          TAG: ${{ steps.up.outputs.tag }}
+          UP: ${{ steps.up.outputs.commit }}
+        run: |
+          if git merge --no-ff --no-commit bananative-upstream > "$RUNNER_TEMP/merge.txt" 2>&1; then
+            day=$(date -u +%F)
+            sed -i "s#^| Version | .*#| Version | $TAG (\`${UP:0:7}\`, $day, by .github/workflows/bananative-sync.yml); first copied at v0.3.14 and the issue digest commits after it, \`0bac816\` (2026-11-12) |#" bananative/UPSTREAM.md
+            git add bananative/UPSTREAM.md
+            git commit -q -m "chore(bananative): Banana Native $TAG, merged with the fork's changes" -m "From bananative-upstream (.github/workflows/bananative-sync.yml): git's three-way merge, no conflict."
+            echo "ok=1" >> $GITHUB_OUTPUT
+          else
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+            cat "$RUNNER_TEMP/merge.txt"
+            git merge --abort
+            echo "ok=0" >> $GITHUB_OUTPUT
+          fi
+      - name: The engine's tests on the merge
+        id: test
+        if: steps.up.outputs.skip != '1' && steps.merge.outputs.ok == '1'
+        run: |
+          set -o pipefail
+          if python3 -m unittest tests.test_bananative_touch tests.test_bananative_pad tests.test_bananative_ubwc tests.test_save_handover tests.test_lsfg_pacer tests.test_architecture 2>&1 | tee "$RUNNER_TEMP/tests.txt" | tail -40; then echo "ok=1" >> $GITHUB_OUTPUT; else echo "ok=0" >> $GITHUB_OUTPUT; fi
+      - name: Pushed, and the engine built
+        if: steps.up.outputs.skip != '1' && steps.merge.outputs.ok == '1' && steps.test.outputs.ok == '1'
+        run: |
+          git push -q origin HEAD:switch2-android
+          gh workflow run launcher.yml --ref switch2-android --repo "$GITHUB_REPOSITORY"
+          echo "Banana Native ${{ steps.up.outputs.tag }} merged and pushed; the launcher's build is started" >> $GITHUB_STEP_SUMMARY
+      - name: A conflict or a failing test, for a hand
+        if: steps.up.outputs.skip != '1' && (steps.merge.outputs.ok != '1' || steps.test.outputs.ok != '1')
+        env:
+          TAG: ${{ steps.up.outputs.tag }}
+        run: |
+          {
+            echo "Banana Native $TAG is on the branch \`bananative-upstream\`, but it did not go into \`switch2-android\` by itself."
+            echo
+            if [ "${{ steps.merge.outputs.ok }}" != "1" ]; then
+              echo "The merge conflicts in:"; echo; sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt"; echo
+              echo "To finish it: \`git checkout switch2-android && git merge bananative-upstream\`, resolve these files keeping the fork's changes (bananative/UPSTREAM.md lists them), run the engine's tests, push, and start the launcher workflow."
+            else
+              git push -q -f origin HEAD:refs/heads/bananative-update
+              echo "The merge is clean, but the engine's tests fail on it. The merge is on the branch \`bananative-update\`."; echo
+              echo '```'; tail -60 "$RUNNER_TEMP/tests.txt"; echo '```'
+            fi
+            echo; echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/issue.md"
+          title="Banana Native $TAG needs a hand to merge into the engine"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$n" ]; then gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+          else gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/issue.md"; fi
+          exit 1
