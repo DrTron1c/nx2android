@@ -331,7 +331,8 @@ public final class MainActivity extends Activity {
     /** The settings rows' current values (after a dialog, on resume) */
     private void refreshSettings() {
         if (overlayRow == null) return;
-        updateRow.value("Banana Native " + Updater.version(this) + (Updater.available(this) ? "" : " · release app only"));
+        if (BuildConfig.NX_FORK) { String n = BuildConfig.VERSION_NAME; int d = n.indexOf("-nx2a"); updateRow.value("nx2android engine build " + BuildConfig.VERSION_CODE + (d > 0 ? " · Banana Native " + n.substring(0, d) : "")); }
+        else updateRow.value("Banana Native " + Updater.version(this) + (Updater.available(this) ? "" : " · release app only"));
         boolean ov = Prefs.overlay(this);
         if (overlayRow.toggle.isChecked() != ov) overlayRow.toggle.setChecked(ov);
         int n = 0;

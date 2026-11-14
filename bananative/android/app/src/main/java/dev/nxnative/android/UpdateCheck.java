@@ -139,6 +139,8 @@ final class UpdateCheck {
         final Release release; final int[] version; final Asset apk; final String sha256;   // sha256: lower-case hex, null when the asset has no digest
         Update(Release r, int[] v, Asset a, String sha256) { release = r; version = v; apk = a; this.sha256 = sha256; }
         String tag() { return release.tag; }
+        String label;   // what the page calls it: null, "Banana Native <version>"; nx2android's engine names its own build (Updater.forkCheck)
+        String name() { return label != null ? label : "Banana Native " + text(version); }
     }
 
     private static final Pattern TAG = Pattern.compile("[vV]?(\\d{1,6})\\.(\\d{1,6})\\.(\\d{1,6})");

@@ -50,9 +50,9 @@ final class ReleasePage {
         LinearLayout content = Ui.page(a, pageFrame, 640, true);
         Runnable close = () -> host.removeView(overlay);
 
-        content.addView(Ui.header(a, Ui.back(a, v -> close.run()), "Update available", "Banana Native " + UpdateCheck.text(u.version), null));
+        content.addView(Ui.header(a, Ui.back(a, v -> close.run()), "Update available", u.name(), null));
         LinearLayout head = Ui.add(content, Ui.card(a), 8);
-        head.addView(Ui.heading(a, "Version " + UpdateCheck.text(u.version) + " is available"));
+        head.addView(Ui.heading(a, u.label != null ? u.label + " is available" : "Version " + UpdateCheck.text(u.version) + " is available"));
         Ui.add(head, Ui.body(a, "You have " + have + ". Install over it: saves, packs and settings are kept."), 4);
         Ui.add(head, Ui.small(a, u.apk.name + " · " + UpdateCheck.mb(u.apk.size) + " · from " + u.release.source.name), 8);
 

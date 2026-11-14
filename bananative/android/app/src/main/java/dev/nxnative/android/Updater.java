@@ -102,8 +102,46 @@ final class Updater {
         return m;
     }
 
-    /** Whether this app checks at all: the release app, or a test app with an update.txt naming a repository or a URL */
-    static boolean available(Context c) { return !sources(c).isEmpty(); }
+    /** Whether this app checks at all: the release app, nx2android's engine (its own builds: forkCheck), or a test app with an update.txt naming a repository or a URL */
+    static boolean available(Context c) { return BuildConfig.NX_FORK || !sources(c).isEmpty(); }
+
+    // ---- nx2android's engine (BuildConfig.NX_FORK, org.nx2a.launcher): its own builds, not Banana Native's releases, which reach it through nx2android
+    // (.github/workflows/bananative-sync.yml merges each with nx2android's changes). The fork publishes one release, "launcher" (.github/workflows/launcher.yml):
+    // launcher.txt names the newest build (commit, run number, version name; the run number is the APK's versionCode) and nx2android-launcher.apk is it. A build
+    // whose run number is above this app's versionCode is offered on the same page, downloaded (checked by GitHub's SHA-256) and installed the same way ----
+    static final String FORK_REPO = "DrTron1c/nx2android", FORK_TAG = "launcher", FORK_APK = "nx2android-launcher.apk";
+    static final UpdateCheck.Source FORK = new UpdateCheck.Source("GitHub (nx2android)", "https://api." + UpdateCheck.GITHUB_HOST + "/repos/" + FORK_REPO + "/releases/tags/" + FORK_TAG,
+            "application/vnd.github+json", "https://" + UpdateCheck.GITHUB_HOST + "/" + FORK_REPO + "/releases/tag/" + FORK_TAG, UpdateCheck.GITHUB_HOST, "objects.githubusercontent.com");
+
+    private static String fetchText(String url, String accept, String label) throws IOException {
+        HttpsURLConnection c = open(UpdateCheck.busted(url, Long.toString(System.currentTimeMillis())), accept, label, API_CONNECT_MS, API_READ_MS, true);
+        try (InputStream in = c.getInputStream()) {
+            byte[] b = in.readNBytes(MAX_LIST + 1);
+            if (b.length > MAX_LIST) throw new Failure(label + "'s answer is too large");
+            return new String(b, StandardCharsets.UTF_8);
+        } finally { c.disconnect(); }
+    }
+
+    /** The newer engine build, or null when this one is the newest (network: off the UI thread) */
+    static UpdateCheck.Update forkCheck() throws IOException {
+        String[] w = fetchText("https://" + UpdateCheck.GITHUB_HOST + "/" + FORK_REPO + "/releases/download/" + FORK_TAG + "/launcher.txt", "text/plain", FORK.name).trim().split("\\s+");
+        long run;
+        try { run = w.length > 1 ? Long.parseLong(w[1]) : 0; } catch (NumberFormatException e) { throw new Failure("launcher.txt names no build"); }
+        String name = w.length > 2 ? w[2] : "";
+        if (run <= BuildConfig.VERSION_CODE) return null;
+        List<UpdateCheck.Release> l = UpdateCheck.parse("[" + fetchText(FORK.api, FORK.accept, FORK.name) + "]", FORK);   // one release, not a list
+        UpdateCheck.Asset apk = null;
+        if (!l.isEmpty()) for (UpdateCheck.Asset a : l.get(0).assets) if (FORK_APK.equals(a.name) && UpdateCheck.allowedAsset(a.url, FORK)) apk = a;
+        if (apk == null) throw new Failure("the engine's release has no " + FORK_APK);
+        int dash = name.indexOf("-nx2a"); String bn = dash > 0 ? name.substring(0, dash) : "";
+        String notes = "## nx2android engine build " + run + "\n\n" + (bn.isEmpty() ? "" : "Banana Native " + bn + " with nx2android's changes (its gamepad, the save sync, the fixes for the Xiaomi Pad 6S Pro). ")
+                + "This app is build " + BuildConfig.VERSION_CODE + " (" + BuildConfig.VERSION_NAME + "). The engine follows Banana Native's releases: each new one is merged and built by nx2android.";
+        UpdateCheck.Release r = new UpdateCheck.Release("v" + (bn.isEmpty() ? "0.0.0" : bn), false, true, notes, java.util.Collections.singletonList(apk), FORK);
+        int[] v = UpdateCheck.tagVersion(r.tag);
+        UpdateCheck.Update u = new UpdateCheck.Update(r, v != null ? v : new int[] {0, 0, 0}, apk, UpdateCheck.sha256(apk.digest));
+        u.label = "nx2android engine build " + run + (bn.isEmpty() ? "" : " (Banana Native " + bn + ")");
+        return u;
+    }
 
     /** The sources this app asks, in order: UpdateCheck.SOURCES in the release app, those update.txt names in a test app (none without it) */
     static List<UpdateCheck.Source> sources(Context c) {
@@ -236,9 +274,9 @@ final class Updater {
             cleanup(app);
             if (!available(app)) return;
             int[] cur = UpdateCheck.appVersion(version(app));
-            if (cur == null) { Log.i(TAG, "check skipped: version " + version(app) + " is not X.Y.Z"); return; }
+            if (cur == null && !BuildConfig.NX_FORK) { Log.i(TAG, "check skipped: version " + version(app) + " is not X.Y.Z"); return; }
             UpdateCheck.Update u;
-            try { u = UpdateCheck.pickAll(releases(app), cur); }
+            try { u = BuildConfig.NX_FORK ? forkCheck() : UpdateCheck.pickAll(releases(app), cur); }
             catch (Throwable e) {   // silent: a log line only
                 Log.w(TAG, "update check failed: " + why(e, "the release sources"));
                 return;
@@ -257,20 +295,20 @@ final class Updater {
             return;
         }
         int[] cur = UpdateCheck.appVersion(version(a));
-        if (cur == null) { msg(a, "Updates", "This build's version (" + version(a) + ") is not a release version: nothing to compare."); return; }
+        if (cur == null && !BuildConfig.NX_FORK) { msg(a, "Updates", "This build's version (" + version(a) + ") is not a release version: nothing to compare."); return; }
         AlertDialog wait = new PadFocus.Builder(a).setMessage("Checking for updates…").setCancelable(false).create();
         wait.show();
         Context app = a.getApplicationContext();
         new Thread(() -> {
             UpdateCheck.Update u = null; String err = null;
-            try { u = UpdateCheck.pickAll(releases(app), cur); }
+            try { u = BuildConfig.NX_FORK ? forkCheck() : UpdateCheck.pickAll(releases(app), cur); }
             catch (Throwable e) { err = why(e, "the release sources"); Log.w(TAG, "update check failed: " + err); }
             final UpdateCheck.Update got = u; final String fail = err;
             UI.post(() -> {
                 if (gone(a)) return;
                 wait.dismiss();
                 if (fail != null) Toast.makeText(a, "Update check failed: " + fail, Toast.LENGTH_LONG).show();
-                else if (got == null) Toast.makeText(a, "You're up to date (v" + UpdateCheck.text(cur) + ")", Toast.LENGTH_LONG).show();
+                else if (got == null) Toast.makeText(a, BuildConfig.NX_FORK ? "You're up to date (engine build " + BuildConfig.VERSION_CODE + ")" : "You're up to date (v" + UpdateCheck.text(cur) + ")", Toast.LENGTH_LONG).show();
                 else popup(a, got);
             });
         }, "nx-update-check").start();
