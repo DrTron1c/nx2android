@@ -6,10 +6,14 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
 import android.graphics.RectF;
 import android.util.TypedValue;
 import android.view.HapticFeedbackConstants;
+import android.view.Choreographer;
 import android.view.MotionEvent;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
@@ -125,7 +129,8 @@ final class TouchControls extends View {
         opacity = prefs().getFloat("opacity", 0.6f);
         scale = prefs().getFloat("scale", 1f);
         haptics = prefs().getBoolean("haptics", true);
-        floating = prefs().getBoolean("float", true);   // on by default: each half of the screen takes its stick wherever the thumb lands (not on another control)
+        floating = prefs().getBoolean("float", true);
+        inPicture = prefs().getBoolean("pad_in_picture", false);   // on by default: each half of the screen takes its stick wherever the thumb lands (not on another control)
         shown = prefs().getBoolean("shown", true);
         line.setStyle(Paint.Style.STROKE);
         text.setTextAlign(Paint.Align.CENTER);
@@ -178,7 +183,7 @@ final class TouchControls extends View {
         if (input) Native.touchControlsEnable(active() && !editing);   // off: every touch in the picture is the game's touchscreen
         Arrays.fill(pressed, 0); Arrays.fill(prev, 0); Arrays.fill(sticks, 0); Arrays.fill(fl, -1);
         invalidate();
-        if (theme != null) { padAtlas(); pushPad(); }   // (shown or hidden, a new layout, the editor)
+        if (theme != null) { padAtlas(); pushPad(); requestHud(); }   // (shown or hidden, a new layout, the editor)
     }
 
     private void toggle() {
@@ -600,8 +605,8 @@ final class TouchControls extends View {
         if (!available || !visible() && !editing) return;
         float dp = getResources().getDisplayMetrics().density;
         line.setStrokeWidth(Math.max(1.5f, 1.6f * dp));
-        if (editing) { if (theme == null) drawControls(c); else if (!padHost) drawTheme(c, true); drawEditor(c, dp); return; }
-        if (theme != null && menuCtl >= 0) { if (!padHost && visible()) drawTheme(c, active()); return; }   // the theme's menu control, always; the controls when shown (the present draws them: nothing)
+        if (editing) { if (theme == null) drawControls(c); else if (viewDraws()) drawTheme(c, true); drawEditor(c, dp); return; }
+        if (theme != null && menuCtl >= 0) { if (viewDraws() && visible()) drawTheme(c, active()); return; }   // the theme's menu control, always; the controls when shown (its layer or the present draws them: nothing)
         // The show / hide button (when it is on): a small pad outline, mostly transparent over the game, fainter still while the controls are hidden
         boolean on = active();
         if (button) {
@@ -619,7 +624,7 @@ final class TouchControls extends View {
     }
 
     private void drawControls(Canvas c) {
-        if (theme != null) { if (!padHost) drawTheme(c, true); return; }
+        if (theme != null) { if (viewDraws()) drawTheme(c, true); return; }
         for (int i = 0; i < n; i++) {
             boolean held = pressed[i] != 0;
             fill.setColor(held ? Color.argb(alpha(0.55f), 255, 255, 255) : Color.argb(alpha(0.35f), 0, 0, 0));
@@ -728,6 +733,13 @@ final class TouchControls extends View {
         padInFlight = false;
         if (b == null) { padHost = false; return; }
         padW = b.w; padH = b.h; padLast = null;
+        if (hudLayer()) {   // its own layer: the present draws none of it
+            if (padHost) { Native.padQuads(null, 0); Native.padAtlas(null, 0, 0, 0); }
+            padHost = false; padBmp = b.bitmap(); padBmpLay = l;
+            Native.note("on-screen controls: the gamepad theme is drawn on its own layer over the game, up to 60 times a second");
+            invalidate(); requestHud();
+            return;
+        }
         boolean host = input && Native.padAtlas(b.px, b.w, b.h, b.w * 4) && Native.padState() >= 0;
         if (padHost != host) Native.note("on-screen controls: the gamepad theme is drawn by " + (host ? "the game's present" : "the launcher's view"));
         padHost = host;
@@ -770,7 +782,62 @@ final class TouchControls extends View {
     }
 
     /** Something the gamepad shows changed: the present gets the sprites, or the view draws again */
-    private void changed() { if (theme != null && padHost) pushPad(); else invalidate(); }
+    private void changed() { if (theme != null && hudLayer()) requestHud(); else if (theme != null && padHost) pushPad(); else invalidate(); }
+
+    /** This view draws the theme's sprites itself: neither its layer nor the present does */
+    private boolean viewDraws() { return !padHost && !hudLayer(); }
+
+    // ---- nx2android's gamepad on its own layer: a transparent SurfaceView between the game's and this view (GameActivity), drawn whenever what it shows changes, at most
+    // about 60 times a second (every second refresh of a 120 Hz panel), so the gamepad moves smoothly whatever rate the game runs at; the present then draws none of it
+    // and this view's window stays still. The panel's "Gamepad in the game's picture" draws it in the present again (with the game's frames) ----
+    private SurfaceView hud;
+    private boolean hudReady, hudPending, inPicture; private long hudLast;
+    private final Choreographer.FrameCallback hudFrame = this::hudFrame;
+
+    boolean themed() { return theme != null; }
+
+    void setHud(SurfaceView v) {
+        hud = v;
+        v.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override public void surfaceCreated(SurfaceHolder h) { hudReady = true; requestHud(); }
+            @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) { requestHud(); }
+            @Override public void surfaceDestroyed(SurfaceHolder h) { hudReady = false; }
+        });
+    }
+
+    private boolean hudLayer() { return hud != null && theme != null && !inPicture; }
+
+    private void requestHud() {
+        if (!hudLayer() || hudPending) return;
+        hudPending = true;
+        Choreographer.getInstance().postFrameCallback(hudFrame);
+    }
+
+    private void hudFrame(long t) {
+        hudPending = false;
+        if (t - hudLast < 13_000_000L) { hudPending = true; Choreographer.getInstance().postFrameCallback(hudFrame); return; }   // at most one a 60 Hz frame (or two of a 144 Hz panel)
+        hudLast = t;
+        if (!hudReady || hud == null) return;
+        SurfaceHolder h = hud.getHolder(); Canvas c;
+        try { c = android.os.Build.VERSION.SDK_INT >= 26 ? h.lockHardwareCanvas() : h.lockCanvas(); } catch (RuntimeException e) { c = null; }
+        if (c == null) return;
+        try {
+            c.drawColor(0, PorterDuff.Mode.CLEAR);
+            if (padBmp != null && padBmpLay == themeLay && (visible() || editing)) drawTheme(c, editing || active());
+        } finally { h.unlockCanvasAndPost(c); }
+    }
+
+    /** The panel's "Gamepad in the game's picture": drawn by the present with the game's frames (no layer of its own), or on its own layer (the default) */
+    private void setInPicture(boolean on) {
+        if (on == inPicture) return;
+        inPicture = on;
+        prefs().edit().putBoolean("pad_in_picture", on).commit();
+        Native.note("on-screen controls: the gamepad " + (on ? "in the game's picture" : "on its own layer"));
+        if (padHost) { Native.padQuads(null, 0); Native.padAtlas(null, 0, 0, 0); }   // the present stops drawing it
+        padOp = -1; padHost = false; padBmp = null; padLast = null; padLastN = -1;
+        if (hudReady && hud != null) { hudPending = false; hudLast = 0; SurfaceHolder h = hud.getHolder(); try { Canvas c = h.lockCanvas(); if (c != null) { c.drawColor(0, PorterDuff.Mode.CLEAR); h.unlockCanvasAndPost(c); } } catch (RuntimeException ignored) { } }
+        padAtlas();
+    }
 
     /** The editor: the picture's outline, each group's frame (the one held filled), the buttons along the top and what to do */
     private void drawEditor(Canvas c, float dp) {
@@ -891,6 +958,10 @@ final class TouchControls extends View {
             fb.setText("Floating sticks (a stick wherever a thumb lands on its half)"); fb.setChecked(floating);
             fb.setOnCheckedChangeListener((b, v) -> setFloating(v));
             box.addView(fb);
+            CheckBox ib = new CheckBox(ctx);   // where it is drawn: its own layer (smooth) or the game's picture (with the game's frames)
+            ib.setText("Gamepad in the game's picture (moves with the game's frames; off: its own layer, 60 times a second)"); ib.setChecked(inPicture);
+            ib.setOnCheckedChangeListener((b, v) -> setInPicture(v));
+            box.addView(ib);
         }
         box.addView(lb); box.addView(tb); box.addView(reset);
         android.widget.Button ed = new android.widget.Button(ctx);   // the layout editor (runs onEditStart); the picture's position is in the panel's Picture rows (positionRows)

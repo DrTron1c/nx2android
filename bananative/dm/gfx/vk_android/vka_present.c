@@ -837,6 +837,10 @@ static void frame_rate(double period) {
         if (fps >= top || !hold || now - top_t > hold) { top = fps; top_t = now; }
         fps = top;
     }
+    // nx2android: a multiple of the game's rate of at least DM_VK_FRAME_RATE_MIN (live, default 90; 0 = the game's own), as nx2android's own engine asks (perf_android.c
+    // dm_perf_window): 30, 40 and 60 fps all go to 120 Hz. At the game's own rate the Xiaomi Pad 6S Pro's panel ran at 30 Hz and switched up for the volume panel, the
+    // notification shade or a view drawn over the game, and back, and the picture flickered at each switch; held at 120 Hz nothing over the game moves the panel
+    { int lo = VKA_ENV("DM_VK_FRAME_RATE_MIN", 90); if (lo > 0 && lo <= 240) while (fps < lo) fps *= 2; }
     if (fps == g_fps_set) return;
     static int (*set_rate)(ANativeWindow *, float, int8_t); static int looked;   // libnativewindow (API 30), not linked: -landroid does not carry it
     if (!looked) { looked = 1; void *h = dlopen("libnativewindow.so", RTLD_NOW); if (h) set_rate = (int (*)(ANativeWindow *, float, int8_t))dlsym(h, "ANativeWindow_setFrameRate"); }

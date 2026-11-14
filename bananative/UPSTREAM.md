@@ -28,6 +28,10 @@ Each change is its own commit after the copy (`git log -- bananative`), so a new
   panel's controls rows). The themed gamepad is drawn by the present (`dm/gfx/vk_android/vka_present.c` pad_draw, `nxhost_pad_*`, `vka_ovl.h` vko_rect), so the
   window over the SurfaceView stays still (as a view it flashed the screen black at each touch on a Xiaomi Pad 6S Pro), its atlas baked in the colours nx2android's
   engine showed (`ThemePad.bake`: the sRGB curve its sRGB swapchain applied to the sprites); the view draws it only when the present does not (`DM_VK_PAD=0`).
+  By default it is drawn on its own transparent layer instead (`TouchControls.setHud`, a SurfaceView between the game's and the window), up to 60 times a second
+  whatever the game's rate; the panel's "Gamepad in the game's picture" puts it back in the present.
+- The window's frame rate a multiple of the game's of at least 90 (`DM_VK_FRAME_RATE_MIN`, `vka_present.c` frame_rate), as nx2android's engine asks: the panel stays
+  at 120 Hz, and nothing over the game switches its rate (the Xiaomi Pad 6S Pro's picture flickered at each switch, under the volume panel or the shade).
 - The save in step with the game's other versions: the fork's app sets `DM_SAVE_SYNC` to `<storage>/nx2android/save-sync` (a user line wins), as nx2android's
   per-game apps do, and sends the save when the app leaves the screen and before Stop ends it (`nxhost_save_flush`). `dm/host/save_sync.c` also takes a save handed
   over on purpose (`save_sync_export`, `take.txt`: the builder's Copy the save from the old app), the same code as `../nxnative/dm/host/save_sync.c`.

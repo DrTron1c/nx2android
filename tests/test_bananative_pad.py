@@ -85,5 +85,14 @@ class PadColours(unittest.TestCase):
         self.assertIn('so it shows a little lighter there', old)   # the old engine's own note on its sRGB swapchain
 
 
+class PanelRate(unittest.TestCase):
+    """The window's frame rate as nx2android's engine asks it (perf_android.c dm_perf_window: doubled until at least 90), so the panel keeps one fast rate."""
+    def test_doubled_to_at_least_90(self):
+        src = (VK / 'vka_present.c').read_text()
+        self.assertRegex(src, r'int lo = VKA_ENV\("DM_VK_FRAME_RATE_MIN", 90\); if \(lo > 0 && lo <= 240\) while \(fps < lo\) fps \*= 2;')
+        self.assertIn('DM_VK_FRAME_RATE_MIN\tswitch\t', (REPO / 'bananative/docs/env_switches.tsv').read_text())
+        self.assertIn('while (fps < 90) fps *= 2;', (REPO / 'nxnative/dm/android/perf_android.c').read_text())
+
+
 if __name__ == '__main__':
     unittest.main()
