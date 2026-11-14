@@ -32,10 +32,23 @@ final class Engine {
         try { return c.getPackageManager().getPackageInfo(PKG, 0).getLongVersionCode(); } catch (PackageManager.NameNotFoundException e) { return 0; }
     }
 
-    /** The newest published build (launcher.txt: commit, run number, version name) */
+    /** The newest published build (launcher.txt: commit, run number, version name); its version name in latestName */
     static long latest() throws IOException {
         String[] w = Download.textFrom(BASE, "launcher.txt").split("\\s+");
+        latestName = w.length > 2 ? w[2] : "";
         return w.length > 1 ? Long.parseLong(w[1]) : 0;
+    }
+    static volatile String latestName = "";
+
+    /** The installed engine's version name ("0.3.23-nx2a.12"), "" when it is not installed */
+    static String installedName(Context c) {
+        try { String n = c.getPackageManager().getPackageInfo(PKG, 0).versionName; return n != null ? n : ""; } catch (PackageManager.NameNotFoundException e) { return ""; }
+    }
+
+    /** " (Banana Native 0.3.23)" for a version name of the engine (the release it is built from: .github/workflows/bananative-sync.yml), "" when it names none */
+    static String bn(String versionName) {
+        int i = versionName == null ? -1 : versionName.indexOf("-nx2a");
+        return i > 0 ? " (Banana Native " + versionName.substring(0, i) + ")" : "";
     }
 
     static File download(File dir, Download.Progress p) throws IOException { return Download.downloadFrom(BASE, APK, dir, p); }

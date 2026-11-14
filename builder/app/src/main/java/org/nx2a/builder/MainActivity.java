@@ -332,14 +332,14 @@ public final class MainActivity extends Activity implements PortService.Listener
     private void refreshEngine(boolean network) {
         if (engineCard == null || engineCard.getVisibility() != View.VISIBLE) return;
         long have = Engine.installed(this);
-        engineState.setText(have > 0 ? "Installed: build " + have + "." : "Not installed yet: about 200 MB to download.");
+        engineState.setText(have > 0 ? "Installed: build " + have + Engine.bn(Engine.installedName(this)) + "." : "Not installed yet: about 200 MB to download.");
         engineState.setTextColor(have > 0 ? GOOD : DIM);
         engineButton.setText(have > 0 ? "Check for an engine update" : "Install the engine");
         copySave.setVisibility(Engine.oldInstalled(this, gameId) ? View.VISIBLE : View.GONE);   // the game's old per-game app is on this tablet
         if (network) bg(() -> {
             try {
                 long want = Engine.latest();
-                post(() -> { if (have > 0 && want > have) { engineButton.setText("Update the engine to build " + want); engineState.setText("Installed: build " + have + ". Build " + want + " is out."); } });
+                post(() -> { if (have > 0 && want > have) { engineButton.setText("Update the engine to build " + want); engineState.setText("Installed: build " + have + Engine.bn(Engine.installedName(this)) + ". Build " + want + Engine.bn(Engine.latestName) + " is out."); } });
             } catch (Exception ignored) { }   // no connection, or no build published yet: the button asks again
         });
     }
@@ -349,7 +349,7 @@ public final class MainActivity extends Activity implements PortService.Listener
         bg(() -> {
             try {
                 long want = Engine.latest(), have = Engine.installed(this);
-                if (have > 0 && want <= have) { post(() -> { engineState.setText("Installed: build " + have + ", the newest."); engineState.setTextColor(GOOD); engineButton.setEnabled(true); }); return; }
+                if (have > 0 && want <= have) { post(() -> { engineState.setText("Installed: build " + have + Engine.bn(Engine.installedName(this)) + ", the newest."); engineState.setTextColor(GOOD); engineButton.setEnabled(true); }); return; }
                 File dir = new File(getCacheDir(), "engine"); delete(dir);
                 File apk = Engine.download(dir, (what, done, total) -> post(() -> engineState.setText(what + (total > 0 ? ": " + done * 100 / total + " %" : ""))));
                 post(() -> engineState.setText("Tap Install on the popup."));

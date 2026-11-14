@@ -45,6 +45,7 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$SDK" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$SDK/ndk/$NDK_VERSION" >> $GITHUB_ENV
+          python3 -m pip install -q --user --break-system-packages fonttools   # nxExtFont (Banana Native v0.3.21+): the button-icon font, dm/tools/make_ext_font.py
           python3 --version; dotnet --version; cmake --version | head -1; ninja --version; zsh --version; command -v shasum
       - name: The packer's stage, from the cache
         id: stage
@@ -68,8 +69,10 @@ jobs:
           echo "NX_SIGN_PASS=nx2android" >> $GITHUB_ENV
       - name: The launcher
         run: |
+          BN=$(awk -F'\t' '$1=="tag"{sub(/^v/, "", $2); print $2}' bananative/UPSTREAM.ref 2>/dev/null); BN=${BN:-0.3.14}   # Banana Native's release in the tree (bananative-sync.yml)
+          echo "NX_VERSION=$BN-nx2a.$GITHUB_RUN_NUMBER" >> $GITHUB_ENV
           cd bananative/android/app
-          ./gradlew apk --no-daemon --stacktrace -PnxFork=true -PnxPackStage="$WORK/stage" -PnxVersion="0.3.14-nx2a.$GITHUB_RUN_NUMBER" -PnxVersionCode=$GITHUB_RUN_NUMBER 2>&1 | tail -120
+          ./gradlew apk --no-daemon --stacktrace -PnxFork=true -PnxPackStage="$WORK/stage" -PnxVersion="$BN-nx2a.$GITHUB_RUN_NUMBER" -PnxVersionCode=$GITHUB_RUN_NUMBER 2>&1 | tail -120
           ls -la out/
           test -f out/nx2android-launcher.apk
       - name: Check the APK
@@ -82,7 +85,7 @@ jobs:
       - name: Publish
         run: |
           gh release view launcher --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create launcher --repo "$GITHUB_REPOSITORY" --prerelease --title "nx2android launcher (Switch 2)" --notes "Banana Native's engine as nx2android's own app (org.nx2a.launcher): every Switch 2 game it runs, prepared on the phone. Install nx2android-launcher.apk; it installs beside Banana Native. Built from bananative/ (bananative/UPSTREAM.md)." --target "$GITHUB_SHA"
-          echo "$GITHUB_SHA $GITHUB_RUN_NUMBER 0.3.14-nx2a.$GITHUB_RUN_NUMBER" > launcher.txt
+          echo "$GITHUB_SHA $GITHUB_RUN_NUMBER $NX_VERSION" > launcher.txt
           gh release upload launcher bananative/android/app/out/nx2android-launcher.apk launcher.txt --clobber --repo "$GITHUB_REPOSITORY"
       - name: The build's logs, on failure
         if: failure()
