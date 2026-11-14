@@ -69,6 +69,47 @@ Measured on the phone (Honor PNM-N49, Android, the test app; runs p1a-p8 of 2026
 - Resolved (not yet run on a phone): **a Pokémon with missing textures** (a player's report, v0.2.6, the same Lenovo TB321FU log): a buffer across two placed parts of the 3.4 GiB pool (`0x41a99dab00+0x20a60` at 32 s), then four index buffers in that pool skipped at 168 s. The parts are now joined into one at the next submission ([A range given to the GPU across two placed parts of a pool](../../../docs/reference/memory.md#a-range-given-to-the-gpu-across-two-placed-parts-of-a-pool-android)).
 - Also on Android: `[RED] gfx: mtl_read_texels not yet on Android` once and three `texture ID … has no view of shape 0x1` (1D texture buffers `target 10`, `texture buffers are not images yet`).
 
+## Link Play on Android
+
+Experimental phone-to-PC local wireless over IP ([issue #177](https://git.eden-emu.dev/moceure/BananaNative/issues/177)). This needs a host build with the optional co-op module and a compatible PC host. It does not provide Nintendo online services. The host mechanism is described once under [Opt-in LDN sessions and virtual UDP sockets](../../../docs/reference/services.md#opt-in-ldn-sessions-and-virtual-udp-sockets).
+
+### Joining a PC host
+
+On Recompia, use the native protocol (`[net] protocol = native`). For this Android adapter, set `[pkp] link_interact_everywhere = false` and `link_story_coop = false`, with no active gameplay Modtopia mods, then restart the PC game. Android advertises the vanilla mods fingerprint `0`; the [pinned PC adapter](https://github.com/Dittobyte/Recompia/blob/75dae2f2ccdada74e6b8ba12ea7de30560a84221/runtime/src/services/ldn_native.cpp) includes Interact everywhere, Story co-op and active gameplay mods in its fingerprint. Story co-op also enables Interact everywhere. These settings are read when the feature installs, so changing the ini while the PC game runs leaves its current session unchanged. A mismatch can hide the host from discovery or refuse a join; check these settings if the host cannot be found.
+
+In the Android launcher, open the game's card menu, then **Game settings > Game > Link Play**. The profile's `link_play 1` enables this row; profiles without it have no row. Settings apply when the game next starts, so leave a running game before changing a connection.
+
+| Choice | Settings sent to the host at the next start |
+|---|---|
+| Off (default) | `DM_COOP=off`, `DM_COOP_INTERNET=0`, empty `DM_COOP_ROOM` |
+| Join PC host, on the same LAN | `DM_COOP=join:<host IPv4>:<port>`, `DM_COOP_INTERNET=0`, empty `DM_COOP_ROOM` |
+| Join PC host, Internet / Tailscale enabled | `DM_COOP=join:<reachable host IPv4>:<port>`, `DM_COOP_INTERNET=1`, `DM_COOP_ROOM=<host room code>` |
+
+The address accepts IPv4 with an optional port; the default is 47600. The special literal `localhost` is accepted for a same-device test; other hostnames and IPv6 are not accepted by this protocol. Use the PC address reachable from the phone. A public or Tailscale address needs Internet mode and the host's 16-symbol room code; the dialog accepts the code's spaces and hyphens. An invalid address or code leaves the dialog open without saving a partial connection. Off retains the saved address and code for a later visit.
+
+These choices override global `env.txt` values for this supported profile, including stale co-op values when Off or an invalid saved connection is selected. Explicit per-game environment lines and the test app's `env-<title ID>.txt` are applied afterwards and can override the choice. Check those overrides if the game's behavior differs from the row. Profiles without `link_play 1` receive no Link Play environment overrides.
+
+Use distinct host and visitor save identities, with Link Play already unlocked in both saves: a copied identity may be rejected, and an early tutorial save cannot use the terminal yet. Keep existing saves intact. Internet mode proves the room code and tags messages but does not encrypt the game traffic, so anyone on the network path can read it. The room code authenticates the session; this module does not encrypt its game traffic. Tailscale is an optional way to reach the host, not a discovery mode. The dependency's diagnostics can contain peer addresses, room codes and node IDs, so remove these before sharing logs.
+
+### What has been checked
+
+Game build: Ver. 2.0.1, update 655360, `main` NSO build ID `76a489f3bd3642fa5e18bd83d32c98ba`. The earlier join observations used a Samsung Galaxy Z Fold 7 (Android 16, Adreno 830), a Recompia 0.10.3 PC host and distinct saves.
+
+| Source/build | Observation and limit |
+|---|---|
+| Earlier local Banana Native v0.3.0 experiment (`6574529`) | Two separate players appeared in the same world over Wi-Fi, and separately over Tailscale with Internet mode and the host's room code. This was not a released upstream feature or a test of the current rebase. |
+| Current `android` base `0bac816c` (2026-11-12), host `2b5d04ef` and launcher `e637feba` | Builds with and without the pinned module passed, as did focused native and launcher checks. The combined APK was installed and its SHA-256 verified. The Fold 7 joined the Recompia 0.10.3 PC host over LAN with Internet mode and room authentication. Two players shared the populated world for over 90 seconds, with positional movement from each device visible on the other. The visitor returned home normally, then the PC ended its session; both returned to offline LDN state and the PC listener closed. |
+
+The current phone run used Android 16, Adreno 830, Turnip Mesa 26.2.3 (`fbc44a3bcc`, Vulkan driver ID 18), a 2184 x 1968 test display, memory saver and `DM_MEM_FILEBACK=1` with `DM_MEM_FILEBACK_KINDS=shader,texture`. The world-camera patch was disabled. The QA APK SHA-256 was `BA9310B8A29C9A64BC1A51BC0B05347BC9E903338A75BF1524563C6E160A1E6E`.
+
+This run did not retest WAN/Tailscale traversal or reconnecting. The visitor had already left before the host ended its session, so it does not verify forced host closure with a visitor still connected. Android hosting, automatic LAN discovery, Story co-op, Interact everywhere and other games have not been verified. The launcher offers joining only. Keep native host, launcher and documentation changes separate, and include the exact game, host build, driver and observed result when reporting a new test.
+
+### Optional module and provenance
+
+The host integration is inert until `DM_COOP` is enabled. It builds offline when the portable module is absent. For a source build with the module, pass `-DNX_COOP_VENDOR_DIR=<module source directory>` to the Android host CMake build; the directory must contain `coop.h` and the six required source files. A partial module fails configuration.
+
+The QA build used [Dittobyte/Recompia at `75dae2f2ccdada74e6b8ba12ea7de30560a84221`](https://github.com/Dittobyte/Recompia/tree/75dae2f2ccdada74e6b8ba12ea7de30560a84221/runtime/third_party/pokopia-coop), `runtime/third_party/pokopia-coop`, supplied outside this repository. Recompia credits the original portable module to pokopia-native 1.3.3, revision `035bd9c` (MIT); its former source URL was unavailable during this work. Preserve every source file's copyright and license notices, including those of later additions. Choosing and vendoring the dependency is a separate maintainer step; these changes do not add or edit `dm/third_party`.
+
 ## Driving it on the Mac
 
 The first boot shows the language list: `A`, `LUp`, `A` picks English. The character choice takes `LLeft` before `A`. From a warm cache, `A A LLeft A A Plus` reaches walking in about 300 s. On later boots, `A` at the title screen a few times continues the save and reaches walking in about 110 s. The work folder has `run/boot.sh`, `run/hdrive.sh` (no window, timed control lines) and `run/spam.sh`.
@@ -81,6 +122,8 @@ The first boot shows the language list: `A`, `LUp`, `A` picks English. The chara
 - Android (2026-11-05, the test app at `f9b4b6f1`, the selected library `v-31b81e5c07ac`): plays at about 60 fps on the Qualcomm driver and Turnip; the user's run got past the Poké Ball and through a text prompt (the keyboard dialog). Resolved (2026-11-07): **the sky was black** on Android, because the Android replay had no CPU texel read (`android_stub.c` left the game's buffer of `nvnTextureReadTexels` unwritten) and the game builds its sky from textures it reads back. PR #60 (b1b45d3b) reads them in `vka_tex.c` from guest storage, or from the Vulkan image when the GPU wrote them, as the Mac does (`DM_VK_READTEXELS=0` turns it off). Checked on an AYN Thor (Adreno 740, Turnip) by the PR's author and on the user's phone (2026-11-07): the sky is correct and the Pokédex has its images. (The shader forms another emulator's report named, a guarded ULEA and a UISETP with OR, were not the cause: this translator decodes both.)
 
 ## Found on this game
+
+- [Opt-in LDN sessions and virtual UDP sockets](../../../docs/reference/services.md#opt-in-ldn-sessions-and-virtual-udp-sockets): experimental Android-to-PC Link Play; current verification limits are in [Link Play on Android](#link-play-on-android).
 
 - [The Mac's pack translates every shader of a selected profile at a new library version](../../../docs/reference/packing.md#the-macs-pack-translates-every-shader-of-a-selected-profile-at-a-new-library-version): v0.3.12 on a Mac (issue 178) translated all 131,426 shaders (about 6 hours) where the phone and the manifest hold the 8,161 selected; `pack_android.py` now builds the selected set.
 - [The shaders step crashes at once on a game build the profile was not made from](../../../docs/reference/packing.md#the-shaders-step-crashes-at-once-on-a-game-build-the-profile-was-not-made-from): a player on update 327680 with Try anyway; the step now builds the selected shaders that build has (resolved on the Mac; how many of the 8,161 update 327680 lacks, and how it draws, is not known: no dump of it here). Players can update the game to 655360 instead.
@@ -106,3 +149,21 @@ The first boot shows the language list: `A`, `LUp`, `A` picks English. The chara
 - [A translator call that needs reflection fails only on the phone](../../../docs/reference/shaders.md#a-translator-call-that-needs-reflection-fails-only-on-the-phone-android): 3,384 of 8,157 shaders failed on the phone (resolved).
 - [A library with failed shaders passed as finished](../../../docs/reference/shaders.md#a-library-with-failed-shaders-passed-as-finished-android): the card said Ready with them missing (resolved).
 - [The Joy-Con mouse pointer](../../../docs/reference/services.md#the-joy-con-mouse-pointer) and [GameShare guest displays](../../../docs/reference/services.md#gameshare-guest-displays): boot aborts.
+
+## Experimental Fold 7 scene-camera aspect (opt-in)
+
+For Pokopia v2.0.1 / update 655360, exact **main build ID** `76a489f3bd3642fa5e18bd83d32c98ba`, Android has three build-pinned observation gates for scene-camera submission, the perspective builder and the completed projection. Set `DM_PKP_ASPECT=1.109756` before starting the game for a 2184 x 1968 Fold 7 inner-screen picture. Use matching picture presentation, for example `DM_VK_PICTURE_ASPECT=2184:1968`; the existing Stretch presentation also fills that screen. Unset or set `DM_PKP_ASPECT=0` for the original 16:9 camera. **Restart the game after changing this setting.** Invalid, non-finite, out-of-range and 16:9-or-wider values leave the camera unchanged.
+
+The correction increases vertical FOV while retaining the original horizontal reach. The aspect field remains 16:9 because changing it caused terrain/LOD cells to disappear. Each of the eight registered scene cameras retains its latest corrected FOV, so another camera's zoom changes cannot cause it to be corrected twice. A 32-value recent history also recognizes the game's copied render cameras after their source changes FOV. This covers the observed render-camera path; arbitrary orphaned copies retained across more than 32 later corrections have not been established. The gates execute their original instructions, and only this exact main build receives them. Unlike the fixed `VARIANT_CUTS` used by Fire Emblem, these callbacks adapt the game's changing FOV and its copied cameras to a runtime-selected display ratio; all addresses remain in this profile's `patches.py`.
+
+**Scope:** World camera only. HUD, dialogue, menus, map, Pokadex and touch-control layout are not corrected. Their original 16:9 layout can look stretched or remain centered when the picture fills a near-square screen. No universal UI fix is claimed.
+
+**Focused checks (2026-11-12):** Against Android base `29fb81de35f0013cfe0e2efabd878b64b59582f0`, the NDK callback harness ran on a Fold 7 and passed all 14 opt-in, build, projection and startup cases. Reproductions failed before the malformed-value, scene-history eviction and changed-source/copy fixes, then passed after them. These callback checks use synthetic camera structures and do not replace the gameplay/driver comparison below.
+
+**Current gameplay evidence (2026-11-12):** On Android base `29fb81de`, a same-APK OFF/ON comparison used the same populated Ver. 2.0.1 world, Fold 7 (Android 16, Adreno 830), 2184 x 1968 display and Turnip Mesa 26.2.3 (`fbc44a3bcc`, Vulkan driver ID 18). The corrected world matched the 16:9 reference proportions, retained horizontal coverage and added vertical coverage; terrain rendered coherently and camera input worked. The FOV changed from 42.0 to 63.2 degrees at `DM_PKP_ASPECT=1.109756`. After rebasing to `0bac816c`, a clean APK rebuild preserved all five packaged native libraries and the game overlay byte for byte; the installed APK SHA-256 was `49847D9B4F2F54106D3236092E4D2430EA653DE96C44ED6A89EB29608FD2B40F`. That rebuilt APK also ran the corrected Turnip world for over 39 seconds and responded to camera input. Performance parity was not measured.
+
+**Qualcomm limit:** The Qualcomm comparison used the same `29fb81de` comparison APK for OFF and ON, with the stock Qualcomm driver (driver ID 8, `0x80320027`, Vulkan 1.3.284) and `DM_VK_PREWARM=0` in both runs. Terrain was already incomplete with correction OFF. ON briefly showed corrected proportions and the same terrain defects, then Android reported `LOW_MEMORY` before sustained gameplay or input acceptance. Stable Qualcomm gameplay is not verified; the additional coverage's memory cost has not been excluded. These outcomes do not establish a camera-only rendering regression.
+
+**Earlier evidence:** Local v0.3.0 phone tests also showed improved world proportions with Turnip and incomplete terrain with the stock Qualcomm driver. Those historical observations are distinct from the current-source checks above.
+
+**Attribution:** The camera/FOV handling is adapted from Recompia revision `75dae2f2ccdada74e6b8ba12ea7de30560a84221`, `runtime/games/pkp/render/pkp_aspect.cpp` (GPL-3.0-or-later). The Android-only source retains its SPDX marker and the pinned source is recorded in [android/NOTICE.md](../../../android/NOTICE.md). Related upstream issue: https://git.eden-emu.dev/moceure/BananaNative/issues/74.

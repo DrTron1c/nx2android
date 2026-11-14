@@ -225,7 +225,9 @@ def dump_modules(g, exe):
     for row in g.builds().values():
         want = [m for m in mods if m in row]
         if want and want == have and all(nso_build_id(exe / m) == row[m] for m in want): return have
-    return mods   # no row has this set of modules: the caller names what is missing
+    # No row has this set of modules (a build the profile does not register, e.g. Mario Kart World 1.0.0, whose row was dropped): "Try anyway" takes the
+    # modules the dump has, when main is among them; build-gated cuts do not apply (the caller flags it in red). Without main the caller names what is missing.
+    return have if 'main' in have else mods
 
 
 def optional_keys(g):
@@ -577,6 +579,13 @@ def scene_overlays(g, romfs, out):
     return [(m[0], f'scene_res/{m[0]}') for m in made]
 
 
+def work_dir(out, app):
+    """The work folder the shader split and library cache go to (android-shaders/): the pack's own <title ID>-work, so a pack folder picked elsewhere (--out) takes
+    the extracted shaders with it instead of leaving them beside the game. The default pack, <game folder>/../<title ID>-work/android-pack, gives the same folder as before"""
+    name = f'{app:016X}-work'
+    return out.parent if out.parent.name.upper() == name.upper() else out.parent / name
+
+
 def commit():   # the packer's commit; DM_PACKER_COMMIT when the repository's tool has none (the phone: no git there, the app passes the commit it was built from)
     try: r = subprocess.run(['git', '-C', str(REPO), 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True).stdout.strip()
     except OSError: r = ''
@@ -589,7 +598,7 @@ def main():
     ap.add_argument('--version', type=int, help='the update version to pack (default: the newest in updates/; 0 = the base game)')
     ap.add_argument('--out', type=Path, help='the pack folder (default: <game folder>/../<title ID>-work/android-pack)')
     ap.add_argument('-j', type=int, default=2, help='modules rewritten at once (default 2)')
-    ap.add_argument('--shader-cache', type=Path, help='the folder of Vulkan shader libraries v-<V>/ (default: <title ID>-work/android-shaders/lib)')
+    ap.add_argument('--shader-cache', type=Path, help='the folder of Vulkan shader libraries v-<V>/ (default: <title ID>-work/android-shaders/lib, the <title ID>-work beside or holding the pack folder)')
     ap.add_argument('--shader-pkg', type=Path, help='the Switch shader package to build the library from, split from the dump into it when it is not there (default: <title ID>-work/android-shaders/pkg)')
     ap.add_argument('--shader-python', help='the Python 3.14 (or one with backports.zstd) that runs vk_android_build.py')
     ap.add_argument('-J', type=int, default=8, help='shaders translated at once when the library is built (default 8)')
@@ -613,6 +622,9 @@ def main():
         except SystemExit: raise Error(f'no profile dm/games/{app:016X}: the Android pack needs one (build_ipa_from_nsp.py makes a provisional one)') from None
         ver = a.version if a.version is not None else max(vers, default=0)
         if ver and ver not in vers: raise Error(f'no updates/{ver} (have: {", ".join(map(str, sorted(vers))) or "none"})')
+        for tid, p in sorted(dlc.items()):   # the add-on's content meta record: the game version it needs (pack_dump.dlc_required_version)
+            if (need := pack_dump.dlc_required_version(p)) > ver:
+                print(f'[RED] DLC {tid:016X} needs game version {need} or later (its content meta record); this pack is version {ver}: the game may not use it', flush=True)
         vdir = pack_dump.version_dir(folder, vers, ver)
         exe, romfs = pack_dump.version_part(folder, vers, ver, 'exefs'), pack_dump.version_part(folder, vers, ver, 'romfs')   # its own, else the base's
         if not (exe / 'main.npdm').is_file() or not romfs.is_dir(): raise Error(f'{vdir}: no exefs/main.npdm and romfs (neither its own nor the base\'s)')
@@ -629,6 +641,7 @@ def main():
         try: out.relative_to(REPO); raise Error(f'{out} is inside the repository: packs never go there')
         except ValueError: pass
         out.mkdir(parents=True, exist_ok=True)
+        work = work_dir(out, app)
         ids = {m: nso_build_id(srcs[m]) for m in mods}
         print(f'{app:016X} {g.get("name", "?")} version {ver}: {vdir}', flush=True)
         for m, known in unregistered(g, ids).items(): print(f'[RED] {m} build {ids[m]} is none of the profile\'s builds ({", ".join(known)}): build-gated cuts do not apply')
@@ -647,7 +660,7 @@ def main():
         if a.code_only: print(f'done: the modules in {out} (--code-only: pack.tsv and the shaders unchanged)'); return
         if a.keep_code: upgrade_keys(srcs, out, g)   # before the copy below replaces the game.tsv an earlier key was made with (a rewrite run did it in rewrite)
         shutil.copyfile(g.dir / 'game.tsv', out / 'game.tsv')
-        shaders = None if a.no_shaders else pack_shaders(a, g, folder.parent / f'{app:016X}-work', out, vdir, (romfs, exe))
+        shaders = None if a.no_shaders else pack_shaders(a, g, work, out, vdir, (romfs, exe))
         scenes = scene_overlays(g, romfs, out)
         top = folder.parent if pack_dump.nup.is_nup(folder) else folder   # a NUP file's paths are `<name>.nup:<package>/...`, relative to its folder
         rel = lambda p: p.relative_to(top).as_posix()
