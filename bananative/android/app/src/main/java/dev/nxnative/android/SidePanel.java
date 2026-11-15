@@ -1,5 +1,7 @@
 package dev.nxnative.android;
 
+import java.io.File;
+
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.graphics.Color;
@@ -556,6 +558,11 @@ final class SidePanel extends FrameLayout {
         now.setText("Sleep now");
         now.setOnClickListener(v -> { close(); m.ask(); });
         box.addView(now, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        android.widget.CheckBox quit = new android.widget.CheckBox(act);
+        quit.setText("Each Save and Quit: the next time in is " + SleepMod.QUIT_HOURS + " hours later");
+        quit.setChecked(SleepMod.quitSkip(act));
+        quit.setOnCheckedChangeListener((b, on) -> SleepMod.quitSkip(act, on));
+        box.addView(quit);
         long ahead = SleepMod.skip(act);
         note("Game clock: " + (ahead == 0 ? "real time" : SleepMod.ahead(ahead) + " ahead of real time") + ". Only Pokopia's clock moves; the tablet's own date and time never change.");
         if (ahead != 0) {
@@ -570,6 +577,30 @@ final class SidePanel extends FrameLayout {
             forget.setOnClickListener(v -> { m.forgetBed(); rebuild(); });
             box.addView(forget, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
+        // The game's own font and talk bubble for the menu: first a survey of the game's files for the developer (UiExport), sent by the player
+        GameActivity ga = (GameActivity) act;
+        Button survey = new Button(act);
+        survey.setText("Find the game's font and speech bubble");
+        TextView out = note("Looks through your game's files (a few minutes; the game may stutter meanwhile) and makes a zip to send to the developer, so the sleep menu can use the game's own font and speech bubble.");
+        survey.setOnClickListener(v -> {
+            String romfs = ga.romfsPath();
+            File game = ga.gameDir();
+            if (romfs == null || game == null || romfs.contains(".nup:") || !new File(romfs).isDirectory()) { out.setText("This needs the game as a dump folder; it was started from a .nup package."); return; }
+            File work = new File(game, "0400A3A01EE4C000-work");   // the dump folder's work folder, as Banana Native keeps what comes out of a game's files
+            File zip = new File(work.mkdirs() || work.isDirectory() ? work : new File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "nx2android"), "sleepmod-ui-survey.zip");
+            survey.setEnabled(false);
+            Thread t = new Thread(() -> {
+                String msg;
+                try { msg = UiExport.run(new File(romfs), zip, line -> post(() -> out.setText(line))); }
+                catch (Exception e) { msg = "The survey stopped: " + e; }
+                String fin = msg;
+                Native.note("sleep mod: " + fin);
+                post(() -> { out.setText(fin); survey.setEnabled(true); });
+            }, "nx2a-ui-survey");
+            t.setPriority(Thread.MIN_PRIORITY);
+            t.start();
+        });
+        box.addView(survey, box.indexOfChild(out), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
     /**

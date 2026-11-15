@@ -35,6 +35,7 @@ enum {
     F_SAVE_REQUEST = 0x241324, F_SAVE_DONE = 0x2412b0,
     PM_PLAYER = 0x30, CH_ACTION = 0x18b8, AC_ID = 0x984,
     GS_SESSION = 0x90, GS_AUTOSAVE = 0x3bb5e0, GS_EVENT = 0xd0, EV_BUSY = 0x6ea, SR_HOME = 0xa4,
+    SR_PLAY_TIME = 0x4a5418,   // the play time in seconds (double; Recompia's pkp_tt_probe.cpp): it runs in a game, not on the title screen
     SR_TIME_OF_DAY = 0x13d373c, SR_YEAR = 0x13d3740, SR_MONTH = 0x13d3742, SR_DAY = 0x13d3743,   // the game's own time: seconds of the day (float), its date (Recompia's pkp_tt_probe.cpp)
 };
 
@@ -54,6 +55,7 @@ static uint64_t rq(uint64_t a) { uint64_t v = 0; return rd(a, &v, 8) ? v : 0; }
 
 static _Atomic int g_cur = -1, g_last, g_beds_in, g_online, g_save, g_getup;
 static _Atomic int64_t g_frames;
+static _Atomic int g_in_game, g_quits, g_pt_reset = 1;   // a game has run since the title (its play time moved on 5 s); Save and Quits seen; the mark is taken again
 static _Atomic uint64_t g_recent;   // the last four actions the player started, newest in the low 16 bits (the in-game panel shows them)
 static int g_save_tries, g_save_wait, g_up_frame, g_up_step, g_changes;
 
@@ -207,6 +209,13 @@ static void frame_work(void) {
     uint64_t game = rq(base + M_GAME_STATE); uint8_t sess = 0;
     atomic_store(&g_online, game && rd(game + GS_SESSION, &sess, 1) && sess);
     uint64_t ch, ac; player(base, &ch, &ac);
+    {   // a game runs: its play time moved on 5 s since the title (a title scene with a player in it is no game; without a play time to read, no Save and Quit counts)
+        static double mark; double pt; uint64_t root = rq(base + M_SAVE_ROOT);
+        if (root && rd(root + SR_PLAY_TIME, &pt, 8) && pt >= 0 && pt < 1e9) {
+            if (atomic_exchange(&g_pt_reset, 0)) mark = pt;
+            if (pt - mark >= 5.0) atomic_store(&g_in_game, 1);
+        }
+    }
     uint16_t av; int cur = ac && rd(ac + AC_ID, &av, 2) ? av : -1, was = atomic_exchange(&g_cur, cur);
     if (cur != was) {
         if (cur > 0) { atomic_store(&g_last, cur); atomic_store(&g_recent, atomic_load(&g_recent) << 16 | (uint16_t)cur); }
@@ -232,6 +241,15 @@ static void frame_work(void) {
     getup_step(cur);
 }
 
+// The key guide widget takes a set (Recompia's pkp_title.cpp): 152 is the title's ((-) Settings), 183 the title with Credits. After a game, that is Save and Quit
+static void guide_gate(uint64_t *r, int param) {
+    (void)param;
+    unsigned set = (unsigned)(r[1] & 0xff);
+    if (!main_base() || (set != 152 && set != 183)) return;
+    atomic_store(&g_pt_reset, 1);
+    if (atomic_exchange(&g_in_game, 0)) { atomic_fetch_add(&g_quits, 1); LOG("pkp sleep: back at the title after a game (Save and Quit)"); }
+}
+
 // The gate's call: the frame's work, then the getter the frame step asked for (x0 its object). One game thread runs the frame step, so one target is kept
 static _Atomic uint64_t g_getter;
 static uint64_t tick_call(uint64_t self) {
@@ -249,10 +267,11 @@ static void frame_gate(uint64_t *r, int param) {
 // ---- The launcher's interface (input_android.h) ----
 int64_t nxhost_clock_now(void) { return dm_time_user_now(); }
 void nxhost_clock_skip(int64_t seconds) { dm_time_skip_set(seconds); }
-int nxhost_pkp_state(int64_t out[8]) {
+int nxhost_pkp_state(int64_t out[10]) {
     out[0] = atomic_load(&g_cur); out[1] = atomic_load(&g_last); out[2] = atomic_load(&g_beds_in);
     out[3] = atomic_load(&g_save); out[4] = atomic_load(&g_online); out[5] = atomic_load(&g_frames); out[6] = (int64_t)atomic_load(&g_recent);
     out[7] = atomic_load(&g_inbed) | atomic_load(&g_nsign) << 8 | atomic_load(&g_learn_done) << 16 | atomic_load(&g_learn) << 20 | atomic_load(&g_getup) << 24;
+    out[8] = atomic_load(&g_quits); out[9] = 0;
     return main_base() && gate_obs_present(OBS_PKP_FRAME);
 }
 int nxhost_pkp_learn(int step) {
@@ -304,4 +323,4 @@ int nxhost_pkp_tod(int64_t out[2]) {
 void nxhost_pkp_focus(int st) { if (st >= 1 && st <= 2) dm_focus_set(st); }
 void nxhost_pkp_save(void) { g_save_tries = 0; atomic_store(&g_save, PKP_SAVE_ASKED); }
 
-__attribute__((constructor)) static void pkp_sleep_attach(void) { gate_obs_set(OBS_PKP_FRAME, frame_gate); }
+__attribute__((constructor)) static void pkp_sleep_attach(void) { gate_obs_set(OBS_PKP_FRAME, frame_gate); gate_obs_set(OBS_PKP_GUIDE, guide_gate); }

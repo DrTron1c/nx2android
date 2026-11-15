@@ -12,6 +12,9 @@ OBS = {
         # nx2android (OBS_PKP_FRAME = 60, dm/host/android/pkp_sleep.c): the frame step's stp right before its first virtual call (blr x9 at +0xbfc55c), on the game thread once
         # a frame; the callback points x9 at the sleep mod's frame work, which then calls the getter x9 held
         (0x0bfc558, 60, 'a902a3e8', 'frame step, before its first virtual call; x9 its target (the sleep mod)'),
+        # nx2android (OBS_PKP_GUIDE = 61): the key guide widget takes a set (Recompia's kFillSet: x0 the widget, w1 the set id); the title screen's sets are 152 and 183,
+        # so a player's game reaching them is a Save and Quit (the sleep mod moves the clock on 6 hours for the next time in)
+        (0x0ec5de0, 61, '72001c3f', 'key guide widget takes a set; w1 the set id (the sleep mod: the title screen)'),
     ],
 }
 BINDING = [

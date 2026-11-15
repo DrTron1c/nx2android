@@ -31,6 +31,7 @@ import java.util.Locale;
  * screen one hour a second with a loading icon turning in the bottom right corner; the screen stays black until the game's own time of day is the new one
  * (Native.pkpTod) and the player is out of bed (Native.pkpHold(2)), so the picture fades back in on the new time with the player up.
  * The total skip is kept (pkp_clock_skip) and given to every start (DM_TIME_SKIP), so the game stays ahead of real time until Back to real time (the in-game panel).
+ * Save and Quit (the game back at its title after a game: pkp_sleep.c guide_gate) moves the game's clock on 6 hours, so the next time in is later in the day.
  * The bed is learned once, in three taps in the in-game panel (standing next to it, lying in it, standing again): the host keeps the values of the player's state that
  * change in the bed and come back out of it (pkp_sleep.c "The bed, learned"), kept here as pkp_bed_signs. Not in Link Play.
  * The Pokédex: while the game draws its avatar shaders (the profile's shader_seen.tsv, GitHub issue #35; Native.watchFs) the game's clock shows in the picture's top left corner.
@@ -57,6 +58,11 @@ final class SleepMod {
     /** How far the game's clock runs ahead of real time, in seconds */
     static long skip(Context c) { return Prefs.of(c).getLong("pkp_clock_skip", 0); }
     static void skip(Context c, long s) { Prefs.of(c).edit().putLong("pkp_clock_skip", s).commit(); }
+    /** Each Save and Quit moves the game's clock on QUIT_HOURS for the next time in (on unless the player turns it off in the panel) */
+    static final int QUIT_HOURS = 6;
+    static boolean quitSkip(Context c) { return Prefs.of(c).getBoolean("pkp_quit_skip", true); }
+    static void quitSkip(Context c, boolean on) { Prefs.of(c).edit().putBoolean("pkp_quit_skip", on).apply(); }
+
     /** The host's DM_TIME_SKIP for a start of Pokopia */
     static void env(Context c, String titleId, List<String> env) { if (game(titleId) && skip(c) != 0) env.add("DM_TIME_SKIP=" + skip(c)); }
     /** "1 day 6 hours" */
@@ -69,12 +75,12 @@ final class SleepMod {
 
     private final Activity act;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final long[] st = new long[8];
+    private final long[] st = new long[10];
     private final Panel view;
     private final java.util.function.Supplier<float[]> picture;   // the game's picture in the view, normalized (x, y, w, h: TouchControls.picture)
     private Typeface face, faceBold;
     private boolean present, stopped, dex;
-    private long bedsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt;
+    private long bedsSeen = -1, quitsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt;
     private int phase = IDLE, sel, hours, seenFrames, pressedRow = -1, saveState, teach;
 
     SleepMod(Activity a, java.util.function.Supplier<float[]> picture) {
@@ -96,7 +102,7 @@ final class SleepMod {
     void stop() { stopped = true; ui.removeCallbacksAndMessages(null); Choreographer.getInstance().removeFrameCallback(frame); if (phase != IDLE) Native.pkpHold(0); }
 
     /** The game's state now (Native.pkpState), null when the mod's gate is not in the game's code */
-    long[] state() { long[] o = new long[8]; return Native.pkpState(o) ? o : null; }
+    long[] state() { long[] o = new long[10]; return Native.pkpState(o) ? o : null; }
 
     /** Teaching the bed: 0 not started (or done), 1 standing sampled (next: in the bed), 2 in the bed sampled (next: standing again) */
     int teachStep() { return teach; }
@@ -152,6 +158,15 @@ final class SleepMod {
             if (present) {
                 if (bedsSeen < 0) bedsSeen = st[2];   // the count when this screen started
                 else if (st[2] > bedsSeen) { bedsSeen = st[2]; if (phase == IDLE && st[4] == 0) ask(); }
+                if (quitsSeen < 0) quitsSeen = st[8];
+                else if (st[8] > quitsSeen) {   // Save and Quit: the next time in is 6 hours later (pkp_quit_skip)
+                    long n = st[8] - quitsSeen; quitsSeen = st[8];
+                    if (quitSkip(act)) {
+                        long total = skip(act) + n * QUIT_HOURS * 3600L;
+                        skip(act, total); Native.clockSkip(total);
+                        Native.note("sleep mod: Save and Quit: the game's clock +" + n * QUIT_HOURS + " h for the next time in (" + ahead(total) + " ahead of real time)");
+                    }
+                }
             }
             long age = Native.watchFsAge();
             boolean d = age >= 0 && age <= DEX_MS;

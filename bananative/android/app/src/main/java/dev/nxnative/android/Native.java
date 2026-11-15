@@ -94,7 +94,8 @@ final class Native {
 
     /** nx2android: Pokopia's sleep mod (dm/host/android/pkp_sleep.c). True when its frame gate runs in this game; out (8): the player's action now (-1 unknown), the last action
      *  started, the times the player got into a bed, the save (0 idle, 1 asked, 2 writing, 3 done, 4 failed), 1 in Link Play, the game frames counted, the last four actions
-     *  started (16 bits each, newest lowest), and bit 0 in bed now, bits 8-15 the bed's signs, bits 16-18 the learning windows sampled, bits 20-21 the one being sampled */
+     *  started (16 bits each, newest lowest), and bit 0 in bed now, bits 8-15 the bed's signs, bits 16-18 the learning windows sampled, bits 20-21 the one being sampled,
+     *  bit 24 getting out of bed; then the times the game went back to its title after a player's game (Save and Quit), 0 (10 longs) */
     static native boolean pkpState(long[] out);
 
     /** Learning the bed: 1 / 2 / 3 sample standing / in the bed / standing again (half a second of game frames); 4 makes the signs (their number, -1 with a window

@@ -17,8 +17,11 @@ class Gate(unittest.TestCase):
     def test_row_and_number(self):
         rows = re.findall(r"\((0x[0-9a-f]+), (\d+), '([0-9a-f]{8})', '([^']*)'\)", (GAME / 'patches.py').read_text())
         self.assertIn(('0x0bfc558', '60', 'a902a3e8'), [r[:3] for r in rows])
+        self.assertIn(('0x0ec5de0', '61', '72001c3f'), [r[:3] for r in rows])   # the key guide widget takes a set: the title's after a game is Save and Quit
         dm = (HOST / 'dm.h').read_text()
         self.assertIn('OBS_PKP_FRAME = 60,', dm)
+        self.assertIn('OBS_PKP_GUIDE = 61,', dm)
+        self.assertIn('gate_obs_set(OBS_PKP_GUIDE, guide_gate)', (HOST / 'android/pkp_sleep.c').read_text())
         self.assertGreater(int(re.search(r'OBS_MAX = (\d+)', dm).group(1)), 60)
         self.assertIn('gate_obs_set(OBS_PKP_FRAME, frame_gate)', (HOST / 'android/pkp_sleep.c').read_text())
         self.assertIn('gate 60 at `+0xbfc558`', (BN / 'docs/agents/game-patches.md').read_text())
@@ -26,7 +29,8 @@ class Gate(unittest.TestCase):
     @unittest.skipUnless(MAIN.is_file() and shutil.which('llvm-objdump') and shutil.which('llvm-objcopy'), "the game's main (.gamedump) and llvm-objdump")
     def test_the_games_code(self):
         t = MAIN.read_bytes()
-        self.assertEqual(struct.unpack_from('<I', t, 0xbfc558)[0], 0xa902a3e8)   # stp x8, x8, [sp, #0x28]: the gate's own instruction, relocatable
+        self.assertEqual(struct.unpack_from('<I', t, 0xbfc558)[0], 0xa902a3e8)
+        self.assertEqual(struct.unpack_from('<I', t, 0xec5de0)[0], 0x72001c3f)   # tst w1, #0xff: the key guide set function's first instruction (Recompia's kFillSet)   # stp x8, x8, [sp, #0x28]: the gate's own instruction, relocatable
         self.assertEqual(struct.unpack_from('<I', t, 0xbfc55c)[0], 0xd63f0120)   # blr x9: the call whose target the gate takes
         self.assertEqual(struct.unpack_from('<I', t, 0xbfc548)[0], 0xf9401529)   # ldr x9, [x9, #0x28]: x9 a vtable slot, final before the gate
         self.assertEqual(struct.unpack_from("<I", t, 0x27e5d8)[0], 0x79130a7c)   # strh w28, [x19, #0x984]: StartAction's store of the action id (+0x984 as read)
@@ -114,6 +118,10 @@ class Menu(unittest.TestCase):
         self.assertIn('if (getupAt == 0 && (newTime() || el > SETTLE_MAX_MS))', j)
         self.assertIn('SR_TIME_OF_DAY = 0x13d373c', (HOST / 'android/pkp_sleep.c').read_text())
         self.assertIn('sleepRows();', (JAVA / 'SidePanel.java').read_text())
+        # Save and Quit (the title's key guide sets 152 / 183 after a game) moves the clock on 6 hours for the next time in, unless turned off
+        self.assertIn('if (!main_base() || (set != 152 && set != 183)) return;', (HOST / 'android/pkp_sleep.c').read_text())
+        self.assertIn('static final int QUIT_HOURS = 6;', j)
+        self.assertIn('long total = skip(act) + n * QUIT_HOURS * 3600L;', j)
 
     def test_font(self):
         fonts = BN / 'dm/third_party/fonts'

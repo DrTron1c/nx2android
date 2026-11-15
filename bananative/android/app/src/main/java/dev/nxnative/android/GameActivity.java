@@ -444,6 +444,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     private SleepMod sleep;   // nx2android: Pokopia's sleep mod (SleepMod), null for another game
     SleepMod sleepMod() { return sleep; }
+    private String romfsPath;   // nx2android: the RomFS the host got (a folder, or <file>.nup:…), and the game's folder
+    private File gameDir;
+    String romfsPath() { return romfsPath; }
+    File gameDir() { return gameDir; }
     private Profile.Render startRender;   // the render setting this run started with (settingsEnv), null for a game without a render_cfg row
     Profile.Render startRender() { return startRender; }
 
@@ -663,6 +667,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         try {
             Pack pack = Pack.read(packDir);
             String romfs = pack.romfsPath(game);   // a folder's RomFS folder, or <file>.nup:<selector>/romfs (NUP.md)
+            romfsPath = romfs; gameDir = game;   // nx2android: the sleep mod's survey of the game's font and talk bubble (UiExport)
             if (romfs == null) throw new IOException(Nup.isNup(game) ? game.getName() + " has no " + pack.romfsSelector() + " with a RomFS" : "no RomFS in " + game);
             if (readinessHold(id)) return;   // after the pack's own checks (a missing pack says so first), before the save is locked or anything is written
             // A .nup used where it is (PickedNup): the host gets a descriptor of it, fd:<n>/<name>, wherever it would get the file's path (DM_ROMFS, the add-on links);
