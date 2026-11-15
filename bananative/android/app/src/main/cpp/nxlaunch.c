@@ -374,9 +374,9 @@ JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_saveFlush(JNIEnv *en
 JNIEXPORT jlong JNICALL Java_dev_nxnative_android_Native_clockNow(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_clock_now ? nxhost_clock_now() : 0; }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_clockSkip(JNIEnv *env, jclass cls, jlong s) { (void)env; (void)cls; if (nxhost_clock_skip) nxhost_clock_skip(s); }
 JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_pkpState(JNIEnv *env, jclass cls, jlongArray out) {
-    (void)cls; if (!nxhost_pkp_state || (*env)->GetArrayLength(env, out) < 6) return JNI_FALSE;
-    int64_t v[6] = {0}; int on = nxhost_pkp_state(v); jlong j[6]; for (int i = 0; i < 6; i++) j[i] = v[i];
-    (*env)->SetLongArrayRegion(env, out, 0, 6, j); return on ? JNI_TRUE : JNI_FALSE;
+    (void)cls; if (!nxhost_pkp_state || (*env)->GetArrayLength(env, out) < 8) return JNI_FALSE;
+    int64_t v[8] = {0}; int on = nxhost_pkp_state(v); jlong j[8]; for (int i = 0; i < 8; i++) j[i] = v[i];
+    (*env)->SetLongArrayRegion(env, out, 0, 8, j); return on ? JNI_TRUE : JNI_FALSE;
 }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpBeds(JNIEnv *env, jclass cls, jintArray ids) {
     (void)cls; if (!nxhost_pkp_beds) return;

@@ -92,9 +92,9 @@ NXHOST_API int64_t nxhost_clock_now(void);
 NXHOST_API void nxhost_clock_skip(int64_t seconds);
 // The mod's state: returns 1 when its frame gate runs in this game (Pokopia 2.0.1's main, rewritten with its gate), else 0. out[0] the local player's action now (0 none, -1 unknown),
 // out[1] the last action the player started, out[2] how many times the player got into a bed (an action of nxhost_pkp_beds starting), out[3] the save (PKP_SAVE_*),
-// out[4] 1 in a Link Play session (the mod then never asks), out[5] game frames the gate counted
+// out[4] 1 in a Link Play session (the mod then never asks), out[5] game frames the gate counted, out[6] the last four actions started (16 bits each, newest lowest), out[7] 0
 enum { PKP_SAVE_IDLE = 0, PKP_SAVE_ASKED = 1, PKP_SAVE_WRITING = 2, PKP_SAVE_DONE = 3, PKP_SAVE_FAILED = 4 };
-NXHOST_API int nxhost_pkp_state(int64_t out[6]);
+NXHOST_API int nxhost_pkp_state(int64_t out[8]);
 NXHOST_API void nxhost_pkp_beds(const int *ids, int n);   // the actions that count as getting into a bed (the launcher learns them)
 // 0 the player's own input; 1 held: the game sees nothing of player 1 (dm_input_hold) while the mod's menu is up, nxhost_pkp_seen says what was pressed; 2 held, and the
 // player gets out of bed (B, then the left stick toward the camera while the bed action lasts), then back to 0

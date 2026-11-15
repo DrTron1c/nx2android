@@ -74,7 +74,7 @@ final class SleepMod {
 
     private final Activity act;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final long[] st = new long[6];
+    private final long[] st = new long[8];
     private final Panel view;
     private final java.util.function.Supplier<float[]> picture;   // the game's picture in the view, normalized (x, y, w, h: TouchControls.picture)
     private Typeface face, faceBold;
@@ -100,14 +100,17 @@ final class SleepMod {
     void stop() { stopped = true; ui.removeCallbacksAndMessages(null); Choreographer.getInstance().removeFrameCallback(frame); if (phase != IDLE) Native.pkpHold(0); }
 
     /** The game's state now (Native.pkpState), null when the mod's gate is not in the game's code */
-    long[] state() { long[] o = new long[6]; return Native.pkpState(o) ? o : null; }
+    long[] state() { long[] o = new long[8]; return Native.pkpState(o) ? o : null; }
 
     /** "This is the bed": the action the player is in now joins the beds; the sentence for the panel */
     String learnBed() {
         long[] s = state();
         if (s == null) return "The sleep mod is not in this game's code yet: prepare the game again (its card › Prepare), then start it.";
-        int cur = (int) s[0];
-        if (cur <= 0) return "No bed now: get into a bed in the game first, then tap this again.";
+        // The action running now, else the last one the player started: resting in bed is no action of its own (2026-11-15: the action read 0 in bed), the action that
+        // put the player into the bed is, and it is what starts each time they get into one
+        int cur = (int) s[0] > 0 ? (int) s[0] : (int) s[1];
+        if (cur <= 0) return s[5] == 0 ? "The sleep mod has not seen a game frame yet: play for a moment, get into the bed, then tap this again."
+                : "No action yet: get into a bed in the game first (from standing, so the game starts the move into it), then tap this again.";
         int[] b = beds(act);
         for (int id : b) if (id == cur) return "This bed is already known.";
         int[] n = new int[Math.min(b.length + 1, 8)];
@@ -115,8 +118,18 @@ final class SleepMod {
         beds(act, n); Native.pkpBeds(n);
         bedsSeen = s[2];
         Native.note("sleep mod: action " + cur + " is a bed");
-        return "Got it: the game asks how long to sleep the next time you get into this bed.";
+        return "Got it (action " + cur + "): the game asks how long to sleep the next time you get into a bed.";
     }
+    /** One line on what the mod sees, for a screenshot: frames counted, the action now, the last four actions started */
+    static String seen(long[] s) {
+        if (s == null) return "";
+        StringBuilder b = new StringBuilder("The mod sees: " + s[5] + " game frames, action now " + s[0] + ", recent actions");
+        int n = 0;
+        for (int i = 0; i < 4; i++) { long a = s[6] >>> (16 * i) & 0xffff; if (a == 0) break; b.append(n++ == 0 ? " " : ", ").append(a); }
+        if (n == 0) b.append(" none");
+        return b.append('.').toString();
+    }
+
     void forgetBeds() { beds(act, new int[0]); Native.pkpBeds(new int[0]); }
 
     /** Back to real time: the game's clock follows the tablet's again */

@@ -538,11 +538,12 @@ final class SidePanel extends FrameLayout {
         note(st == null ? "The sleep mod is not in this game's code yet: prepare the game again (its card › Prepare), then start it."
                 : beds == 0 ? "Get into a bed in the game, open this panel and tap “This is the bed”. From then on the game asks how long to sleep each time you get into a bed."
                 : "The game asks how long to sleep when you get into a bed (" + beds + (beds == 1 ? " bed" : " beds") + " learned)." + (st[4] != 0 ? " Not in Link Play." : ""));
+        TextView seen = st != null ? note(SleepMod.seen(st)) : null;   // what the mod reads from the game: the line to send when something does not work
         TextView said = note("");
         said.setVisibility(GONE);
         Button learn = new Button(act);
         learn.setText("This is the bed");
-        learn.setOnClickListener(v -> { said.setText(m.learnBed()); said.setVisibility(VISIBLE); });
+        learn.setOnClickListener(v -> { said.setText(m.learnBed()); said.setVisibility(VISIBLE); if (seen != null) seen.setText(SleepMod.seen(m.state())); });
         box.addView(learn, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         Button now = new Button(act);
         now.setText("Sleep now");

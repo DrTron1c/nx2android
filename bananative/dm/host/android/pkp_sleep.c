@@ -49,6 +49,7 @@ static uint64_t rq(uint64_t a) { uint64_t v = 0; return rd(a, &v, 8) ? v : 0; }
 
 static _Atomic int g_cur = -1, g_last, g_beds_in, g_online, g_save, g_bed[NBED], g_nbed, g_getup;
 static _Atomic int64_t g_frames;
+static _Atomic uint64_t g_recent;   // the last four actions the player started, newest in the low 16 bits (the in-game panel shows them)
 static int g_save_tries, g_save_wait, g_up_frame, g_up_step, g_changes;
 
 static int is_bed(int id) {
@@ -89,15 +90,16 @@ static void save_step(uint64_t base) {
     }
 }
 
-// "Not now": B, and while the bed action lasts the left stick toward the camera, then the player's input back
+// "Not now": B, then the left stick toward the camera for a moment (resting in bed is no action of its own: the action that put the player there has ended, so
+// whether the player is still in bed cannot be read; a player already up takes a step), then the player's input back
 static void getup_step(int cur) {
     if (!atomic_load(&g_getup)) return;
     int f = g_up_frame++;
     if (g_up_step == 0) { dm_input_hold(1, DM_BTN_B, 0, 0, 0, 0); if (f >= 8) { g_up_step = 1; g_up_frame = 0; } return; }
-    if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 24) { g_up_step = is_bed(cur) ? 2 : 4; g_up_frame = 0; } return; }
-    if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 14) { g_up_step = 3; g_up_frame = 0; } return; }
+    if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 24) { g_up_step = 2; g_up_frame = 0; } return; }
+    if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 8) { g_up_step = 3; g_up_frame = 0; } return; }
     if (g_up_step == 3) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = 4; g_up_frame = 0; } return; }
-    LOG("pkp sleep: out of bed%s (action %d)", is_bed(cur) ? " not confirmed" : "", cur);
+    LOG("pkp sleep: out of bed (action %d)", cur);
     dm_input_hold(0, 0, 0, 0, 0, 0); atomic_store(&g_getup, 0);
 }
 
@@ -109,7 +111,7 @@ static void frame_work(void) {
     atomic_store(&g_online, game && rd(game + GS_SESSION, &sess, 1) && sess);
     int cur = action_now(base), was = atomic_exchange(&g_cur, cur);
     if (cur != was) {
-        if (cur > 0) atomic_store(&g_last, cur);
+        if (cur > 0) { atomic_store(&g_last, cur); atomic_store(&g_recent, atomic_load(&g_recent) << 16 | (uint16_t)cur); }
         if (cur > 0 && is_bed(cur) && !atomic_load(&g_online) && !atomic_load(&g_getup)) { atomic_fetch_add(&g_beds_in, 1); LOG("pkp sleep: the player got into a bed (action %d)", cur); }
         else if (g_changes < 400 && (cur > 0 || was > 0)) LOG("pkp sleep: the player's action %d -> %d", was, cur);
         g_changes++;
@@ -135,9 +137,9 @@ static void frame_gate(uint64_t *r, int param) {
 // ---- The launcher's interface (input_android.h) ----
 int64_t nxhost_clock_now(void) { return dm_time_user_now(); }
 void nxhost_clock_skip(int64_t seconds) { dm_time_skip_set(seconds); }
-int nxhost_pkp_state(int64_t out[6]) {
+int nxhost_pkp_state(int64_t out[8]) {
     out[0] = atomic_load(&g_cur); out[1] = atomic_load(&g_last); out[2] = atomic_load(&g_beds_in);
-    out[3] = atomic_load(&g_save); out[4] = atomic_load(&g_online); out[5] = atomic_load(&g_frames);
+    out[3] = atomic_load(&g_save); out[4] = atomic_load(&g_online); out[5] = atomic_load(&g_frames); out[6] = (int64_t)atomic_load(&g_recent); out[7] = 0;
     return main_base() && gate_obs_present(OBS_PKP_FRAME);
 }
 void nxhost_pkp_beds(const int *ids, int n) {

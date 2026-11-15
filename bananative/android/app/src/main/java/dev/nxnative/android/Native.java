@@ -92,8 +92,9 @@ final class Native {
 
     static native void clockSkip(long seconds);
 
-    /** nx2android: Pokopia's sleep mod (dm/host/android/pkp_sleep.c). True when its frame gate runs in this game; out (6): the player's action now (-1 unknown), the last action
-     *  started, the times the player got into a bed, the save (0 idle, 1 asked, 2 writing, 3 done, 4 failed), 1 in Link Play, the game frames counted */
+    /** nx2android: Pokopia's sleep mod (dm/host/android/pkp_sleep.c). True when its frame gate runs in this game; out (8): the player's action now (-1 unknown), the last action
+     *  started, the times the player got into a bed, the save (0 idle, 1 asked, 2 writing, 3 done, 4 failed), 1 in Link Play, the game frames counted, the last four actions
+     *  started (16 bits each, newest lowest), 0 */
     static native boolean pkpState(long[] out);
 
     /** The actions that count as a bed (at most 8) */
