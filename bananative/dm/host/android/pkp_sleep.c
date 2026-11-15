@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/uio.h>
+#include <time.h>
 #include <unistd.h>
 
 #define PKP_BUILD "76a489f3bd3642fa5e18bd83d32c98ba"
@@ -129,13 +130,14 @@ static int learn_compute(void) {
     return n;
 }
 
-// Whether the player lies in the bed now, by the signs; returns 1 on getting into it
-static int bed_step(uint64_t ch, uint64_t ac) {
+// Whether the player lies in the bed now, by the signs; returns 1 on getting into it. *awake: three in four of the signs at their standing value
+static int bed_step(uint64_t ch, uint64_t ac, int *awake) {
     int n = atomic_load(&g_nsign);
+    *awake = 0;
     if (!n || pthread_mutex_trylock(&g_sign_mu)) return 0;
     const uint64_t at[NREG] = {ch, ac};
     static uint16_t span[NREG][0xb000 / 2];   // the game thread only
-    int ok[NREG] = {0}, hit = 0, seen = 0, in = atomic_load(&g_inbed), got = 0;
+    int ok[NREG] = {0}, hit = 0, up = 0, seen = 0, in = atomic_load(&g_inbed), got = 0;
     for (int r = 0; r < NREG; r++)
         if (at[r] && g_span[r][1] > g_span[r][0] && g_span[r][1] - g_span[r][0] <= REG_SIZE[r])
             ok[r] = g_span[r][1] - g_span[r][0] <= sizeof span[r] && rd(at[r] + g_span[r][0], span[r], g_span[r][1] - g_span[r][0]);
@@ -143,10 +145,11 @@ static int bed_step(uint64_t ch, uint64_t ac) {
         sign_t *g = &g_sign[i]; uint16_t v;
         if (ok[g->reg]) v = span[g->reg][(g->off - g_span[g->reg][0]) / 2];
         else if (!at[g->reg] || !rd(at[g->reg] + g->off, &v, 2)) continue;
-        seen++; hit += v == g->bed;
+        seen++; hit += v == g->bed; up += v == g->awake;
     }
     pthread_mutex_unlock(&g_sign_mu);
     if (!seen) return 0;
+    *awake = up * 4 >= seen * 3;
     if (!in && hit * 4 >= seen * 3) { atomic_store(&g_inbed, 1); got = 1; }
     else if (in && hit * 4 < seen) atomic_store(&g_inbed, 0);
     return got;
@@ -210,8 +213,20 @@ static void frame_work(void) {
         if (g_changes++ < 200 && (cur > 0 || was > 0)) LOG("pkp sleep: the player's action %d -> %d", was, cur);
     }
     learn_sample(ch, ac);
-    if (bed_step(ch, ac)) {
-        if (!atomic_load(&g_online) && !atomic_load(&g_getup) && !atomic_load(&g_learn)) { atomic_fetch_add(&g_beds_in, 1); LOG("pkp sleep: the player got into a bed"); }
+    // A game loaded with the player in bed (Save and Quit there, then back in) is no getting into bed: the menu waits until the player of this load has been seen
+    // standing (the bed's signs at their standing values) for 30 frames in a row, at least 8 s after the player appeared (a new player manager, character or action
+    // component, or one again after none)
+    static uint64_t ch_seen; static int64_t ch_since; static int up_frames, armed;
+    uint64_t who = rq(base + M_PLAYER_MGR) * 31 + ch * 7 + ac;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    int64_t now = ts.tv_sec * 1000000000ll + ts.tv_nsec;
+    if (who != ch_seen || !ch) { if (who != ch_seen) ch_since = now; ch_seen = who; up_frames = 0; armed = 0; if (ch && atomic_load(&g_nsign)) LOG("pkp sleep: a player appeared (a load): no sleep menu until they are seen standing"); }
+    int awake = 0, into = bed_step(ch, ac, &awake);
+    up_frames = awake && !atomic_load(&g_inbed) ? up_frames + 1 : 0;
+    if (!armed && ch && up_frames >= 30 && now - ch_since >= 8000000000ll) armed = 1;
+    if (into) {
+        if (!armed) LOG("pkp sleep: in bed since the game loaded: no sleep menu");
+        else if (!atomic_load(&g_online) && !atomic_load(&g_getup) && !atomic_load(&g_learn)) { atomic_fetch_add(&g_beds_in, 1); LOG("pkp sleep: the player got into a bed"); }
     }
     save_step(base);
     getup_step(cur);

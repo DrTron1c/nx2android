@@ -51,6 +51,9 @@ class GameState(unittest.TestCase):
         self.assertIn('static const uint32_t REG_SIZE[NREG] = {0xb000, 0x1000};', src)   # the character (Recompia's fields reach +0xaa84) and its action component
         self.assertIn('if (a != c || a == b || a >= lim || b >= lim) continue;', src)   # standing = standing again, in bed different
         self.assertIn('if (!in && hit * 4 >= seen * 3)', src)
+        # a game loaded with the player in bed asks nothing: the menu waits until the player of this load has been seen standing (Save and Quit in bed, then back in)
+        self.assertIn('if (!armed && ch && up_frames >= 30 && now - ch_since >= 8000000000ll) armed = 1;', src)
+        self.assertIn('if (!armed) LOG("pkp sleep: in bed since the game loaded: no sleep menu");', src)
         j = (JAVA / 'SleepMod.java').read_text()
         self.assertIn('Native.pkpSignsSet(signs(a));', j)
         self.assertIn('Prefs.of(act).edit().putString("pkp_bed_signs", v)', j)
