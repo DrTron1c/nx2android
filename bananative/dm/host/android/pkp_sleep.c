@@ -34,6 +34,7 @@ enum {
     F_SAVE_REQUEST = 0x241324, F_SAVE_DONE = 0x2412b0,
     PM_PLAYER = 0x30, CH_ACTION = 0x18b8, AC_ID = 0x984,
     GS_SESSION = 0x90, GS_AUTOSAVE = 0x3bb5e0, GS_EVENT = 0xd0, EV_BUSY = 0x6ea, SR_HOME = 0xa4,
+    SR_TIME_OF_DAY = 0x13d373c, SR_YEAR = 0x13d3740, SR_MONTH = 0x13d3742, SR_DAY = 0x13d3743,   // the game's own time: seconds of the day (float), its date (Recompia's pkp_tt_probe.cpp)
 };
 
 static uint64_t g_main;   // main's base, once the build is checked (0: not this game, or not yet)
@@ -182,9 +183,11 @@ static void save_step(uint64_t base) {
     }
 }
 
-// "Not now": B, then while the player still lies in the bed (its signs), the left stick toward the camera for a moment, then the player's input back
+// Out of bed ("Not now", and after a sleep): B, then while the player still lies in the bed (its signs), the left stick toward the camera for a moment, then the
+// player's input back. A player the signs already see out of bed is left alone (B could do something else there)
 static void getup_step(int cur) {
     if (!atomic_load(&g_getup)) return;
+    if (g_up_step == 0 && g_up_frame == 0 && atomic_load(&g_nsign) && !atomic_load(&g_inbed)) g_up_step = 4;
     int f = g_up_frame++;
     if (g_up_step == 0) { dm_input_hold(1, DM_BTN_B, 0, 0, 0, 0); if (f >= 8) { g_up_step = 1; g_up_frame = 0; } return; }
     if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 24) { g_up_step = atomic_load(&g_inbed) || !atomic_load(&g_nsign) ? 2 : 4; g_up_frame = 0; } return; }
@@ -234,7 +237,7 @@ void nxhost_clock_skip(int64_t seconds) { dm_time_skip_set(seconds); }
 int nxhost_pkp_state(int64_t out[8]) {
     out[0] = atomic_load(&g_cur); out[1] = atomic_load(&g_last); out[2] = atomic_load(&g_beds_in);
     out[3] = atomic_load(&g_save); out[4] = atomic_load(&g_online); out[5] = atomic_load(&g_frames); out[6] = (int64_t)atomic_load(&g_recent);
-    out[7] = atomic_load(&g_inbed) | atomic_load(&g_nsign) << 8 | atomic_load(&g_learn_done) << 16 | atomic_load(&g_learn) << 20;
+    out[7] = atomic_load(&g_inbed) | atomic_load(&g_nsign) << 8 | atomic_load(&g_learn_done) << 16 | atomic_load(&g_learn) << 20 | atomic_load(&g_getup) << 24;
     return main_base() && gate_obs_present(OBS_PKP_FRAME);
 }
 int nxhost_pkp_learn(int step) {
@@ -274,6 +277,16 @@ void nxhost_pkp_hold(int mode) {
     dm_input_hold(mode == 1, 0, 0, 0, 0, 0);
 }
 uint64_t nxhost_pkp_seen(void) { return dm_input_held_seen(); }
+int nxhost_pkp_tod(int64_t out[2]) {
+    uint64_t base = main_base(), root = base ? rq(base + M_SAVE_ROOT) : 0;
+    float tod; uint16_t y; uint8_t m, d;
+    out[0] = -1; out[1] = 0;
+    if (!root || !rd(root + SR_TIME_OF_DAY, &tod, 4) || !(tod >= 0 && tod < 2 * 86400.0f)) return 0;
+    out[0] = (int64_t)tod;
+    if (rd(root + SR_YEAR, &y, 2) && rd(root + SR_MONTH, &m, 1) && rd(root + SR_DAY, &d, 1)) out[1] = y * 10000 + m * 100 + d;
+    return 1;
+}
+void nxhost_pkp_focus(int st) { if (st >= 1 && st <= 2) dm_focus_set(st); }
 void nxhost_pkp_save(void) { g_save_tries = 0; atomic_store(&g_save, PKP_SAVE_ASKED); }
 
 __attribute__((constructor)) static void pkp_sleep_attach(void) { gate_obs_set(OBS_PKP_FRAME, frame_gate); }

@@ -58,6 +58,8 @@ void nxhost_env_changed(void);
 #pragma weak nxhost_pkp_hold
 #pragma weak nxhost_pkp_seen
 #pragma weak nxhost_pkp_save
+#pragma weak nxhost_pkp_tod
+#pragma weak nxhost_pkp_focus
 #pragma weak nxhost_watch_fs
 #pragma weak nxhost_watch_fs_age
 #pragma weak nxhost_paused
@@ -394,6 +396,12 @@ JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpSignsSet(JNIEnv *env,
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpHold(JNIEnv *env, jclass cls, jint mode) { (void)env; (void)cls; if (nxhost_pkp_hold) nxhost_pkp_hold(mode); }
 JNIEXPORT jlong JNICALL Java_dev_nxnative_android_Native_pkpSeen(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_pkp_seen ? (jlong)nxhost_pkp_seen() : 0; }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpSave(JNIEnv *env, jclass cls) { (void)env; (void)cls; if (nxhost_pkp_save) nxhost_pkp_save(); }
+JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_pkpTod(JNIEnv *env, jclass cls, jlongArray out) {
+    (void)cls; if (!nxhost_pkp_tod || (*env)->GetArrayLength(env, out) < 2) return JNI_FALSE;
+    int64_t v[2]; int ok = nxhost_pkp_tod(v); jlong j[2] = {v[0], v[1]};
+    (*env)->SetLongArrayRegion(env, out, 0, 2, j); return ok ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpFocus(JNIEnv *env, jclass cls, jint st) { (void)env; (void)cls; if (nxhost_pkp_focus) nxhost_pkp_focus(st); }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_watchFs(JNIEnv *env, jclass cls, jlongArray keys) {
     (void)cls; if (!nxhost_watch_fs) return;
     jsize n = keys ? (*env)->GetArrayLength(env, keys) : 0; uint64_t v[4] = {0}; if (n > 4) n = 4;

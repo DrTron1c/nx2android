@@ -80,7 +80,7 @@ class Input(unittest.TestCase):
 
 class Interface(unittest.TestCase):
     """Each new Native method reaches the host: Java → nxlaunch.c (a weak host symbol) → input_android.h / vk_android.h"""
-    CALLS = {'clockNow': 'nxhost_clock_now', 'clockSkip': 'nxhost_clock_skip', 'pkpState': 'nxhost_pkp_state', 'pkpLearn': 'nxhost_pkp_learn', 'pkpSigns': 'nxhost_pkp_signs', 'pkpSignsSet': 'nxhost_pkp_signs_set',
+    CALLS = {'clockNow': 'nxhost_clock_now', 'clockSkip': 'nxhost_clock_skip', 'pkpState': 'nxhost_pkp_state', 'pkpLearn': 'nxhost_pkp_learn', 'pkpSigns': 'nxhost_pkp_signs', 'pkpSignsSet': 'nxhost_pkp_signs_set', 'pkpTod': 'nxhost_pkp_tod', 'pkpFocus': 'nxhost_pkp_focus',
              'pkpHold': 'nxhost_pkp_hold', 'pkpSeen': 'nxhost_pkp_seen', 'pkpSave': 'nxhost_pkp_save', 'watchFs': 'nxhost_watch_fs', 'watchFsAge': 'nxhost_watch_fs_age'}
 
     def test_end_to_end(self):
@@ -105,6 +105,11 @@ class Menu(unittest.TestCase):
         for k in re.search(r'DEX_FS = \{([^}]*)\}', j).group(1).split(','):
             self.assertIn(k.strip()[2:-1], seen)   # the Pokédex's avatar pixel shaders, as the profile names them
         self.assertIn('hours * 1000L', j)   # one hour a second
+        # seamless: the game is told it is back from HOME after the clock moves, the screen stays black until the game's own time of day is the new one, and the
+        # player gets out of bed before the fade in
+        self.assertIn('Native.pkpFocus(2);', j)
+        self.assertIn('if (getupAt == 0 && (newTime() || el > SETTLE_MAX_MS))', j)
+        self.assertIn('SR_TIME_OF_DAY = 0x13d373c', (HOST / 'android/pkp_sleep.c').read_text())
         self.assertIn('sleepRows();', (JAVA / 'SidePanel.java').read_text())
 
     def test_font(self):

@@ -115,6 +115,12 @@ final class Native {
     /** The game's own save of the player's file at its next frame; pkpState's out[3] follows it */
     static native void pkpSave();
 
+    /** The game's own time: out[0] seconds into its day (-1 unknown), out[1] its date (y * 10000 + m * 100 + d, 0 unknown); true when read */
+    static native boolean pkpTod(long[] out);
+
+    /** The game's focus, as the console's HOME menu changes it: 2 lost, 1 back (Pokopia takes a new clock when it comes back) */
+    static native void pkpFocus(int st);
+
     /** nx2android: pixel shaders to watch (at most 4, shader_map.tsv keys), and how long ago (ms) the latest of them was drawn (-1 never, or not in this host): the sleep mod's
      *  clock over the Pokédex (vka_draw.c nxhost_watch_fs) */
     static native void watchFs(long[] keys);
