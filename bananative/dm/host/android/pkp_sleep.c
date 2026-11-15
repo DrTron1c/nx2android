@@ -13,13 +13,17 @@
 //   the game state [main+0x3561710]: +0x90 u8 Link Play session bits, +0x3bb5e0 u32 1..4 while the autosave writes, [+0xd0] the event bus, its +0x6ea busy byte;
 //   the save manager [main+0x35619d0]: main+0x241324 (manager, request, 0, 0) queues a request (bit 0: queued), main+0x2412b0 (manager, 0) bit 0: its last request finished;
 //   the request: u32 type 5, byte 5 = [save root main+0x3561930] +0xa4, u32 +8 kind 2 (the player's own file, what Save and Quit writes).
-// Which actions are a bed is not in the code (the game's data tables hold the actions): the launcher learns it from the action running when the player says "this is the bed".
+// Lying in bed is not in the action component (it reads 0 there: the actions are the player's moves, 2026-11-15), and which state the game keeps it in is not known
+// from its code, so the launcher teaches the mod the bed's signs (below, "The bed, learned").
 // Memory the game owns is read with process_vm_readv on this process, so a pointer that went stale reads as nothing instead of ending the game.
 #include "hle.h"
 #include "dm.h"
 #include "dm_input.h"
 #include "input_android.h"
+#include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -30,7 +34,6 @@ enum {
     F_SAVE_REQUEST = 0x241324, F_SAVE_DONE = 0x2412b0,
     PM_PLAYER = 0x30, CH_ACTION = 0x18b8, AC_ID = 0x984,
     GS_SESSION = 0x90, GS_AUTOSAVE = 0x3bb5e0, GS_EVENT = 0xd0, EV_BUSY = 0x6ea, SR_HOME = 0xa4,
-    NBED = 8,
 };
 
 static uint64_t g_main;   // main's base, once the build is checked (0: not this game, or not yet)
@@ -47,21 +50,110 @@ static int rd(uint64_t a, void *out, size_t n) {
 }
 static uint64_t rq(uint64_t a) { uint64_t v = 0; return rd(a, &v, 8) ? v : 0; }
 
-static _Atomic int g_cur = -1, g_last, g_beds_in, g_online, g_save, g_bed[NBED], g_nbed, g_getup;
+static _Atomic int g_cur = -1, g_last, g_beds_in, g_online, g_save, g_getup;
 static _Atomic int64_t g_frames;
 static _Atomic uint64_t g_recent;   // the last four actions the player started, newest in the low 16 bits (the in-game panel shows them)
 static int g_save_tries, g_save_wait, g_up_frame, g_up_step, g_changes;
 
-static int is_bed(int id) {
-    int n = atomic_load(&g_nbed);
-    for (int i = 0; i < n && i < NBED; i++) if (atomic_load(&g_bed[i]) == id) return 1;
-    return 0;
+// ---- The bed, learned (the in-game panel's three taps: standing, in the bed, standing again) ----
+// The halfwords of the player's character (its first 0xb000 bytes) and of its action component (0x1000 bytes) that hold one value while the player stands, another
+// while they lie in the bed, and the first again once they stand, each window 15 samples a third frame apart (half a second at 30 fps) with no change inside it, and
+// small values on both sides (a state or a flag; positions, timers and pointers drop out): those are the bed's signs. The player is in bed while three in four of
+// them hold their bed value, and out once fewer than one in four do. Kept by the launcher (pkp_bed_signs) and given back at each start.
+enum { NREG = 2, WIN_SAMPLES = 15, NSIGN = 64 };
+static const uint32_t REG_SIZE[NREG] = {0xb000, 0x1000};
+typedef struct { uint8_t reg; uint16_t off, bed, awake; } sign_t;
+static uint16_t *g_win[3][NREG], *g_tmp[NREG]; static uint8_t *g_moved[3][NREG];
+static _Atomic int g_learn, g_learn_done, g_inbed, g_nsign;   // g_learn: 1..3 the window being sampled; g_learn_done: bit k when window k + 1 is sampled
+static int g_learn_n, g_learn_skip;
+static sign_t g_sign[NSIGN]; static uint32_t g_span[NREG][2];   // each region's lowest and highest offset a sign reads
+static pthread_mutex_t g_sign_mu = PTHREAD_MUTEX_INITIALIZER;
+
+// A region into buf; a 4 KB page that does not read is marked moved (moved != NULL) and reads 0xffff. 0 when nothing reads
+static int read_region(uint64_t a, uint32_t size, uint16_t *buf, uint8_t *moved) {
+    if (!a) return 0;
+    if (rd(a, buf, size)) return 1;
+    int any = 0;
+    for (uint32_t p = 0; p < size; p += 0x1000) {
+        uint32_t n = size - p < 0x1000 ? size - p : 0x1000;
+        if (rd(a + p, (uint8_t *)buf + p, n)) { any = 1; continue; }
+        memset((uint8_t *)buf + p, 0xff, n);
+        if (moved) memset(moved + p / 2, 1, n / 2);
+    }
+    return any;
 }
 
-// The local player's action now (-1: no player yet, or a pointer that does not read)
-static int action_now(uint64_t base) {
-    uint64_t pm = rq(base + M_PLAYER_MGR), ch = pm ? rq(pm + PM_PLAYER) : 0, ac = ch ? rq(ch + CH_ACTION) : 0;
-    uint16_t v; return ac && rd(ac + AC_ID, &v, 2) ? v : -1;
+static void learn_sample(uint64_t ch, uint64_t ac) {
+    int k = atomic_load(&g_learn) - 1;
+    if (k < 0 || k > 2 || g_learn_skip++ % 3) return;
+    const uint64_t at[NREG] = {ch, ac};
+    for (int r = 0; r < NREG; r++) {
+        uint32_t n = REG_SIZE[r] / 2;
+        if (!g_win[k][r]) { g_win[k][r] = calloc(n, 2); g_moved[k][r] = calloc(n, 1); }
+        if (!g_tmp[r]) g_tmp[r] = calloc(n, 2);
+        if (!g_win[k][r] || !g_moved[k][r] || !g_tmp[r]) return;
+        if (g_learn_n == 0) memset(g_moved[k][r], 0, n);
+        if (!read_region(at[r], REG_SIZE[r], g_tmp[r], g_moved[k][r])) { memset(g_moved[k][r], 1, n); continue; }
+        if (g_learn_n == 0) memcpy(g_win[k][r], g_tmp[r], n * 2);
+        else for (uint32_t i = 0; i < n; i++) if (g_tmp[r][i] != g_win[k][r][i]) g_moved[k][r][i] = 1;
+    }
+    if (++g_learn_n >= WIN_SAMPLES) { atomic_fetch_or(&g_learn_done, 1 << k); atomic_store(&g_learn, 0); LOG("pkp sleep: the bed's window %d sampled", k + 1); }
+}
+
+static void signs_spans(int n) {
+    for (int r = 0; r < NREG; r++) { g_span[r][0] = ~0u; g_span[r][1] = 0; }
+    for (int i = 0; i < n; i++) { sign_t *g = &g_sign[i]; if (g->off < g_span[g->reg][0]) g_span[g->reg][0] = g->off; if (g->off + 2u > g_span[g->reg][1]) g_span[g->reg][1] = g->off + 2u; }
+}
+
+// The signs from the three windows: -1 when one is missing
+static int learn_compute(void) {
+    if ((atomic_load(&g_learn_done) & 7) != 7) return -1;
+    int n = 0;
+    pthread_mutex_lock(&g_sign_mu);
+    for (int lim = 0x400; n == 0 && lim <= 0x10000; lim = lim == 0x400 ? 0x10000 : 0x20000)
+        for (int r = 0; r < NREG && n < NSIGN; r++) {
+            if (!g_win[0][r] || !g_win[1][r] || !g_win[2][r]) continue;
+            for (uint32_t i = 0; i < REG_SIZE[r] / 2 && n < NSIGN; i++) {
+                if (g_moved[0][r][i] || g_moved[1][r][i] || g_moved[2][r][i]) continue;
+                uint16_t a = g_win[0][r][i], b = g_win[1][r][i], c = g_win[2][r][i];
+                if (a != c || a == b || a >= lim || b >= lim) continue;
+                g_sign[n++] = (sign_t){(uint8_t)r, (uint16_t)(i * 2), b, a};
+            }
+        }
+    signs_spans(n);
+    atomic_store(&g_nsign, n); atomic_store(&g_inbed, 0);
+    pthread_mutex_unlock(&g_sign_mu);
+    LOG("pkp sleep: the bed learned: %d signs%s", n, n ? "" : " (nothing held one value standing and another in the bed)");
+    for (int i = 0; i < n && i < 12; i++) LOG("pkp sleep:   %s+%#x: standing %#x, in bed %#x", g_sign[i].reg ? "action component" : "character", g_sign[i].off, g_sign[i].awake, g_sign[i].bed);
+    return n;
+}
+
+// Whether the player lies in the bed now, by the signs; returns 1 on getting into it
+static int bed_step(uint64_t ch, uint64_t ac) {
+    int n = atomic_load(&g_nsign);
+    if (!n || pthread_mutex_trylock(&g_sign_mu)) return 0;
+    const uint64_t at[NREG] = {ch, ac};
+    static uint16_t span[NREG][0xb000 / 2];   // the game thread only
+    int ok[NREG] = {0}, hit = 0, seen = 0, in = atomic_load(&g_inbed), got = 0;
+    for (int r = 0; r < NREG; r++)
+        if (at[r] && g_span[r][1] > g_span[r][0] && g_span[r][1] - g_span[r][0] <= REG_SIZE[r])
+            ok[r] = g_span[r][1] - g_span[r][0] <= sizeof span[r] && rd(at[r] + g_span[r][0], span[r], g_span[r][1] - g_span[r][0]);
+    for (int i = 0; i < n; i++) {
+        sign_t *g = &g_sign[i]; uint16_t v;
+        if (ok[g->reg]) v = span[g->reg][(g->off - g_span[g->reg][0]) / 2];
+        else if (!at[g->reg] || !rd(at[g->reg] + g->off, &v, 2)) continue;
+        seen++; hit += v == g->bed;
+    }
+    pthread_mutex_unlock(&g_sign_mu);
+    if (!seen) return 0;
+    if (!in && hit * 4 >= seen * 3) { atomic_store(&g_inbed, 1); got = 1; }
+    else if (in && hit * 4 < seen) atomic_store(&g_inbed, 0);
+    return got;
+}
+
+// The local player's character and its action component (0: none yet)
+static void player(uint64_t base, uint64_t *ch, uint64_t *ac) {
+    uint64_t pm = rq(base + M_PLAYER_MGR); *ch = pm ? rq(pm + PM_PLAYER) : 0; *ac = *ch ? rq(*ch + CH_ACTION) : 0;
 }
 
 // The game's own save request, as its Save and Quit dialog makes it; waits while the autosave writes or an event holds the game (at most 10 s, then FAILED)
@@ -90,16 +182,15 @@ static void save_step(uint64_t base) {
     }
 }
 
-// "Not now": B, then the left stick toward the camera for a moment (resting in bed is no action of its own: the action that put the player there has ended, so
-// whether the player is still in bed cannot be read; a player already up takes a step), then the player's input back
+// "Not now": B, then while the player still lies in the bed (its signs), the left stick toward the camera for a moment, then the player's input back
 static void getup_step(int cur) {
     if (!atomic_load(&g_getup)) return;
     int f = g_up_frame++;
     if (g_up_step == 0) { dm_input_hold(1, DM_BTN_B, 0, 0, 0, 0); if (f >= 8) { g_up_step = 1; g_up_frame = 0; } return; }
-    if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 24) { g_up_step = 2; g_up_frame = 0; } return; }
+    if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 24) { g_up_step = atomic_load(&g_inbed) || !atomic_load(&g_nsign) ? 2 : 4; g_up_frame = 0; } return; }
     if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 8) { g_up_step = 3; g_up_frame = 0; } return; }
     if (g_up_step == 3) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = 4; g_up_frame = 0; } return; }
-    LOG("pkp sleep: out of bed (action %d)", cur);
+    LOG("pkp sleep: out of bed%s (action %d)", atomic_load(&g_inbed) ? " not confirmed: the signs still say in bed" : "", cur);
     dm_input_hold(0, 0, 0, 0, 0, 0); atomic_store(&g_getup, 0);
 }
 
@@ -109,12 +200,15 @@ static void frame_work(void) {
     atomic_fetch_add(&g_frames, 1);
     uint64_t game = rq(base + M_GAME_STATE); uint8_t sess = 0;
     atomic_store(&g_online, game && rd(game + GS_SESSION, &sess, 1) && sess);
-    int cur = action_now(base), was = atomic_exchange(&g_cur, cur);
+    uint64_t ch, ac; player(base, &ch, &ac);
+    uint16_t av; int cur = ac && rd(ac + AC_ID, &av, 2) ? av : -1, was = atomic_exchange(&g_cur, cur);
     if (cur != was) {
         if (cur > 0) { atomic_store(&g_last, cur); atomic_store(&g_recent, atomic_load(&g_recent) << 16 | (uint16_t)cur); }
-        if (cur > 0 && is_bed(cur) && !atomic_load(&g_online) && !atomic_load(&g_getup)) { atomic_fetch_add(&g_beds_in, 1); LOG("pkp sleep: the player got into a bed (action %d)", cur); }
-        else if (g_changes < 400 && (cur > 0 || was > 0)) LOG("pkp sleep: the player's action %d -> %d", was, cur);
-        g_changes++;
+        if (g_changes++ < 200 && (cur > 0 || was > 0)) LOG("pkp sleep: the player's action %d -> %d", was, cur);
+    }
+    learn_sample(ch, ac);
+    if (bed_step(ch, ac)) {
+        if (!atomic_load(&g_online) && !atomic_load(&g_getup) && !atomic_load(&g_learn)) { atomic_fetch_add(&g_beds_in, 1); LOG("pkp sleep: the player got into a bed"); }
     }
     save_step(base);
     getup_step(cur);
@@ -139,15 +233,40 @@ int64_t nxhost_clock_now(void) { return dm_time_user_now(); }
 void nxhost_clock_skip(int64_t seconds) { dm_time_skip_set(seconds); }
 int nxhost_pkp_state(int64_t out[8]) {
     out[0] = atomic_load(&g_cur); out[1] = atomic_load(&g_last); out[2] = atomic_load(&g_beds_in);
-    out[3] = atomic_load(&g_save); out[4] = atomic_load(&g_online); out[5] = atomic_load(&g_frames); out[6] = (int64_t)atomic_load(&g_recent); out[7] = 0;
+    out[3] = atomic_load(&g_save); out[4] = atomic_load(&g_online); out[5] = atomic_load(&g_frames); out[6] = (int64_t)atomic_load(&g_recent);
+    out[7] = atomic_load(&g_inbed) | atomic_load(&g_nsign) << 8 | atomic_load(&g_learn_done) << 16 | atomic_load(&g_learn) << 20;
     return main_base() && gate_obs_present(OBS_PKP_FRAME);
 }
-void nxhost_pkp_beds(const int *ids, int n) {
-    if (n > NBED) n = NBED;
-    atomic_store(&g_nbed, 0);
-    for (int i = 0; i < n; i++) atomic_store(&g_bed[i], ids[i]);
-    atomic_store(&g_nbed, n < 0 ? 0 : n);
-    LOG("pkp sleep: %d bed action(s)%s%d", n, n > 0 ? ", the first " : "", n > 0 ? ids[0] : 0);
+int nxhost_pkp_learn(int step) {
+    if (step >= 1 && step <= 3) { atomic_fetch_and(&g_learn_done, ~(1 << (step - 1))); g_learn_n = 0; g_learn_skip = 0; atomic_store(&g_learn, step); return 0; }
+    if (step == 4) return learn_compute();
+    return atomic_load(&g_learn_done) | (atomic_load(&g_learn) ? 0x100 : 0);
+}
+int nxhost_pkp_signs(char *buf, int cap) {
+    int n = 0, w = 0;
+    if (cap > 0) buf[0] = 0;
+    pthread_mutex_lock(&g_sign_mu);
+    for (int i = 0; i < atomic_load(&g_nsign); i++) {
+        int k = snprintf(buf + w, cap > w ? (size_t)(cap - w) : 0, "%s%x:%x:%x:%x", i ? ";" : "", g_sign[i].reg, g_sign[i].off, g_sign[i].bed, g_sign[i].awake);
+        if (k < 0 || w + k >= cap) break;
+        w += k; n++;
+    }
+    pthread_mutex_unlock(&g_sign_mu);
+    return n;
+}
+void nxhost_pkp_signs_set(const char *s) {
+    int n = 0;
+    pthread_mutex_lock(&g_sign_mu);
+    while (s && *s && n < NSIGN) {
+        unsigned r, off, bed, awake;
+        if (sscanf(s, "%x:%x:%x:%x", &r, &off, &bed, &awake) == 4 && r < NREG && off + 2 <= REG_SIZE[r] && !(off & 1))
+            g_sign[n++] = (sign_t){(uint8_t)r, (uint16_t)off, (uint16_t)bed, (uint16_t)awake};
+        s = strchr(s, ';'); if (s) s++;
+    }
+    signs_spans(n);
+    atomic_store(&g_nsign, n); atomic_store(&g_inbed, 0);
+    pthread_mutex_unlock(&g_sign_mu);
+    LOG("pkp sleep: %d bed signs", n);
 }
 void nxhost_pkp_hold(int mode) {
     if (mode == 2) { g_up_frame = 0; g_up_step = 0; dm_input_hold(1, 0, 0, 0, 0, 0); atomic_store(&g_getup, 1); return; }

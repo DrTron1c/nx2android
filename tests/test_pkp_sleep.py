@@ -46,6 +46,15 @@ class GameState(unittest.TestCase):
         self.assertIn('r[9] = (uint64_t)(uintptr_t)tick_call;', src)   # game functions run from the game's own call, never on the gate stack
         self.assertIn('process_vm_readv', src)
 
+    def test_bed_signs(self):
+        src = (HOST / 'android/pkp_sleep.c').read_text()
+        self.assertIn('static const uint32_t REG_SIZE[NREG] = {0xb000, 0x1000};', src)   # the character (Recompia's fields reach +0xaa84) and its action component
+        self.assertIn('if (a != c || a == b || a >= lim || b >= lim) continue;', src)   # standing = standing again, in bed different
+        self.assertIn('if (!in && hit * 4 >= seen * 3)', src)
+        j = (JAVA / 'SleepMod.java').read_text()
+        self.assertIn('Native.pkpSignsSet(signs(a));', j)
+        self.assertIn('Prefs.of(act).edit().putString("pkp_bed_signs", v)', j)
+
 
 class Clock(unittest.TestCase):
     def test_skip_is_the_games_clock_only(self):
@@ -71,7 +80,7 @@ class Input(unittest.TestCase):
 
 class Interface(unittest.TestCase):
     """Each new Native method reaches the host: Java → nxlaunch.c (a weak host symbol) → input_android.h / vk_android.h"""
-    CALLS = {'clockNow': 'nxhost_clock_now', 'clockSkip': 'nxhost_clock_skip', 'pkpState': 'nxhost_pkp_state', 'pkpBeds': 'nxhost_pkp_beds',
+    CALLS = {'clockNow': 'nxhost_clock_now', 'clockSkip': 'nxhost_clock_skip', 'pkpState': 'nxhost_pkp_state', 'pkpLearn': 'nxhost_pkp_learn', 'pkpSigns': 'nxhost_pkp_signs', 'pkpSignsSet': 'nxhost_pkp_signs_set',
              'pkpHold': 'nxhost_pkp_hold', 'pkpSeen': 'nxhost_pkp_seen', 'pkpSave': 'nxhost_pkp_save', 'watchFs': 'nxhost_watch_fs', 'watchFsAge': 'nxhost_watch_fs_age'}
 
     def test_end_to_end(self):

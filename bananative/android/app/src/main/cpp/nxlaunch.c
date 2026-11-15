@@ -52,7 +52,9 @@ void nxhost_env_changed(void);
 #pragma weak nxhost_clock_now
 #pragma weak nxhost_clock_skip
 #pragma weak nxhost_pkp_state
-#pragma weak nxhost_pkp_beds
+#pragma weak nxhost_pkp_learn
+#pragma weak nxhost_pkp_signs
+#pragma weak nxhost_pkp_signs_set
 #pragma weak nxhost_pkp_hold
 #pragma weak nxhost_pkp_seen
 #pragma weak nxhost_pkp_save
@@ -378,11 +380,16 @@ JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_pkpState(JNIEnv *env
     int64_t v[8] = {0}; int on = nxhost_pkp_state(v); jlong j[8]; for (int i = 0; i < 8; i++) j[i] = v[i];
     (*env)->SetLongArrayRegion(env, out, 0, 8, j); return on ? JNI_TRUE : JNI_FALSE;
 }
-JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpBeds(JNIEnv *env, jclass cls, jintArray ids) {
-    (void)cls; if (!nxhost_pkp_beds) return;
-    jsize n = ids ? (*env)->GetArrayLength(env, ids) : 0; int v[8] = {0}; if (n > 8) n = 8;
-    if (n) { jint t[8]; (*env)->GetIntArrayRegion(env, ids, 0, n, t); for (int i = 0; i < n; i++) v[i] = t[i]; }
-    nxhost_pkp_beds(v, n);
+JNIEXPORT jint JNICALL Java_dev_nxnative_android_Native_pkpLearn(JNIEnv *env, jclass cls, jint step) { (void)env; (void)cls; return nxhost_pkp_learn ? nxhost_pkp_learn(step) : -2; }
+JNIEXPORT jstring JNICALL Java_dev_nxnative_android_Native_pkpSigns(JNIEnv *env, jclass cls) {
+    (void)cls; static char buf[64 * 24]; buf[0] = 0;
+    if (nxhost_pkp_signs) nxhost_pkp_signs(buf, (int)sizeof buf);
+    return (*env)->NewStringUTF(env, buf);
+}
+JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpSignsSet(JNIEnv *env, jclass cls, jstring s) {
+    (void)cls; if (!nxhost_pkp_signs_set || !s) return;
+    const char *c = (*env)->GetStringUTFChars(env, s, NULL); if (!c) return;
+    nxhost_pkp_signs_set(c); (*env)->ReleaseStringUTFChars(env, s, c);
 }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpHold(JNIEnv *env, jclass cls, jint mode) { (void)env; (void)cls; if (nxhost_pkp_hold) nxhost_pkp_hold(mode); }
 JNIEXPORT jlong JNICALL Java_dev_nxnative_android_Native_pkpSeen(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_pkp_seen ? (jlong)nxhost_pkp_seen() : 0; }

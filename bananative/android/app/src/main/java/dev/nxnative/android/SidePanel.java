@@ -528,23 +528,30 @@ final class SidePanel extends FrameLayout {
         box.addView(done, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
-    /** nx2android: Pokopia's sleep mod (SleepMod): the bed it reacts to, Sleep now, and how far the game's clock is ahead */
+    /** nx2android: Pokopia's sleep mod (SleepMod): teaching it the bed, Sleep now, and how far the game's clock is ahead */
     private void sleepRows() {
         SleepMod m = act instanceof GameActivity ? ((GameActivity) act).sleepMod() : null;
         if (m == null) return;
         head("Sleep");
-        int beds = SleepMod.beds(act).length;
+        int signs = SleepMod.signCount(act);
         long[] st = m.state();
         note(st == null ? "The sleep mod is not in this game's code yet: prepare the game again (its card › Prepare), then start it."
-                : beds == 0 ? "Get into a bed in the game, open this panel and tap “This is the bed”. From then on the game asks how long to sleep each time you get into a bed."
-                : "The game asks how long to sleep when you get into a bed (" + beds + (beds == 1 ? " bed" : " beds") + " learned)." + (st[4] != 0 ? " Not in Link Play." : ""));
+                : signs == 0 ? "Teach the mod your bed once, in three taps: standing next to the bed, lying in it, and standing again. Keep still for a moment at each tap."
+                : "The game asks how long to sleep when you lie down in a bed." + (st[4] != 0 ? " Not in Link Play." : ""));
         TextView seen = st != null ? note(SleepMod.seen(st)) : null;   // what the mod reads from the game: the line to send when something does not work
-        TextView said = note("");
-        said.setVisibility(GONE);
-        Button learn = new Button(act);
-        learn.setText("This is the bed");
-        learn.setOnClickListener(v -> { said.setText(m.learnBed()); said.setVisibility(VISIBLE); if (seen != null) seen.setText(SleepMod.seen(m.state())); });
-        box.addView(learn, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        if (st != null) {
+            int t = m.teachStep();
+            Button teach = new Button(act);
+            teach.setText(t == 1 ? "2. I'm lying in the bed" : t == 2 ? "3. I'm standing again" : signs == 0 ? "1. I'm standing next to the bed" : "Teach the bed again: 1. I'm standing next to it");
+            TextView said = note("");
+            said.setVisibility(GONE);
+            teach.setOnClickListener(v -> {
+                teach.setEnabled(false); said.setText("Watching the game… keep still."); said.setVisibility(VISIBLE);
+                m.teach(t + 1, msg -> { said.setText(msg); teach.setEnabled(true); if (seen != null) seen.setText(SleepMod.seen(m.state()));
+                    int n = m.teachStep(); teach.setText(n == 1 ? "2. I'm lying in the bed" : n == 2 ? "3. I'm standing again" : "Teach the bed again: 1. I'm standing next to it"); });
+            });
+            box.addView(teach, box.indexOfChild(said), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
         Button now = new Button(act);
         now.setText("Sleep now");
         now.setOnClickListener(v -> { close(); m.ask(); });
@@ -557,10 +564,10 @@ final class SidePanel extends FrameLayout {
             real.setOnClickListener(v -> { m.realTime(); rebuild(); });
             box.addView(real, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
-        if (beds > 0) {
+        if (signs > 0) {
             Button forget = new Button(act);
-            forget.setText("Forget the beds");
-            forget.setOnClickListener(v -> { m.forgetBeds(); rebuild(); });
+            forget.setText("Forget the bed");
+            forget.setOnClickListener(v -> { m.forgetBed(); rebuild(); });
             box.addView(forget, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
     }

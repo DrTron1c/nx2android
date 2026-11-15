@@ -91,11 +91,16 @@ NXHOST_API void nxhost_codecs_log(void);
 NXHOST_API int64_t nxhost_clock_now(void);
 NXHOST_API void nxhost_clock_skip(int64_t seconds);
 // The mod's state: returns 1 when its frame gate runs in this game (Pokopia 2.0.1's main, rewritten with its gate), else 0. out[0] the local player's action now (0 none, -1 unknown),
-// out[1] the last action the player started, out[2] how many times the player got into a bed (an action of nxhost_pkp_beds starting), out[3] the save (PKP_SAVE_*),
-// out[4] 1 in a Link Play session (the mod then never asks), out[5] game frames the gate counted, out[6] the last four actions started (16 bits each, newest lowest), out[7] 0
+// out[1] the last action the player started, out[2] how many times the player got into a bed (the bed's signs say so), out[3] the save (PKP_SAVE_*),
+// out[4] 1 in a Link Play session (the mod then never asks), out[5] game frames the gate counted, out[6] the last four actions started (16 bits each, newest lowest),
+// out[7] bit 0 in bed now, bits 8-15 the bed's signs, bits 16-18 the learning windows sampled, bits 20-21 the window being sampled
 enum { PKP_SAVE_IDLE = 0, PKP_SAVE_ASKED = 1, PKP_SAVE_WRITING = 2, PKP_SAVE_DONE = 3, PKP_SAVE_FAILED = 4 };
 NXHOST_API int nxhost_pkp_state(int64_t out[8]);
-NXHOST_API void nxhost_pkp_beds(const int *ids, int n);   // the actions that count as getting into a bed (the launcher learns them)
+// Learning the bed (pkp_sleep.c "The bed, learned"): 1, 2, 3 sample the window standing / in the bed / standing again (about half a second of game frames);
+// 4 makes the signs from the three (their number, -1 with a window missing); 0 the windows sampled (bits 0-2) and 0x100 while one is sampled
+NXHOST_API int nxhost_pkp_learn(int step);
+NXHOST_API int nxhost_pkp_signs(char *buf, int cap);   // the signs as text ("reg:offset:bed:standing;..." hex), for the launcher to keep; their number
+NXHOST_API void nxhost_pkp_signs_set(const char *signs);   // the signs kept from an earlier start
 // 0 the player's own input; 1 held: the game sees nothing of player 1 (dm_input_hold) while the mod's menu is up, nxhost_pkp_seen says what was pressed; 2 held, and the
 // player gets out of bed (B, then the left stick toward the camera while the bed action lasts), then back to 0
 NXHOST_API void nxhost_pkp_hold(int mode);

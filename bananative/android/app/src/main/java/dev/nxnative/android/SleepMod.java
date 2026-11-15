@@ -19,7 +19,6 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.TextStyle;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -30,7 +29,8 @@ import java.util.Locale;
  * A choice of hours: the picture fades to black, the game saves, the game's clock moves on by that much (Native.clockSkip: only the game's clock, the tablet's is
  * never set), the time counts up in the middle of the screen one hour a second with a loading icon turning in the bottom right corner, and the picture fades back in.
  * The total skip is kept (pkp_clock_skip) and given to every start (DM_TIME_SKIP), so the game stays ahead of real time until Back to real time (the in-game panel).
- * Which of the game's actions is a bed is learned: the player gets into one and taps "This is the bed" in the in-game panel (pkp_beds). Not in Link Play.
+ * The bed is learned once, in three taps in the in-game panel (standing next to it, lying in it, standing again): the host keeps the values of the player's state that
+ * change in the bed and come back out of it (pkp_sleep.c "The bed, learned"), kept here as pkp_bed_signs. Not in Link Play.
  * The Pokédex: while the game draws its avatar shaders (the profile's shader_seen.tsv, GitHub issue #35; Native.watchFs) the game's clock shows in the picture's top left corner.
  */
 final class SleepMod {
@@ -48,17 +48,9 @@ final class SleepMod {
     static boolean game(String titleId) { return TITLE.equalsIgnoreCase(titleId); }
 
     // ---- Kept for the game ----
-    static int[] beds(Context c) {
-        List<Integer> l = new ArrayList<>();
-        for (String s : Prefs.of(c).getString("pkp_beds", "").split(",")) try { if (!s.isEmpty()) l.add(Integer.parseInt(s.trim())); } catch (NumberFormatException ignored) {}
-        int[] a = new int[l.size()]; for (int i = 0; i < a.length; i++) a[i] = l.get(i);
-        return a;
-    }
-    static void beds(Context c, int[] ids) {
-        StringBuilder b = new StringBuilder();
-        for (int id : ids) { if (b.length() > 0) b.append(','); b.append(id); }
-        Prefs.of(c).edit().putString("pkp_beds", b.toString()).commit();
-    }
+    /** The bed's signs (pkp_sleep.c), as the host wrote them; "" before the bed is learned */
+    static String signs(Context c) { return Prefs.of(c).getString("pkp_bed_signs", ""); }
+    static int signCount(Context c) { String v = signs(c); return v.isEmpty() ? 0 : v.split(";").length; }
     /** How far the game's clock runs ahead of real time, in seconds */
     static long skip(Context c) { return Prefs.of(c).getLong("pkp_clock_skip", 0); }
     static void skip(Context c, long s) { Prefs.of(c).edit().putLong("pkp_clock_skip", s).commit(); }
@@ -80,7 +72,7 @@ final class SleepMod {
     private Typeface face, faceBold;
     private boolean present, stopped, dex;
     private long bedsSeen = -1, phaseAt, tickFrom, seenPrev = -1;
-    private int phase = IDLE, sel, hours, seenFrames, pressedRow = -1, saveState;
+    private int phase = IDLE, sel, hours, seenFrames, pressedRow = -1, saveState, teach;
 
     SleepMod(Activity a, java.util.function.Supplier<float[]> picture) {
         act = a; this.picture = picture;
@@ -89,7 +81,8 @@ final class SleepMod {
         try { face = Typeface.createFromAsset(a.getAssets(), "fonts/MPLUSRounded1c-Bold-subset.ttf"); faceBold = Typeface.createFromAsset(a.getAssets(), "fonts/MPLUSRounded1c-ExtraBold-subset.ttf"); }
         catch (RuntimeException e) { face = Typeface.create("sans-serif-medium", Typeface.NORMAL); faceBold = Typeface.DEFAULT_BOLD; }
         Native.pkpHold(0);   // a screen created again while the game runs: no hold left from the last one
-        Native.pkpBeds(beds(a));
+        if (Prefs.of(a).contains("pkp_beds")) Prefs.of(a).edit().remove("pkp_beds").commit();   // build 16 learned a move, not the bed: dropped
+        Native.pkpSignsSet(signs(a));
         Native.watchFs(DEX_FS);
         ui.post(poll);
     }
@@ -102,35 +95,48 @@ final class SleepMod {
     /** The game's state now (Native.pkpState), null when the mod's gate is not in the game's code */
     long[] state() { long[] o = new long[8]; return Native.pkpState(o) ? o : null; }
 
-    /** "This is the bed": the action the player is in now joins the beds; the sentence for the panel */
-    String learnBed() {
-        long[] s = state();
-        if (s == null) return "The sleep mod is not in this game's code yet: prepare the game again (its card › Prepare), then start it.";
-        // The action running now, else the last one the player started: resting in bed is no action of its own (2026-11-15: the action read 0 in bed), the action that
-        // put the player into the bed is, and it is what starts each time they get into one
-        int cur = (int) s[0] > 0 ? (int) s[0] : (int) s[1];
-        if (cur <= 0) return s[5] == 0 ? "The sleep mod has not seen a game frame yet: play for a moment, get into the bed, then tap this again."
-                : "No action yet: get into a bed in the game first (from standing, so the game starts the move into it), then tap this again.";
-        int[] b = beds(act);
-        for (int id : b) if (id == cur) return "This bed is already known.";
-        int[] n = new int[Math.min(b.length + 1, 8)];
-        n[0] = cur; System.arraycopy(b, 0, n, 1, n.length - 1);
-        beds(act, n); Native.pkpBeds(n);
-        bedsSeen = s[2];
-        Native.note("sleep mod: action " + cur + " is a bed");
-        return "Got it (action " + cur + "): the game asks how long to sleep the next time you get into a bed.";
+    /** Teaching the bed: 0 not started (or done), 1 standing sampled (next: in the bed), 2 in the bed sampled (next: standing again) */
+    int teachStep() { return teach; }
+
+    /** One tap of teaching the bed (step 1 standing next to it, 2 lying in it, 3 standing again): the host samples about half a second of game frames, then said
+     *  gets the sentence for the panel; after step 3 the signs are kept */
+    void teach(int step, java.util.function.Consumer<String> said) {
+        if (Native.pkpLearn(step) == -2) { said.accept("This engine has no bed learning: update it."); return; }
+        long t0 = SystemClock.uptimeMillis();
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (stopped) return;
+                int st = Native.pkpLearn(0);
+                if ((st & 1 << (step - 1)) == 0 || (st & 0x100) != 0) {
+                    if (SystemClock.uptimeMillis() - t0 < 6000) { ui.postDelayed(this, 100); return; }
+                    said.accept("The game did not move on while the panel was open (paused?). Continue the game, then tap again.");
+                    return;
+                }
+                if (step == 1) { teach = 1; said.accept("Got it. Now close this panel, get into the bed and lie down, then open the panel again and tap 2."); return; }
+                if (step == 2) { teach = 2; said.accept("Got it. Now close this panel, get out of the bed and stand, then open the panel again and tap 3."); return; }
+                teach = 0;
+                int n = Native.pkpLearn(4);
+                if (n <= 0) { said.accept("Nothing changed between standing and lying in the bed. Try again from step 1, keeping still for each tap."); return; }
+                String v = Native.pkpSigns();
+                Prefs.of(act).edit().putString("pkp_bed_signs", v).commit();
+                Native.note("sleep mod: the bed learned, " + n + " signs");
+                long[] s = state(); if (s != null) bedsSeen = s[2];
+                said.accept("Learned (" + n + " signs). From now on the game asks how long to sleep each time you lie down in a bed.");
+            }
+        }, 150);
     }
+
     /** One line on what the mod sees, for a screenshot: frames counted, the action now, the last four actions started */
     static String seen(long[] s) {
         if (s == null) return "";
-        StringBuilder b = new StringBuilder("The mod sees: " + s[5] + " game frames, action now " + s[0] + ", recent actions");
+        StringBuilder b = new StringBuilder("The mod sees: " + s[5] + " game frames, " + ((s[7] & 1) != 0 ? "in bed" : "not in bed") + " (" + (s[7] >> 8 & 0xff) + " signs), action now " + s[0] + ", recent actions");
         int n = 0;
         for (int i = 0; i < 4; i++) { long a = s[6] >>> (16 * i) & 0xffff; if (a == 0) break; b.append(n++ == 0 ? " " : ", ").append(a); }
         if (n == 0) b.append(" none");
         return b.append('.').toString();
     }
 
-    void forgetBeds() { beds(act, new int[0]); Native.pkpBeds(new int[0]); }
+    void forgetBed() { Prefs.of(act).edit().remove("pkp_bed_signs").commit(); Native.pkpSignsSet(""); teach = 0; }
 
     /** Back to real time: the game's clock follows the tablet's again */
     void realTime() { skip(act, 0); Native.clockSkip(0); Native.note("sleep mod: the game's clock is back on real time"); }
