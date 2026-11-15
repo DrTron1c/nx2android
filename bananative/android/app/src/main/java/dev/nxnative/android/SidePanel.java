@@ -328,6 +328,9 @@ final class SidePanel extends FrameLayout {
         refresh();
     }
 
+    /** The open tab's rows again, after a change that adds or takes away rows */
+    private void rebuild() { if (!open) return; box.removeAllViews(); build(); look(); refresh(); }
+
     /** The panel's size and text size (Prefs.panelSize / panelText): its width, and every row's least height and text size, over what build() made */
     private void look() {
         float dp = getResources().getDisplayMetrics().density;
@@ -497,6 +500,7 @@ final class SidePanel extends FrameLayout {
     /** General: the panel's own look, Pause, Stop and Back to the game */
     private void general() {
         note("The game runs on behind this panel; every change applies now and is kept, except those marked for the next start.");
+        sleepRows();
         panelRows();
 
         Button pause = new Button(act);   // the game suspended (clock, graphics, threads, audio) until a tap on the screen, or A / Start: GameActivity.pause
@@ -522,6 +526,42 @@ final class SidePanel extends FrameLayout {
         done.setText("Back to the game");
         done.setOnClickListener(v -> close());
         box.addView(done, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+    }
+
+    /** nx2android: Pokopia's sleep mod (SleepMod): the bed it reacts to, Sleep now, and how far the game's clock is ahead */
+    private void sleepRows() {
+        SleepMod m = act instanceof GameActivity ? ((GameActivity) act).sleepMod() : null;
+        if (m == null) return;
+        head("Sleep");
+        int beds = SleepMod.beds(act).length;
+        long[] st = m.state();
+        note(st == null ? "The sleep mod is not in this game's code yet: prepare the game again (its card › Prepare), then start it."
+                : beds == 0 ? "Get into a bed in the game, open this panel and tap “This is the bed”. From then on the game asks how long to sleep each time you get into a bed."
+                : "The game asks how long to sleep when you get into a bed (" + beds + (beds == 1 ? " bed" : " beds") + " learned)." + (st[4] != 0 ? " Not in Link Play." : ""));
+        TextView said = note("");
+        said.setVisibility(GONE);
+        Button learn = new Button(act);
+        learn.setText("This is the bed");
+        learn.setOnClickListener(v -> { said.setText(m.learnBed()); said.setVisibility(VISIBLE); });
+        box.addView(learn, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        Button now = new Button(act);
+        now.setText("Sleep now");
+        now.setOnClickListener(v -> { close(); m.ask(); });
+        box.addView(now, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        long ahead = SleepMod.skip(act);
+        note("Game clock: " + (ahead == 0 ? "real time" : SleepMod.ahead(ahead) + " ahead of real time") + ". Only Pokopia's clock moves; the tablet's own date and time never change.");
+        if (ahead != 0) {
+            Button real = new Button(act);
+            real.setText("Back to real time");
+            real.setOnClickListener(v -> { m.realTime(); rebuild(); });
+            box.addView(real, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+        if (beds > 0) {
+            Button forget = new Button(act);
+            forget.setText("Forget the beds");
+            forget.setOnClickListener(v -> { m.forgetBeds(); rebuild(); });
+            box.addView(forget, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
     }
 
     /**

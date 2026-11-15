@@ -18,7 +18,22 @@ static int64_t fixed_time(void) {
 // DM_TIME=YYYY-MM-DDTHH:MM[:SS] / DM_TIME_OFFSET=<±seconds>: a custom user clock, as Eden's "set the time" does. The clock runs from
 // there instead of the host's: DM_TIME anchors it to the host's monotonic clock (it advances as much as the run lasts), DM_TIME_OFFSET
 // follows the host clock at that offset. DM_FIXED_TIME= keeps precedence (a replay needs the same calendar time every run).
-static void user_clock(int64_t *sec, int64_t *nsec) {
+// nx2android: DM_TIME_SKIP=<seconds> and dm_time_skip_set (Pokopia's sleep mod, android/pkp_sleep.c): the game's clock moved on by that much on top of the clock above, while the
+// game runs too; the phone's own clock is never set. The launcher keeps the total per game and passes it at the next start. GetSystemClockContext sees the jump as a clock set by hand
+static _Atomic int64_t g_skip; static pthread_once_t g_skip_once = PTHREAD_ONCE_INIT;
+static void skip_init(void) {
+    const char *e = getenv("DM_TIME_SKIP");
+    if (e && *e) { atomic_store(&g_skip, (int64_t)strtoll(e, NULL, 0)); LOG("DM_TIME_SKIP=%lld: the game's clock runs %+lld s ahead (the sleep mod)", (long long)atomic_load(&g_skip), (long long)atomic_load(&g_skip)); }
+}
+int64_t dm_time_skip(void) { pthread_once(&g_skip_once, skip_init); return atomic_load(&g_skip); }
+void dm_time_skip_set(int64_t s) {
+    pthread_once(&g_skip_once, skip_init);
+    int64_t was = atomic_exchange(&g_skip, s);
+    if (was != s) LOG("time: the game's clock skip %+lld s -> %+lld s", (long long)was, (long long)s);
+}
+static void user_clock_base(int64_t *sec, int64_t *nsec);
+static void user_clock(int64_t *sec, int64_t *nsec) { user_clock_base(sec, nsec); *sec += dm_time_skip(); }
+static void user_clock_base(int64_t *sec, int64_t *nsec) {
     static int mode = -2; static int64_t arg, base_ns;   // -1 host clock, 0 offset, 1 fixed start
     if (mode == -2) {
         const char *of = getenv("DM_TIME_OFFSET"), *t = getenv("DM_TIME");
@@ -42,6 +57,8 @@ static void user_clock(int64_t *sec, int64_t *nsec) {
     *sec = (int64_t)ts.tv_sec + (mode == 0 ? arg : 0); *nsec = ts.tv_nsec;
 }
 static int64_t user_now(void) { int64_t s, ns; user_clock(&s, &ns); return s; }
+// The game's clock now, as the game reads it (DM_FIXED_TIME's value when that is set): the launcher's sleep mod counts up from it
+int64_t dm_time_user_now(void) { int64_t ft = fixed_time(); return ft >= 0 ? ft : user_now(); }
 HLE_FORCE("_ZN2nn4time10InitializeEv", "connect to the time service; clocks come from the host system time instead", Result, h_time_Initialize, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn4time13IsInitializedEv", "the time service is taken over, always initialized", int, h_time_IsInitialized, void) { return 1; }
 // Steady clock (seconds since boot + a clock source ID, a 16-byte UUID): the host's monotonic seconds with a fixed source ID. GetSpanBetween runs as is in sdk: it subtracts only when the source IDs match

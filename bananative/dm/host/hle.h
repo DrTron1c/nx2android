@@ -29,6 +29,8 @@ uint64_t dm_guest_frame(void);        // Incremented each time the host presents
 void guest_clock_freeze(int on);
 void guest_clock_freeze_for(int reason, int on);   // Freeze by reason (1 background, 2 system keyboard); see hle_os.c
 void guest_clock_read_wait(void);     // A guest read of the system counter: waits while the app is in the background (hle_os.c)
+// nx2android: the game's user clock moved on by a skip (seconds) on top of the host's, live (hle_time.c DM_TIME_SKIP; Pokopia's sleep mod), and the game's clock now
+int64_t dm_time_skip(void); void dm_time_skip_set(int64_t s); int64_t dm_time_user_now(void);
 
 // Forced takeover: even if the SDK module has a definition, all references to that symbol at load time (JUMP_SLOT/GLOB_DAT/ABS64) are resolved to the host implementation.
 // Used only for the service-layer nn:: (service clients of fs/oe/aoc/pctl...); the SDK's libc++ and nn::os internals do not go into this table.

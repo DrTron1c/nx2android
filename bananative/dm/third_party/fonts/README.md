@@ -22,3 +22,15 @@ pyftsubset NotoSans/hinted/ttf/NotoSans-Regular.ttf \
   --layout-features='kern,liga,ccmp,locl,mark,mkmk' --glyph-names --notdef-outline --name-IDs='*' --hinting \
   --output-file=NotoSans-Regular-subset.ttf
 ```
+
+## M PLUS Rounded 1c (nx2android's Pokopia sleep mod)
+
+`MPLUSRounded1c-Bold-subset.ttf` and `MPLUSRounded1c-ExtraBold-subset.ttf` are the rounded face of the sleep mod's menu and clock (`android/app/src/main/java/dev/nxnative/android/SleepMod.java`), copied into the APK's `assets/fonts/` with the others (`nxFontAssets`). Not the game's own font: that one is in the game's files, which are never included here.
+
+| | |
+|---|---|
+| Source | https://github.com/google/fonts, `ofl/mplusrounded1c/MPLUSRounded1c-Bold.ttf` (sha256 `c698330e24aadd0da80cab1f321eee9c052d41b66ef84e7e5379e81fb084a890`) and `-ExtraBold.ttf` (`990f04475a93ef0c7a3fadbaa3307d449172c75ca7c0f9bd754c614b93190e15`), commit `cc39c4c2c304bc368c9b7c311ea2bcc6013299fe` |
+| These files | `MPLUSRounded1c-Bold-subset.ttf` 43,552 bytes, sha256 `5464f15f29d5b61a9c1c49a6fb46e7108b38088c5cedfe246b471881a30aed63`; `MPLUSRounded1c-ExtraBold-subset.ttf` 43,948 bytes, `e14031348ac63fc4bb100211fa1aea39d021a9e1ac02b9d691311a6725279223` |
+| Licence | SIL Open Font License 1.1, `OFL-MPLUSRounded1c.txt` (copyright 2016 The Rounded M+ Project Authors; no Reserved Font Name) |
+
+Reproduce (fonttools 4.67.0): `pyftsubset MPLUSRounded1c-<Bold|ExtraBold>.ttf --unicodes="U+0020-007E,U+00A0-00FF,U+2018-201F,U+2026,U+2022" --layout-features='*' --output-file=MPLUSRounded1c-<Bold|ExtraBold>-subset.ttf`

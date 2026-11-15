@@ -115,3 +115,9 @@ It lives under `dm/host/android/` so the Mac and iPhone builds do not include it
 from Recompia revision `75dae2f2ccdada74e6b8ba12ea7de30560a84221`, whose file carries `SPDX-License-Identifier: GPL-3.0-or-later`.
 The Android adaptation keeps the game's original aspect field and corrects its completed projection. The GPL implementation lives under
 `dm/host/android/` so the Mac and iPhone host builds do not include it; the MIT files retain their own license.
+
+**nx2android's Pokopia sleep mod is GPL-3.0-or-later.**
+[`dm/host/android/pkp_sleep.c`](../dm/host/android/pkp_sleep.c) uses the game addresses and the save request that Recompia found on the same game build
+([`runtime/games/pkp/core/pkp_layout.h`](https://github.com/Dittobyte/Recompia/blob/ea632e4/runtime/games/pkp/core/pkp_layout.h) and
+[`runtime/games/pkp/ui/pkp_save_now.cpp`](https://github.com/Dittobyte/Recompia/blob/ea632e4/runtime/games/pkp/ui/pkp_save_now.cpp), GPL-3.0-or-later). Its menu and clock
+(`SleepMod.java`) are drawn in M PLUS Rounded 1c (SIL Open Font License 1.1, `dm/third_party/fonts/OFL-MPLUSRounded1c.txt`), subset to Latin.

@@ -13,6 +13,11 @@ enum {
 #define DM_STICK_MAX 32767
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 uint64_t dm_input_samples(void);   // Cumulative number of times the game has sampled the controller
+// nx2android: a game mod holds player 1 (hle_hid.c): on = the game reads only the mod's buttons and sticks, none of the player's own input (pads, touch gamepad, keyboard, touchscreen).
+// dm_input_held_seen: what the player pressed on player 1's sources while held (buttons 0..15, the left stick's directions 16..19 as NpadButton), refreshed at each of the game's reads
+void dm_input_hold(int on, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
+int dm_input_held(void);
+uint64_t dm_input_held_seen(void);
 // The cheat VM's key mask (hle_cheats.c): every input source's button bits (0..15 in the enum above) ORed and the
 // merged axes' eight stick-direction bits (16..23), one flat bitset; no latches are consumed (the game's own reads
 // keep them). The NpadButton SL / SR bits (24 / 25) never fire: no input source of this host reports them

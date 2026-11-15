@@ -8,6 +8,7 @@
 // +0x10 x, +0x14 y, +0x18 diameter x, +0x1c diameter y, +0x20 rotation angle, +0x24 reserved. TouchScreenState<16>: +0 sample number, +8 touch count, 16 TouchState from +0x10.
 #include "dm.h"
 #include "front.h"
+#include "dm_input.h"
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -52,6 +53,10 @@ static int32_t clampi(float v, int hi) { int32_t r = (int32_t)(v * (float)(hi + 
 int touch_fill_n(void *out, int max, uint64_t now_ns) {
     if (max < 1) max = 1; else if (max > 16) max = 16;
     uint8_t *o = out; memset(o, 0, 0x10 + 0x28 * (size_t)max);
+    if (dm_input_held()) {   // a game mod holds player 1 (dm_input_hold): no fingers for the game; their Start / End wait for the hold to end
+        pthread_mutex_lock(&g_tl); int64_t samp = ++g_tsamp; g_tlast_ns = now_ns; pthread_mutex_unlock(&g_tl);
+        memcpy(o, &samp, 8); return 0;
+    }
     pthread_mutex_lock(&g_tl);
     int64_t samp = ++g_tsamp; int64_t dt = g_tlast_ns ? (int64_t)(now_ns - g_tlast_ns) : 0; g_tlast_ns = now_ns;
     int k = 0;

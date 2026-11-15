@@ -86,6 +86,34 @@ final class Native {
     /** Sends the save to the sync folder (DM_SAVE_SYNC) now if a save has not gone yet, waiting at most timeoutMs: before Stop ends the process. True when it is there (or sync is off). */
     static native boolean saveFlush(int timeoutMs);
 
+    /** nx2android: the game's clock now, as the game reads it (seconds since 1970; 0 without the entry point), and the skip on top of the phone's clock, set live (the phone's
+     *  own clock is never touched; hle_time.c DM_TIME_SKIP) */
+    static native long clockNow();
+
+    static native void clockSkip(long seconds);
+
+    /** nx2android: Pokopia's sleep mod (dm/host/android/pkp_sleep.c). True when its frame gate runs in this game; out (6): the player's action now (-1 unknown), the last action
+     *  started, the times the player got into a bed, the save (0 idle, 1 asked, 2 writing, 3 done, 4 failed), 1 in Link Play, the game frames counted */
+    static native boolean pkpState(long[] out);
+
+    /** The actions that count as a bed (at most 8) */
+    static native void pkpBeds(int[] ids);
+
+    /** 0 the player's own input; 1 held while the mod's menu is up (the game sees nothing; pkpSeen says what was pressed); 2 held and the player gets out of bed, then back to 0 */
+    static native void pkpHold(int mode);
+
+    /** What the player pressed while held: NpadButton bits (A 0, B 1, … Left 12, Up 13, Right 14, Down 15) and the left stick's directions 16 left, 17 up, 18 right, 19 down */
+    static native long pkpSeen();
+
+    /** The game's own save of the player's file at its next frame; pkpState's out[3] follows it */
+    static native void pkpSave();
+
+    /** nx2android: pixel shaders to watch (at most 4, shader_map.tsv keys), and how long ago (ms) the latest of them was drawn (-1 never, or not in this host): the sleep mod's
+     *  clock over the Pokédex (vka_draw.c nxhost_watch_fs) */
+    static native void watchFs(long[] keys);
+
+    static native long watchFsAge();
+
     /** Whether the host is paused (4 until 5; nxhost_paused): 1 or 0, -1 when this host has no such entry point. */
     static native int paused();
 

@@ -116,7 +116,8 @@ enum { OBS_UE_MALLOC = 21,                                       // Unreal's FMa
        OBS_OOT_WIDE = 31,                                               // Ocarina of Time (main v131072): 3D camera projections about to be read (register in the parameter bits 0-4) and the 2D layer sites (kind in bits 5 up: HUD, movie, save picture) (android/oot_wide.c)
        OBS_DKB_WIDE = 32,                                               // Donkey Kong Bananza (main v458752): the scene camera's updater about to be read (register in the parameter bits 0-4) and the UI projection copies (kind in bits 5 up) (android/dkb_wide.c)
        OBS_MKW_WIDE = 33,                                               // Mario Kart World (main 1.8.0): camera aspect stores (register in the parameter bits 0-4) and the 2D layer's projection reads (kind in bits 5 up) (android/mkw_wide.c)
-       OBS_MAX = 34 };   // 28-30 are Pokopia's camera gates on its own branch (android/pkp_aspect.c)
+       OBS_PKP_FRAME = 60,                                              // nx2android: Pokopia 2.0.1's frame step, its first virtual call's target in x9 (android/pkp_sleep.c, the sleep mod)
+       OBS_MAX = 61 };   // 28-30 are Pokopia's camera gates on its own branch (android/pkp_aspect.c); 60 is nx2android's, kept clear of Banana Native's numbers
 // A gate number's bits from 8 up are a parameter for its callback (OBS_REGION_GOT: the register that holds the address). Callbacks read the registers; a write to x0–x29 takes
 // effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT and OBS_UE_REGION do
 void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));

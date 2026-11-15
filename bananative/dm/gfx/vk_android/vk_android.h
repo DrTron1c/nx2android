@@ -41,3 +41,7 @@ __attribute__((visibility("default"))) int nxhost_pad_state(void);
 // (DM_VK_DRIVER, read at the first call in the process: set it before). Its own instance, no device; callable before nxhost_main. 0 = facts written, 1 = an "error=" line
 // says why the facts stop there, -1 = no buffer
 __attribute__((visibility("default"))) int nxhost_vk_readiness(char *buf, int n);
+// nx2android: pixel shaders the launcher watches (vka_draw.c): up to 4 keys (shader_map.tsv's), and how long ago (ms) the latest of them was drawn, -1 never. Pokopia's sleep mod
+// watches the Pokédex's avatar shaders to show the game's clock over the Pokédex
+__attribute__((visibility("default"))) void nxhost_watch_fs(const uint64_t *keys, int n);
+__attribute__((visibility("default"))) int64_t nxhost_watch_fs_age(void);

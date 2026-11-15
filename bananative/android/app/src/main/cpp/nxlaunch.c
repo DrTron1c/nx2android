@@ -49,6 +49,15 @@ void nxhost_env_changed(void);
 #pragma weak nxhost_motion_rotation
 #pragma weak nxhost_lifecycle
 #pragma weak nxhost_save_flush
+#pragma weak nxhost_clock_now
+#pragma weak nxhost_clock_skip
+#pragma weak nxhost_pkp_state
+#pragma weak nxhost_pkp_beds
+#pragma weak nxhost_pkp_hold
+#pragma weak nxhost_pkp_seen
+#pragma weak nxhost_pkp_save
+#pragma weak nxhost_watch_fs
+#pragma weak nxhost_watch_fs_age
 #pragma weak nxhost_paused
 #pragma weak nxhost_audio_interrupt
 #pragma weak nxhost_audio_route_changed
@@ -361,6 +370,30 @@ JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_motionRotation(JNIEnv *e
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_lifecycle(JNIEnv *env, jclass cls, jint ev) { (void)env; (void)cls; if (nxhost_lifecycle) nxhost_lifecycle(ev); }
 // The save to the sync folder before the process ends (Stop): true when it is there, or sync is off, or the host has no such call
 JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_saveFlush(JNIEnv *env, jclass cls, jint ms) { (void)env; (void)cls; return !nxhost_save_flush || nxhost_save_flush(ms) ? JNI_TRUE : JNI_FALSE; }
+// nx2android: the game's clock and Pokopia's sleep mod (input_android.h, dm/host/android/pkp_sleep.c); without the entry points: no clock (0), no mod (false)
+JNIEXPORT jlong JNICALL Java_dev_nxnative_android_Native_clockNow(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_clock_now ? nxhost_clock_now() : 0; }
+JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_clockSkip(JNIEnv *env, jclass cls, jlong s) { (void)env; (void)cls; if (nxhost_clock_skip) nxhost_clock_skip(s); }
+JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_pkpState(JNIEnv *env, jclass cls, jlongArray out) {
+    (void)cls; if (!nxhost_pkp_state || (*env)->GetArrayLength(env, out) < 6) return JNI_FALSE;
+    int64_t v[6] = {0}; int on = nxhost_pkp_state(v); jlong j[6]; for (int i = 0; i < 6; i++) j[i] = v[i];
+    (*env)->SetLongArrayRegion(env, out, 0, 6, j); return on ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpBeds(JNIEnv *env, jclass cls, jintArray ids) {
+    (void)cls; if (!nxhost_pkp_beds) return;
+    jsize n = ids ? (*env)->GetArrayLength(env, ids) : 0; int v[8] = {0}; if (n > 8) n = 8;
+    if (n) { jint t[8]; (*env)->GetIntArrayRegion(env, ids, 0, n, t); for (int i = 0; i < n; i++) v[i] = t[i]; }
+    nxhost_pkp_beds(v, n);
+}
+JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpHold(JNIEnv *env, jclass cls, jint mode) { (void)env; (void)cls; if (nxhost_pkp_hold) nxhost_pkp_hold(mode); }
+JNIEXPORT jlong JNICALL Java_dev_nxnative_android_Native_pkpSeen(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_pkp_seen ? (jlong)nxhost_pkp_seen() : 0; }
+JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpSave(JNIEnv *env, jclass cls) { (void)env; (void)cls; if (nxhost_pkp_save) nxhost_pkp_save(); }
+JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_watchFs(JNIEnv *env, jclass cls, jlongArray keys) {
+    (void)cls; if (!nxhost_watch_fs) return;
+    jsize n = keys ? (*env)->GetArrayLength(env, keys) : 0; uint64_t v[4] = {0}; if (n > 4) n = 4;
+    if (n) { jlong t[4]; (*env)->GetLongArrayRegion(env, keys, 0, n, t); for (int i = 0; i < n; i++) v[i] = (uint64_t)t[i]; }
+    nxhost_watch_fs(v, n);
+}
+JNIEXPORT jlong JNICALL Java_dev_nxnative_android_Native_watchFsAge(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_watch_fs_age ? nxhost_watch_fs_age() : -1; }
 JNIEXPORT jint JNICALL Java_dev_nxnative_android_Native_paused(JNIEnv *env, jclass cls) { (void)env; (void)cls; return nxhost_paused ? nxhost_paused() : -1; }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_audioInterrupt(JNIEnv *env, jclass cls, jboolean on) { (void)env; (void)cls; if (nxhost_audio_interrupt) nxhost_audio_interrupt(on); }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_audioRouteChanged(JNIEnv *env, jclass cls) { (void)env; (void)cls; if (nxhost_audio_route_changed) nxhost_audio_route_changed(); }

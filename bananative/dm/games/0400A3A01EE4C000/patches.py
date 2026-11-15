@@ -9,9 +9,17 @@ OBS = {
         (0x08cc128, 28, '398dc273', 'scene camera enters render view; x20 camera'),
         (0x1f12130, 29, 'aa0003f3', 'projection builder entry; x0 camera'),
         (0x1f12354, 30, '6d4123e9', 'perspective projection exit; x19 camera'),
+        # nx2android (OBS_PKP_FRAME = 60, dm/host/android/pkp_sleep.c): the frame step's stp right before its first virtual call (blr x9 at +0xbfc55c), on the game thread once
+        # a frame; the callback points x9 at the sleep mod's frame work, which then calls the getter x9 held
+        (0x0bfc558, 60, 'a902a3e8', 'frame step, before its first virtual call; x9 its target (the sleep mod)'),
     ],
 }
 BINDING = [
+    {'what': 'Pokopia sleep mod frame gate in main v2.0.1 (nx2android)', 'now': 'build',
+     'goal': 'game', 'purpose': 'runtime',
+     'checked': 'main 76a489f3bd3642fa5e18bd83d32c98ba (disassembled 2026-11-15)',
+     'why': 'the frame step and the save manager calls are at fixed places in this exact build',
+     'blocked': 'future game builds require exact offset and original-word validation'},
     {'what': 'Pokopia camera aspect hooks in main v2.0.1', 'now': 'build',
      'goal': 'game', 'purpose': 'rendering',
      'checked': 'main 76a489f3bd3642fa5e18bd83d32c98ba (Fold 7 observation, 2026-11-11)',

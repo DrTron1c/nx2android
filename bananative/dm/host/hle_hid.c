@@ -58,6 +58,15 @@ void dm_pad_set_player(int p, uint64_t buttons, int32_t lx, int32_t ly, int32_t 
     if (!p) shake_note();
 }
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) { dm_pad_set_player(0, buttons, lx, ly, rx, ry); }
+// nx2android: a game mod's hold on player 1 (dm_input.h dm_input_hold; Pokopia's sleep mod, android/pkp_sleep.c): while held the game reads none of the player's own input (pads,
+// the touch gamepad, the keyboard, the touchscreen) and only the mod's buttons and sticks; what the player pressed is kept for the mod's menu (dm_input_held_seen)
+static _Atomic int g_hold; static _Atomic uint64_t g_hold_btn, g_hold_axes, g_hold_seen;
+void dm_input_hold(int on, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    atomic_store(&g_hold_btn, buttons); atomic_store(&g_hold_axes, pack(lx, ly, rx, ry));
+    if (atomic_exchange(&g_hold, on) != on) LOG("input: player 1 %s (a game mod's menu)", on ? "held: the game sees the mod's input only" : "back to the player");
+}
+int dm_input_held(void) { return atomic_load_explicit(&g_hold, memory_order_relaxed); }
+uint64_t dm_input_held_seen(void) { return atomic_load(&g_hold_seen); }
 static void script_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     uint64_t old = atomic_exchange(&g_sc_btn, buttons); atomic_fetch_or(&g_sc_latch, buttons & ~old); atomic_store(&g_sc_axes, pack(lx, ly, rx, ry));
     shake_note();
@@ -449,6 +458,15 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
         if (atomic_load_explicit(&g_rec_on, memory_order_relaxed)) rec_read((b & 0xffffull) | ((atomic_load(&g_btn) | atomic_load(&g_pad_btn[0])) & DM_BTN_SHAKE), a);
         b |= atomic_load(&g_sc_btn) | atomic_exchange(&g_sc_latch, 0);
         uint64_t c = atomic_load(&g_sc_axes); for (int i = 0; i < 4; i++) a[i] = pick(a[i], ax(c, i));
+    }
+    if (!pl && atomic_load_explicit(&g_hold, memory_order_relaxed)) {   // a mod holds player 1: what was pressed goes to the mod, the game gets the mod's input (dm_input_hold)
+        uint64_t seen = b & 0xffffull;
+        if (a[0] < -STICK_THRESH) seen |= 1u << 16;
+        if (a[1] > STICK_THRESH) seen |= 1u << 17;
+        if (a[0] > STICK_THRESH) seen |= 1u << 18;
+        if (a[1] < -STICK_THRESH) seen |= 1u << 19;
+        atomic_store(&g_hold_seen, seen);
+        b = atomic_load(&g_hold_btn); uint64_t h = atomic_load(&g_hold_axes); for (int i = 0; i < 4; i++) a[i] = ax(h, i);
     }
     s->lx = a[0]; s->ly = a[1]; s->rx = a[2]; s->ry = a[3];
     b &= 0xffffull;

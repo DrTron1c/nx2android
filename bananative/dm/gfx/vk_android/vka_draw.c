@@ -1966,6 +1966,24 @@ static int ss_slot(uint64_t vs, uint64_t fs, uint64_t gs) {
     return -1;
 }
 static void ss_tick(void) { if (!g_ss_t0) g_ss_t0 = ss_now(); if (!(++g_ss_tick & 4095) && ss_now() - g_ss_t0 > 2000000000ull) ss_dump(); }
+// nx2android: pixel shaders the launcher watches (vk_android.h nxhost_watch_fs; Pokopia's sleep mod: the Pokédex's avatar shaders, so the game's clock shows over the
+// Pokédex): when each was last drawn, on the replay thread, nothing when none is watched
+static _Atomic uint64_t g_watch_key[4]; static _Atomic int64_t g_watch_ns[4]; static _Atomic int g_watch_n;
+static inline void watch_fs(uint64_t fs) {
+    int n = atomic_load_explicit(&g_watch_n, memory_order_relaxed);
+    for (int i = 0; i < n; i++) if (atomic_load_explicit(&g_watch_key[i], memory_order_relaxed) == fs) atomic_store_explicit(&g_watch_ns[i], (int64_t)ss_now(), memory_order_relaxed);
+}
+__attribute__((visibility("default"))) void nxhost_watch_fs(const uint64_t *keys, int n) {
+    if (n > 4) n = 4; if (n < 0) n = 0;
+    atomic_store(&g_watch_n, 0);
+    for (int i = 0; i < n; i++) { atomic_store(&g_watch_key[i], keys[i]); atomic_store(&g_watch_ns[i], 0); }
+    atomic_store(&g_watch_n, n);
+}
+__attribute__((visibility("default"))) int64_t nxhost_watch_fs_age(void) {
+    int64_t best = -1, now = (int64_t)ss_now();
+    for (int i = 0, n = atomic_load(&g_watch_n); i < n; i++) { int64_t t = atomic_load(&g_watch_ns[i]); if (t && (best < 0 || now - t < best)) best = now - t; }
+    return best < 0 ? -1 : best / 1000000;
+}
 static int skip_fs(uint64_t fs) {
     static uint32_t gen = ~0u; static uint64_t keys[8]; static int nk;
     uint32_t g = atomic_load_explicit(&vka_env_gen, memory_order_relaxed);
@@ -2292,6 +2310,7 @@ static void draw_body(vka_dstate *d, const p_set_rt *rt, int has_rt, const p_sci
         else VRED_ONCE("geometry shader %016llx writes memory in an %s draw: drawn without the claim, its writes repeated by the device's runs of each primitive", (unsigned long long)sh[2]->key, ind ? "indirect" : "instanced");
     }
     if (expand && ind) SKIP("an indirect draw of quads or a line loop is not on Vulkan yet: skipped");
+    if (!mesh && sh[1]) watch_fs(sh[1]->key);
     if (!mesh && sh[1] && skip_fs(sh[1]->key)) { g_skipped++; return; }
     if (bisect_drop(sh)) { g_skipped++; return; }
     if (!mesh && VKA_ENV("DM_VK_SHADER_STATS", 0)) {

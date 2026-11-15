@@ -361,7 +361,7 @@ tasks.named('preBuild') { dependsOn nxThemes }
 
 // The shared-font stand-in (GameFonts.java, dm/third_party/fonts): Noto Sans Regular, subset, with its licence, copied at every build into the APK's assets/fonts/
 def nxFontAssets = tasks.register('nxFontAssets', Sync) {
-    from(new File(repo, 'dm/third_party/fonts')) { include 'NotoSans-Regular-subset.ttf', 'OFL.txt' }
+    from(new File(repo, 'dm/third_party/fonts')) { include 'NotoSans-Regular-subset.ttf', 'OFL.txt', 'MPLUSRounded1c-Bold-subset.ttf', 'MPLUSRounded1c-ExtraBold-subset.ttf', 'OFL-MPLUSRounded1c.txt' }   // nx2android: the sleep mod's rounded face (SleepMod)
     into layout.buildDirectory.dir('generated/nxfonts/assets/fonts')
 }
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/nxfonts/assets'))

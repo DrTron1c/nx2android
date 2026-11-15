@@ -121,6 +121,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             controls.setHud(hud);
         }
         root.addView(controls, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        if (SleepMod.game(id)) {   // nx2android: Pokopia's sleep mod, its menu and its fade over the game and the controls (under the overlay and the panel)
+            sleep = new SleepMod(this, controls::picture);
+            root.addView(sleep.view(), new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        }
         hidePointer(surface, controls);   // Xiaomi: no mouse in the game (NO_MOUSE)
         if (NO_MOUSE) Native.note("input: Xiaomi device: no mouse in the game (its arrow hidden, its clicks dropped; the panel still takes it)");
         // The build tag: an overlay item, on by default (fpsTick follows the switches); bold, flush in the top-left corner
@@ -438,6 +442,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         return hz >= 30 && hz <= 240 ? hz : 60;
     }
 
+    private SleepMod sleep;   // nx2android: Pokopia's sleep mod (SleepMod), null for another game
+    SleepMod sleepMod() { return sleep; }
     private Profile.Render startRender;   // the render setting this run started with (settingsEnv), null for a game without a render_cfg row
     Profile.Render startRender() { return startRender; }
 
@@ -453,6 +459,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             String tod = Prefs.timeOverride(this);
             if (!tod.isEmpty()) env.add("DM_TIME=" + tod);
         }
+        SleepMod.env(this, id, env);   // nx2android: Pokopia's clock as far ahead as its sleeps moved it (DM_TIME_SKIP)
         if (prof != null && prof.vegetationDetail && !Prefs.fullVegetation(this, id)) env.add("DM_VK_VEGETATION=0");
         if (prof != null) env.addAll(prof.optionsEnv(optEnv -> Prefs.gameOption(this, id, optEnv)));
         Lsfg.env(this, env);   // frame generation: the user's Lossless.dll and the settings
@@ -906,6 +913,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
      * The game itself is left as it is: onStop has suspended it
      */
     @Override protected void onDestroy() {
+        if (sleep != null) sleep.stop();
         TextInput.gone(this);
         ui.removeCallbacksAndMessages(null);
         if (rumble != null) rumble.stopAll();

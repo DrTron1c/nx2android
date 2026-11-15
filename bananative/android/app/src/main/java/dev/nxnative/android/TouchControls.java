@@ -60,6 +60,8 @@ final class TouchControls extends View {
     private final String[] label = new String[MAX];
     private float tx, ty, tr;      // the show / hide button
     private float picX, picY, picW = 1, picH = 1;   // the game's picture in the view, normalized
+    /** The game's picture in the view, normalized: x, y, w, h (nx2android: the sleep mod's menu and the Pokédex clock sit in it) */
+    float[] picture() { return new float[] {picX, picY, picW, picH}; }
 
     // The user's layout, one per screen shape (prof: the view's size in steps of 40 units, so a foldable's two screens keep one each): each group (the left stick with L3,
     // the D-pad, the face buttons, the right stick with R3, the left and the right shoulders with − / +) moved by (gdx, gdy) units and scaled by gsc around its centre,

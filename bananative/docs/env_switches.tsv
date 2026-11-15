@@ -400,6 +400,7 @@ DM_THR	diagnostic	`=1` logs each SVC (except `SleepThread`) with its first four 
 DM_THRCPU	diagnostic	`=<tsv path>[,<seconds>]` writes each thread's CPU time (100% = one core) and the total every interval (default 10 s); on iOS a relative path is under `Documents`
 DM_TIME	player	`=<YYYY-MM-DDTHH:MM[:SS]>` (Android, System › Time of day) the clock the next game start hands the game: the user clock starts there and advances with the run; `DM_FIXED_TIME` wins
 DM_TIME_OFFSET	player	`=<seconds>` (Android) the user clock runs that far off the host clock, for a game with a day/night cycle; `DM_TIME` and `DM_FIXED_TIME` win
+DM_TIME_SKIP	player	`=<seconds>` (Android; nx2android) the game's clock moved on by that much on top of the others (`DM_TIME`, `DM_TIME_OFFSET`, the host clock), and live through the launcher (`nxhost_clock_skip`): Pokopia's sleep mod keeps its total and passes it at each start (`SleepMod.java`, `android/pkp_sleep.c`); only the game's clock, the phone's is never set; `DM_FIXED_TIME` wins
 DM_TOUCH_HAPTICS	player	`0` turns off the light haptic tap when a touch control is pressed (on by default); launcher setting
 DM_TOUCH_LOG	diagnostic	`=1` logs each touch-screen read with touch points (sample, finger, position, attributes) and each gesture entry, up to 500 lines
 DM_TZ	switch	`=<zone>` (Android) the zone the user clock's fields are read in (`DM_TIME` is wall-clock time in it); `DM_FIXED_TIME` pins UTC
