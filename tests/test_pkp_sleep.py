@@ -107,11 +107,16 @@ class Menu(unittest.TestCase):
     def test_choices_and_pokedex(self):
         j = (JAVA / 'SleepMod.java').read_text()
         self.assertIn('static final int[] HOURS = {6, 12, 18, 24};', j)
-        self.assertIn('static final String[] CHOICES = {"6 hours", "12 hours", "18 hours", "24 hours", "Not now"};', j)
+        self.assertIn('static final String[] CHOICES = {"6 hours", "12 hours", "18 hours", "24 hours", "Until morning", "Not now"};', j)
+        # until morning: just after the next 5 AM (the game's day starts then), the next day's when it is past it already
+        self.assertIn('static final int MORNING_HOUR = 5;', j)
+        self.assertIn('m = z.toLocalDate().atTime(MORNING_HOUR, 0, 10).atZone(ZoneId.systemDefault());', j)
+        self.assertIn('if (!m.isAfter(z)) m = z.toLocalDate().plusDays(1).atTime(MORNING_HOUR, 0, 10)', j)
+        self.assertIn('DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH)', j)   # the day and date under the counting clock
         seen = (GAME / 'shader_seen.tsv').read_text()
         for k in re.search(r'DEX_FS = \{([^}]*)\}', j).group(1).split(','):
             self.assertIn(k.strip()[2:-1], seen)   # the Pokédex's avatar pixel shaders, as the profile names them
-        self.assertIn('hours * 1000L', j)   # one hour a second
+        self.assertIn('private long tickMs() { return sleepSec * 1000 / 3600; }', j)   # one hour a second
         # seamless: the game is told it is back from HOME after the clock moves, the screen stays black until the game's own time of day is the new one, and the
         # player gets out of bed before the fade in
         self.assertIn('Native.pkpFocus(2);', j)

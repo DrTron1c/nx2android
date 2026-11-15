@@ -24,11 +24,12 @@ import java.util.Locale;
 
 /**
  * nx2android: Pokémon Pokopia's sleep mod, the launcher's side; the game's side is dm/host/android/pkp_sleep.c, which counts the player getting into a bed, makes the
- * game's own save and gets the player out of bed. Here: when the player gets into a bed the menu asks how long to sleep (6, 12, 18 or 24 hours, or Not now), drawn
+ * game's own save and gets the player out of bed. Here: when the player gets into a bed the menu asks how long to sleep (6, 12, 18 or 24 hours, until morning: the
+ * next 5 AM, when the game's day starts, or Not now), drawn
  * over the game like its own talk choices, read from the touch gamepad, a controller (the game sees nothing of them while the menu is up: Native.pkpHold) or a tap.
  * A choice of hours: the picture fades to black, the game saves, the game's clock moves on by that much (Native.clockSkip: only the game's clock, the tablet's is
  * never set) and the game is told it is back from the HOME menu (Native.pkpFocus), which is when Pokopia takes a new clock; the time counts up in the middle of the
- * screen one hour a second with a loading icon turning in the bottom right corner; the screen stays black until the game's own time of day is the new one
+ * screen one hour a second, the day and date under it, with a loading icon turning in the bottom right corner; the screen stays black until the game's own time of day is the new one
  * (Native.pkpTod) and the player is out of bed (Native.pkpHold(2)), so the picture fades back in on the new time with the player up.
  * The total skip is kept (pkp_clock_skip) and given to every start (DM_TIME_SKIP), so the game stays ahead of real time until Back to real time (the in-game panel).
  * Save and Quit (the game back at its title after a game: pkp_sleep.c guide_gate) moves the game's clock on 6 hours, so the next time in is later in the day.
@@ -39,7 +40,9 @@ import java.util.Locale;
 final class SleepMod {
     static final String TITLE = "0400A3A01EE4C000";
     static final int[] HOURS = {6, 12, 18, 24};
-    static final String[] CHOICES = {"6 hours", "12 hours", "18 hours", "24 hours", "Not now"};
+    static final String[] CHOICES = {"6 hours", "12 hours", "18 hours", "24 hours", "Until morning", "Not now"};
+    static final int MORNING = HOURS.length, NOT_NOW = HOURS.length + 1;   // the choices after the hours
+    static final int MORNING_HOUR = 5;   // Pokopia's day starts at 5 AM: Until morning wakes the player just after it
     private static final int IDLE = 0, ASK = 1, FADE_OUT = 2, SAVE = 3, TICK = 4, SETTLE = 5, FADE_IN = 6;
     private static final long FADE_MS = 650, HOLD_MS = 600, SAVE_MAX_MS = 20000, SETTLE_MAX_MS = 20000, FOCUS_MS = 400;
     private static final long TOD_NEAR = 15 * 60;   // the game's time of day this close to the new clock (seconds) is the new time
@@ -81,7 +84,9 @@ final class SleepMod {
     private Typeface face, faceBold;
     private boolean present, stopped, dex;
     private long bedsSeen = -1, quitsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt;
-    private int phase = IDLE, sel, hours, seenFrames, pressedRow = -1, saveState, teach;
+    private long sleepSec;   // how far this sleep moves the game's clock
+    private boolean untilMorning;
+    private int phase = IDLE, sel, seenFrames, pressedRow = -1, saveState, teach;
 
     SleepMod(Activity a, java.util.function.Supplier<float[]> picture) {
         act = a; this.picture = picture;
@@ -188,13 +193,14 @@ final class SleepMod {
 
     private void choose(int i) {
         if (phase != ASK) return;
-        if (i >= HOURS.length) {   // Not now: the player gets out of bed, then the input is theirs again (pkp_sleep.c getup_step)
+        if (i >= NOT_NOW) {   // Not now: the player gets out of bed, then the input is theirs again (pkp_sleep.c getup_step)
             phase = IDLE; view.setVisibility(dex ? View.VISIBLE : View.GONE);
             Native.pkpHold(2);
             return;
         }
-        hours = HOURS[i]; phase = FADE_OUT; phaseAt = SystemClock.uptimeMillis();
-        Native.note("sleep mod: sleep " + hours + " hours");
+        untilMorning = i == MORNING; sleepSec = untilMorning ? 0 : HOURS[i] * 3600L;   // until morning: measured when the clock moves (startTick)
+        phase = FADE_OUT; phaseAt = SystemClock.uptimeMillis();
+        Native.note("sleep mod: sleep " + (untilMorning ? "until morning" : HOURS[i] + " hours"));
     }
 
     private void startTick() {
@@ -202,16 +208,27 @@ final class SleepMod {
         if (now <= 0) now = System.currentTimeMillis() / 1000 + skip(act);
         long[] tod = new long[2];
         date0 = Native.pkpTod(tod) ? tod[1] : 0;
-        long total = skip(act) + hours * 3600L;
+        if (untilMorning) sleepSec = untilMorning(now);
+        long total = skip(act) + sleepSec;
         skip(act, total); Native.clockSkip(total);
-        todTarget = tod[0] >= 0 ? Instant.ofEpochSecond(now + hours * 3600L).atZone(ZoneId.systemDefault()).toLocalTime().toSecondOfDay() : -1;
+        todTarget = tod[0] >= 0 ? Instant.ofEpochSecond(now + sleepSec).atZone(ZoneId.systemDefault()).toLocalTime().toSecondOfDay() : -1;
         // as the console does when the player comes back from the HOME menu after setting its clock: the game takes the new time then
         Native.pkpFocus(2);
         ui.postDelayed(() -> Native.pkpFocus(1), FOCUS_MS);
         getupAt = 0;
         tickFrom = now; phase = TICK; phaseAt = SystemClock.uptimeMillis();
-        Native.note("sleep mod: " + (saveState == 3 ? "saved" : "not saved (" + saveState + ")") + ", the game's clock +" + hours + " h (" + ahead(total) + " ahead of real time)");
+        Native.note("sleep mod: " + (saveState == 3 ? "saved" : "not saved (" + saveState + ")") + ", the game's clock +" + sleepSec + " s (" + ahead(total) + " ahead of real time)");
     }
+
+    /** Seconds from the game's time now to just after the next MORNING_HOUR (10 s past it, so the game's new day has begun) */
+    static long untilMorning(long now) {
+        ZonedDateTime z = Instant.ofEpochSecond(now).atZone(ZoneId.systemDefault()), m = z.toLocalDate().atTime(MORNING_HOUR, 0, 10).atZone(ZoneId.systemDefault());
+        if (!m.isAfter(z)) m = z.toLocalDate().plusDays(1).atTime(MORNING_HOUR, 0, 10).atZone(ZoneId.systemDefault());
+        return m.toEpochSecond() - now;
+    }
+
+    /** The counting clock's run: an hour a second */
+    private long tickMs() { return sleepSec * 1000 / 3600; }
 
     private final Choreographer.FrameCallback frame = new Choreographer.FrameCallback() {
         @Override public void doFrame(long t) {
@@ -226,7 +243,7 @@ final class SleepMod {
                         if ((down & (UP | L_UP)) != 0) sel = (sel + CHOICES.length - 1) % CHOICES.length;
                         if ((down & (DOWN | L_DOWN)) != 0) sel = (sel + 1) % CHOICES.length;
                         if ((down & A) != 0) choose(sel);
-                        else if ((down & B) != 0) choose(CHOICES.length - 1);
+                        else if ((down & B) != 0) choose(NOT_NOW);
                     }
                     break;
                 }
@@ -236,7 +253,7 @@ final class SleepMod {
                     if (saveState == 3 || saveState == 4 || el > SAVE_MAX_MS) startTick();
                     break;
                 }
-                case TICK: if (el >= hours * 1000L + HOLD_MS) { phase = SETTLE; phaseAt = SystemClock.uptimeMillis(); } break;
+                case TICK: if (el >= tickMs() + HOLD_MS) { phase = SETTLE; phaseAt = SystemClock.uptimeMillis(); } break;
                 case SETTLE: {   // black until the game shows the new time, then out of bed, then the fade in
                     long[] s = state();
                     boolean gettingUp = s != null && (s[7] >> 24 & 1) != 0;
@@ -261,7 +278,7 @@ final class SleepMod {
         long[] t = new long[2];
         if (!Native.pkpTod(t) || t[0] < 0) return SystemClock.uptimeMillis() - phaseAt > 1500;
         long d = Math.abs(t[0] % 86400 - todTarget); d = Math.min(d, 86400 - d);
-        return d <= TOD_NEAR && (hours < 24 || date0 == 0 || t[1] != date0);
+        return d <= TOD_NEAR && (sleepSec < 23 * 3600L + 1800 || date0 == 0 || t[1] != date0);
     }
 
     // ---- Drawing ----
@@ -328,7 +345,7 @@ final class SleepMod {
             float black = phase == FADE_OUT ? Math.min(1f, el / (float) FADE_MS) : phase == FADE_IN ? 1f - Math.min(1f, el / (float) FADE_MS) : 1f;
             c.drawColor(Color.argb(Math.round(255 * black), 0, 0, 0));
             if (phase == SAVE || phase == TICK || phase == SETTLE || phase == FADE_IN) {
-                long shown = phase == SAVE ? Native.clockNow() : tickFrom + Math.min(hours * 3600L, Math.round((phase == TICK ? el : hours * 1000L) * 3.6));
+                long shown = phase == SAVE ? Native.clockNow() : phase == TICK ? tickFrom + Math.min(sleepSec, Math.round(el * 3.6)) : tickFrom + sleepSec;
                 drawClock(c, w, h, shown, phase == FADE_IN ? black : 1f);
                 if (phase != FADE_IN) drawSpinner(c, w, h, black);
             }
@@ -376,7 +393,7 @@ final class SleepMod {
             text.setColor(Color.argb(a, 255, 255, 255)); c.drawText(time, x, y, text);
             small.setColor(Color.argb(Math.round(a * 0.85f), 255, 233, 168)); c.drawText(ampm, x + tw + gap, y, small);
             small.setTypeface(face); small.setTextSize(22 * dp); small.setTextAlign(Paint.Align.CENTER); small.setColor(Color.argb(Math.round(a * 0.7f), 255, 255, 255));
-            c.drawText(z.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.ENGLISH), w / 2f, y + 46 * dp, small);
+            c.drawText(z.format(java.time.format.DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH)), w / 2f, y + 46 * dp, small);   // the day and date: a long sleep shows the day change
             if (phase == SAVE) c.drawText("Saving…", w / 2f, y + 86 * dp, small);
             else if (saveState != 3) c.drawText("The game was busy and did not save", w / 2f, y + 86 * dp, small);
         }
