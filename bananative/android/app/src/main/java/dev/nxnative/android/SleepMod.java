@@ -30,7 +30,8 @@ import java.util.Locale;
  * A choice of hours: the picture fades to black, the game saves, the game's clock moves on by that much (Native.clockSkip: only the game's clock, the tablet's is
  * never set) and the game is told it is back from the HOME menu (Native.pkpFocus), which is when Pokopia takes a new clock; the time counts up in the middle of the
  * screen one hour a second, the day and date under it, with a loading icon turning in the bottom right corner; the screen stays black until the game's own time of day is the new one
- * (Native.pkpTod) and the player is out of bed (Native.pkpHold(2)), so the picture fades back in on the new time with the player up.
+ * (Native.pkpTod; at most 2.5 s after the count: on the user's tablet that time never read as the new one, and the screen sat black 20 s more) and the
+ * player is out of bed (Native.pkpHold(2)), so the picture fades back in on the new time with the player up.
  * The total skip is kept (pkp_clock_skip) and given to every start (DM_TIME_SKIP), so the game stays ahead of real time until Back to real time (the in-game panel).
  * Save and Quit (the game back at its title after a game: pkp_sleep.c guide_gate) moves the game's clock on 6 hours, so the next time in is later in the day.
  * The bed is learned once, in three taps in the in-game panel (standing next to it, lying in it, standing again): the host keeps the values of the player's state that
@@ -44,7 +45,7 @@ final class SleepMod {
     static final int MORNING = HOURS.length, NOT_NOW = HOURS.length + 1;   // the choices after the hours
     static final int MORNING_HOUR = 5;   // Pokopia's day starts at 5 AM: Until morning wakes the player just after it
     private static final int IDLE = 0, ASK = 1, FADE_OUT = 2, SAVE = 3, TICK = 4, SETTLE = 5, FADE_IN = 6;
-    private static final long FADE_MS = 650, HOLD_MS = 600, SAVE_MAX_MS = 20000, SETTLE_MAX_MS = 20000, FOCUS_MS = 400;
+    private static final long FADE_MS = 650, HOLD_MS = 600, SAVE_MAX_MS = 20000, SETTLE_MAX_MS = 2500, FOCUS_MS = 400;
     private static final long TOD_NEAR = 15 * 60;   // the game's time of day this close to the new clock (seconds) is the new time
     // NpadButton bits as the host reports what was pressed (Native.pkpSeen): A, B, Up, Down, the left stick up and down
     private static final long A = 1, B = 1 << 1, UP = 1 << 13, DOWN = 1 << 15, L_UP = 1 << 17, L_DOWN = 1 << 19;
@@ -258,7 +259,7 @@ final class SleepMod {
                     long[] s = state();
                     boolean gettingUp = s != null && (s[7] >> 24 & 1) != 0;
                     if (getupAt == 0 && (newTime() || el > SETTLE_MAX_MS)) {
-                        if (!newTime()) Native.note("sleep mod: the game did not show the new time within " + SETTLE_MAX_MS / 1000 + " s");
+                        if (!newTime()) { long[] t = new long[2]; Native.pkpTod(t); Native.note("sleep mod: the game's time of day reads " + t[0] + " s (date " + t[1] + "), the new clock's " + todTarget + " s: on after " + SETTLE_MAX_MS + " ms"); }
                         Native.pkpHold(2); getupAt = SystemClock.uptimeMillis();
                     } else if (getupAt != 0 && !gettingUp && SystemClock.uptimeMillis() - getupAt > 300) { phase = FADE_IN; phaseAt = SystemClock.uptimeMillis(); }
                     else if (getupAt != 0 && SystemClock.uptimeMillis() - getupAt > 5000) { Native.pkpHold(0); phase = FADE_IN; phaseAt = SystemClock.uptimeMillis(); }

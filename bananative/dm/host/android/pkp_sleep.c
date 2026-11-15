@@ -190,14 +190,17 @@ static void save_step(uint64_t base) {
 
 // Out of bed ("Not now", and after a sleep): B, then while the player still lies in the bed (its signs), the left stick toward the camera for a moment, then the
 // player's input back. A player the signs already see out of bed is left alone (B could do something else there)
+// After a sleep on the user's tablet (build 20) the player stayed in bed: the bed's signs read "up" after the clock moved, so nothing was pressed, and the stick's
+// 8 frames were too short. Now always B, then the left stick toward the camera for 20 frames, and once more while the signs still say in bed
 static void getup_step(int cur) {
     if (!atomic_load(&g_getup)) return;
-    if (g_up_step == 0 && g_up_frame == 0 && atomic_load(&g_nsign) && !atomic_load(&g_inbed)) g_up_step = 4;
+    static int again;
+    if (g_up_step == 0 && g_up_frame == 0) again = 0;
     int f = g_up_frame++;
     if (g_up_step == 0) { dm_input_hold(1, DM_BTN_B, 0, 0, 0, 0); if (f >= 8) { g_up_step = 1; g_up_frame = 0; } return; }
-    if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 24) { g_up_step = atomic_load(&g_inbed) || !atomic_load(&g_nsign) ? 2 : 4; g_up_frame = 0; } return; }
-    if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 8) { g_up_step = 3; g_up_frame = 0; } return; }
-    if (g_up_step == 3) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = 4; g_up_frame = 0; } return; }
+    if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = 2; g_up_frame = 0; } return; }
+    if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 20) { g_up_step = 3; g_up_frame = 0; } return; }
+    if (g_up_step == 3) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = !again++ && atomic_load(&g_nsign) && atomic_load(&g_inbed) ? 2 : 4; g_up_frame = 0; } return; }
     LOG("pkp sleep: out of bed%s (action %d)", atomic_load(&g_inbed) ? " not confirmed: the signs still say in bed" : "", cur);
     dm_input_hold(0, 0, 0, 0, 0, 0); atomic_store(&g_getup, 0);
 }

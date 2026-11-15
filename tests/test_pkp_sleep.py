@@ -86,6 +86,10 @@ class Input(unittest.TestCase):
         self.assertIn('if (dm_input_held()) {', (HOST / 'hle_touch.c').read_text())
         s = (HOST / 'android/pkp_sleep.c').read_text()
         self.assertIn('dm_input_hold(1, DM_BTN_B, 0, 0, 0, 0)', s)   # Not now: B first
+        # then always the stick toward the camera for 20 frames (build 20 left the player in bed: the signs read up after the clock moved)
+        self.assertIn('if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 20)', s)
+        self.assertNotIn('!atomic_load(&g_inbed)) g_up_step = 4;', s)
+        self.assertIn('SETTLE_MAX_MS = 2500,', (JAVA / 'SleepMod.java').read_text())   # black at most 2.5 s past the count (build 20 sat 20 s)
 
 
 class Interface(unittest.TestCase):
