@@ -66,6 +66,10 @@ void dm_input_hold(int on, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx,
     if (atomic_exchange(&g_hold, on) != on) LOG("input: player 1 %s (a game mod's menu)", on ? "held: the game sees the mod's input only" : "back to the player");
 }
 int dm_input_held(void) { return atomic_load_explicit(&g_hold, memory_order_relaxed); }
+// nx2android: when the player last pressed A on player 1's own sources (a game's read saw it go down; now_ns), 0 never: Pokopia's sleep mod asks only after the player
+// interacted with the bed, not when a load puts them in it (android/pkp_sleep.c)
+static _Atomic uint64_t g_a_ns;
+uint64_t dm_input_a_ns(void) { return atomic_load(&g_a_ns); }
 uint64_t dm_input_held_seen(void) { return atomic_load(&g_hold_seen); }
 static void script_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     uint64_t old = atomic_exchange(&g_sc_btn, buttons); atomic_fetch_or(&g_sc_latch, buttons & ~old); atomic_store(&g_sc_axes, pack(lx, ly, rx, ry));
@@ -459,6 +463,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
         b |= atomic_load(&g_sc_btn) | atomic_exchange(&g_sc_latch, 0);
         uint64_t c = atomic_load(&g_sc_axes); for (int i = 0; i < 4; i++) a[i] = pick(a[i], ax(c, i));
     }
+    if (!pl) { static uint64_t prev; if ((b & 1) && !(prev & 1)) atomic_store(&g_a_ns, now_ns()); prev = b; }   // A went down (dm_input_a_ns)
     if (!pl && atomic_load_explicit(&g_hold, memory_order_relaxed)) {   // a mod holds player 1: what was pressed goes to the mod, the game gets the mod's input (dm_input_hold)
         uint64_t seen = b & 0xffffull;
         if (a[0] < -STICK_THRESH) seen |= 1u << 16;

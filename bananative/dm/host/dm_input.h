@@ -18,6 +18,7 @@ uint64_t dm_input_samples(void);   // Cumulative number of times the game has sa
 void dm_input_hold(int on, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 int dm_input_held(void);
 uint64_t dm_input_held_seen(void);
+uint64_t dm_input_a_ns(void);   // nx2android: when player 1's own A last went down as the game read it (now_ns), 0 never (hle_hid.c)
 // The cheat VM's key mask (hle_cheats.c): every input source's button bits (0..15 in the enum above) ORed and the
 // merged axes' eight stick-direction bits (16..23), one flat bitset; no latches are consumed (the game's own reads
 // keep them). The NpadButton SL / SR bits (24 / 25) never fire: no input source of this host reports them

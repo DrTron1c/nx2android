@@ -233,8 +233,12 @@ static void frame_work(void) {
     int awake = 0, into = bed_step(ch, ac, &awake);
     up_frames = awake && !atomic_load(&g_inbed) ? up_frames + 1 : 0;
     if (!armed && ch && up_frames >= 30 && now - ch_since >= 8000000000ll) armed = 1;
+    // and only after the player interacted with the bed: A went down in the 6 s before (a load, or anything else that puts the player in bed, asks nothing)
+    uint64_t a_ns = dm_input_a_ns(), host_ns = now_ns();
+    int pressed = a_ns && host_ns - a_ns <= 6000000000ull;
     if (into) {
         if (!armed) LOG("pkp sleep: in bed since the game loaded: no sleep menu");
+        else if (!pressed) LOG("pkp sleep: in bed without pressing A just before (a load or a scene): no sleep menu");
         else if (!atomic_load(&g_online) && !atomic_load(&g_getup) && !atomic_load(&g_learn)) { atomic_fetch_add(&g_beds_in, 1); LOG("pkp sleep: the player got into a bed"); }
     }
     save_step(base);
