@@ -29,6 +29,8 @@ Each change is its own commit after the copy (`git log -- bananative`), so a new
   `nxThemeAssets` and drawn by `ThemePad.java` and `TouchControls.java`; the builder's palette for the in-game panel and the pages (`src/variant-nx2a/res`,
   `SidePanel.java`, BuildConfig.NX_FORK).
 - Frame generation through a game's hitches (`dm/gfx/vk_android/lsfg/lsfg_pacer.c`).
+- Frame generation keeps the game's HUD (`dm/gfx/vk_android/lsfg/lsfg_chain.c` hud_new, `lsfg_hud.comp`, compiled by the NDK's glslc in `android/host/CMakeLists.txt`):
+  after LSFG generates a frame, every pixel the game left unchanged between the two real frames is the newer real frame's, so a still HUD is never warped (`DM_LSFG_HUD`).
 - The engine's own Check for updates (Settings › Updates, and at each start) finds nx2android's engine builds, not Banana Native's releases (`Updater.java`
   forkCheck: the release "launcher", its launcher.txt and nx2android-launcher.apk), shown and installed the same way.
 - No mouse in the game on Xiaomi's devices (`GameActivity.java` NO_MOUSE): HyperOS makes a pointer of a controller's touchpad, a trackpad or a mouse; its arrow is

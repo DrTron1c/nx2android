@@ -76,6 +76,19 @@ option(NX_LSFG "Lossless Scaling frame generation (GPL-3.0-or-later)" ON)
 if(NX_LSFG)
   file(GLOB LSFG_C CONFIGURE_DEPENDS ${GFX}/vk_android/lsfg/*.c)
   list(APPEND GFX_C ${LSFG_C})
+  # nx2android: the HUD keeper's compute shader (lsfg/lsfg_hud.comp, lsfg_chain.c hud_new) as SPIR-V words, by the NDK's glslc
+  find_program(NX_GLSLC glslc HINTS ${ANDROID_NDK}/shader-tools/linux-x86_64 ${ANDROID_NDK}/shader-tools/darwin-x86_64 ${ANDROID_NDK}/shader-tools/windows-x86_64
+               ${CMAKE_ANDROID_NDK}/shader-tools/linux-x86_64 ${CMAKE_ANDROID_NDK}/shader-tools/darwin-x86_64 ${CMAKE_ANDROID_NDK}/shader-tools/windows-x86_64)
+  if(NOT NX_GLSLC)
+    message(FATAL_ERROR "glslc not found (the NDK's shader-tools): the frame generation's HUD keeper needs it (lsfg_hud.comp)")
+  endif()
+  set(LSFG_HUD_INC ${GEN}/lsfg/lsfg_hud.comp.inc)
+  add_custom_command(OUTPUT ${LSFG_HUD_INC}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${GEN}/lsfg
+    COMMAND ${NX_GLSLC} -O --target-env=vulkan1.1 -mfmt=num -o ${LSFG_HUD_INC} ${GFX}/vk_android/lsfg/lsfg_hud.comp
+    DEPENDS ${GFX}/vk_android/lsfg/lsfg_hud.comp
+    COMMENT "the HUD keeper's shader")
+  add_custom_target(lsfg_hud_spv DEPENDS ${LSFG_HUD_INC})
 endif()
 
 # libvpx (VP8 / VP9 movies), as the Makefile builds it: its arm64 configuration is plain NEON C
@@ -114,7 +127,10 @@ function(nxhost_add tgt game)
   add_custom_target(${tgt}_seed COMMAND ${Python3_EXECUTABLE} ${ROOT}/dm/games/game.py seed ${game} ${SEED_H} BYPRODUCTS ${SEED_H} COMMENT "prewarm seed ${game}")
   add_library(${tgt} SHARED ${HOST_C} ${GFX_C} ${ASM_OUT} ${GAME_H} ${SEED_H})
   add_dependencies(${tgt} ${tgt}_seed)
-  target_include_directories(${tgt} PRIVATE ${GEN}/${game} ${GFX}/nvn/include ${TP}/vulkan-headers/include ${TP}/libvpx ${TP}/libvpx/config ${TP}/dav1d/include ${TP}/stb_vorbis ${HOST} ${NX_COOP_VENDOR_DIR})
+  if(NX_LSFG)
+    add_dependencies(${tgt} lsfg_hud_spv)   # lsfg_hud.comp.inc in gen/lsfg (lsfg_chain.c)
+  endif()
+  target_include_directories(${tgt} PRIVATE ${GEN}/lsfg ${GEN}/${game} ${GFX}/nvn/include ${TP}/vulkan-headers/include ${TP}/libvpx ${TP}/libvpx/config ${TP}/dav1d/include ${TP}/stb_vorbis ${HOST} ${NX_COOP_VENDOR_DIR})
   # DM_NUP_ZSTD: compressed files of a NUP container are decompressed with zstddec (dm/host/nup_image.h)
   target_compile_definitions(${tgt} PRIVATE _GNU_SOURCE DM_NUP_ZSTD NX_COOP_VENDOR=${NX_COOP_VENDOR} $<$<BOOL:${NX_LSFG}>:NX_LSFG>)
   # As the Mac host (-O1 -g -Wall -Wno-unused-function). Hidden visibility: the assembly reaches C symbols with adrp, which a shared library allows only for symbols it binds itself

@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// nx2android: the game's HUD kept out of LSFG's generated frames (lsfg_chain.c hud). A pixel the game left as it was between the two real frames (within eps on
+// every channel: a still HUD, and any still part of the picture) is the newer real frame's in the generated frame; what moved keeps LSFG's. Compiled by the build
+// (android/host/CMakeLists.txt: glslc from the NDK) into lsfg_hud.comp.inc
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba8) uniform readonly image2D prev;   // the older real frame
+layout(binding = 1, rgba8) uniform readonly image2D cur;    // the newer real frame
+layout(binding = 2, rgba8) uniform image2D outp;            // the generated frame, LSFG's
+layout(push_constant) uniform Params { float eps; } p;
+void main() {
+    ivec2 xy = ivec2(gl_GlobalInvocationID.xy), size = imageSize(outp);
+    if (xy.x >= size.x || xy.y >= size.y) return;
+    vec4 a = imageLoad(prev, xy), b = imageLoad(cur, xy);
+    vec3 d = abs(a.rgb - b.rgb);
+    if (max(d.r, max(d.g, d.b)) <= p.eps) imageStore(outp, xy, b);
+}
