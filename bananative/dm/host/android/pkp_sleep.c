@@ -58,7 +58,7 @@ static _Atomic int64_t g_frames;
 static _Atomic int g_loads, g_game_flags;   // the player of a new load seen (a new manager, character or action component); the game's busy flags (pkp_state out[9])
 static _Atomic int g_in_game, g_quits, g_pt_reset = 1;   // a game has run since the title (its play time moved on 5 s); Save and Quits seen; the mark is taken again
 static _Atomic uint64_t g_recent;   // the last four actions the player started, newest in the low 16 bits (the in-game panel shows them)
-static int g_save_tries, g_save_wait, g_up_frame, g_up_step, g_changes;
+static int g_save_tries, g_save_wait, g_up_frame, g_up_step, g_up_round, g_changes;
 
 // ---- The bed, learned (the in-game panel's three taps: standing, in the bed, standing again) ----
 // The halfwords of the player's character (its first 0xb000 bytes) and of its action component (0x1000 bytes) that hold one value while the player stands, another
@@ -189,20 +189,25 @@ static void save_step(uint64_t base) {
     }
 }
 
-// Out of bed ("Not now", and after a sleep): B, then while the player still lies in the bed (its signs), the left stick toward the camera for a moment, then the
-// player's input back. A player the signs already see out of bed is left alone (B could do something else there)
-// After a sleep on the user's tablet (build 20) the player stayed in bed: the bed's signs read "up" after the clock moved, so nothing was pressed, and the stick's
-// 8 frames were too short. Now always B, then the left stick toward the camera for 20 frames, and once more while the signs still say in bed
+// Out of bed ("Not now", and after a sleep): B, then the left stick toward the camera for 20 frames; again (B and the stick) while the bed's signs still say in bed,
+// UP_ROUNDS rounds at most; then the player's input back (after a sleep: still held, until the picture is back).
+// History: after a sleep on the user's tablet (build 20) the bed's signs read "up" once the clock had moved, so nothing was pressed; builds 24-25 got up 1.5 s after
+// the clock moved and the focus came back, and the game took none of it (the user's recording, 2026-11-16: the picture came back with the player in bed, who got up
+// only then, and the game's new day ran after that). So the launcher now gets the player up before it moves the clock (SleepMod.startTick), while the signs still read
+// true, and moves it once this is over (state out[7] bit 24 clear)
+#define UP_ROUNDS 4
 static void getup_step(int cur) {
     if (!atomic_load(&g_getup)) return;
-    static int again;
-    if (g_up_step == 0 && g_up_frame == 0) again = 0;
     int f = g_up_frame++;
     if (g_up_step == 0) { dm_input_hold(1, DM_BTN_B, 0, 0, 0, 0); if (f >= 8) { g_up_step = 1; g_up_frame = 0; } return; }
     if (g_up_step == 1) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = 2; g_up_frame = 0; } return; }
     if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 20) { g_up_step = 3; g_up_frame = 0; } return; }
-    if (g_up_step == 3) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = !again++ && atomic_load(&g_nsign) && atomic_load(&g_inbed) ? 2 : 4; g_up_frame = 0; } return; }
-    LOG("pkp sleep: out of bed%s (action %d)", atomic_load(&g_inbed) ? " not confirmed: the signs still say in bed" : "", cur);
+    if (g_up_step == 3) {
+        dm_input_hold(1, 0, 0, 0, 0, 0);
+        if (f >= 20) { g_up_step = ++g_up_round < UP_ROUNDS && atomic_load(&g_nsign) && atomic_load(&g_inbed) ? 0 : 4; g_up_frame = 0; }
+        return;
+    }
+    LOG("pkp sleep: out of bed%s after %d round%s (action %d)", atomic_load(&g_inbed) ? " not confirmed: the signs still say in bed" : "", g_up_round, g_up_round == 1 ? "" : "s", cur);
     dm_input_hold(atomic_load(&g_getup) == 2, 0, 0, 0, 0, 0); atomic_store(&g_getup, 0);   // 2 (after a sleep): the input stays held until the picture is back
 }
 
@@ -320,7 +325,7 @@ void nxhost_pkp_signs_set(const char *s) {
     LOG("pkp sleep: %d bed signs", n);
 }
 void nxhost_pkp_hold(int mode) {
-    if (mode == 2 || mode == 3) { g_up_frame = 0; g_up_step = 0; dm_input_hold(1, 0, 0, 0, 0, 0); atomic_store(&g_getup, mode == 3 ? 2 : 1); return; }
+    if (mode == 2 || mode == 3) { g_up_frame = 0; g_up_step = 0; g_up_round = 0; dm_input_hold(1, 0, 0, 0, 0, 0); atomic_store(&g_getup, mode == 3 ? 2 : 1); return; }
     atomic_store(&g_getup, 0);
     dm_input_hold(mode == 1, 0, 0, 0, 0, 0);
 }

@@ -29,13 +29,14 @@ import java.util.Locale;
  * nx2android: Pokémon Pokopia's sleep mod, the launcher's side; the game's side is dm/host/android/pkp_sleep.c, which counts the player getting into a bed, makes the
  * game's own save and gets the player out of bed. Here: when the player gets into a bed the menu asks how long to sleep (6, 12, 18 or 24 hours, until morning: the
  * next 5 AM, when the game's day starts, or Not now), drawn
- * over the game in its own menus' look (the Pokédex's: light grey panels, its yellow selection and orange-edged pointer, its button pills) and in its own font, read
+ * over the game as its own talk does (its talk box along the bottom, the question typing out, then its choice window above the box's right end with the yellow
+ * selection and the pointer: measured on the user's recording of a talk, 2026-11-16) and in its own font, read
  * from the player's game files (GameFont; M PLUS Rounded stands in until it is read, or when it is not there), read from the touch gamepad, a controller (the game sees nothing of them while the menu is up: Native.pkpHold) or a tap.
  * A choice of hours: the picture fades to black, the game saves, the game's clock moves on by that much (Native.clockSkip: only the game's clock, the tablet's is
  * never set) and the game is told it is back from the HOME menu (Native.pkpFocus), which is when Pokopia takes a new clock; the time counts up in the middle of the
- * screen one hour a second, the day and date under it, with a loading icon turning in the bottom right corner. Early in the count the player gets out of bed
- * (Native.pkpHold(3)), which lets the game run its own new day (its fade and load at 5 AM) under the black; after the count the picture fades back in once the game
- * has been quiet for a moment. The on-screen gamepad is hidden and no input reaches the game from the fade out to the end of the fade in.
+ * screen one hour a second, the day and date under it, with a loading icon turning in the bottom right corner. As the count starts the player gets out of bed
+ * (Native.pkpHold(3)), and only then does the clock move, so the game runs its own new day (its fade and load at 5 AM, which waits for the player to be up)
+ * under the black; after the count the picture fades back in once the game has been quiet for a moment. The on-screen gamepad is hidden and no input reaches the game from the fade out to the end of the fade in.
  * The total skip is kept (pkp_clock_skip) and given to every start (DM_TIME_SKIP), so the game stays ahead of real time until Back to real time (the in-game panel).
  * Save and Quit (the game back at its title after a game: pkp_sleep.c guide_gate) moves the game's clock on 6 hours, so the next time in is later in the day.
  * The bed is learned once, in three taps in the in-game panel (standing next to it, lying in it, standing again): the host keeps the values of the player's state that
@@ -46,14 +47,19 @@ final class SleepMod {
     static final String TITLE = "0400A3A01EE4C000";
     static final int[] HOURS = {6, 12, 18, 24};
     static final String[] CHOICES = {"6 hours", "12 hours", "18 hours", "24 hours", "Until morning", "Not now"};
+    static final String QUESTION = "How long would you like to sleep?";
+    // The question types out as the game's talk does (CHAR_MS a letter; A or B shows it whole), then the choices pop up (POP_MS) and take input
+    private static final long CHAR_MS = 25, POP_MS = 140;
     static final int MORNING = HOURS.length, NOT_NOW = HOURS.length + 1;   // the choices after the hours
     static final int MORNING_HOUR = 5;   // Pokopia's day starts at 5 AM: Until morning wakes the player just after it
     private static final int IDLE = 0, ASK = 1, FADE_OUT = 2, SAVE = 3, TICK = 4, SETTLE = 5, FADE_IN = 6;
     private static final long FADE_MS = 650, HOLD_MS = 400, SAVE_MAX_MS = 20000, FOCUS_MS = 400;
-    // The loading screen after the count: the player is got out of bed early in the count (GETUP_MS after the clock moved, under the black), the game's own new day
-    // (its fade and load at 5 AM, which waits for the player to be up: the user's recording, build 21) then runs under the black too; the picture comes back once the
-    // game has been quiet (no event, no autosave, no new load, a player) for QUIET_MS, SETTLE_MAX_MS at most
-    private static final long GETUP_MS = 1500, QUIET_MS = 1200, SETTLE_MAX_MS = 10000;
+    // The loading screen: the player is got out of bed as the count starts, before the clock moves (builds 24-25 got up 1.5 s after the clock moved and the focus came
+    // back, and the game took none of it: the user's recording, 2026-11-16); the clock moves when that is over (GETUP_MAX_MS at most), and the game's own new day
+    // (its fade and load at 5 AM, which waits for the player to be up: the user's recording, build 21) then runs under the black. The picture comes back once the
+    // game has been quiet (no event, no autosave, no new load, a player) for QUIET_MS, starting AFTER_MOVE_MS after the clock moved (the game takes the new time and
+    // starts its new day), SETTLE_MAX_MS after the move at most
+    private static final long GETUP_MAX_MS = 9000, AFTER_MOVE_MS = 2500, QUIET_MS = 1200, SETTLE_MAX_MS = 15000;
     private static final long TOD_NEAR = 15 * 60;   // the game's time of day this close to the new clock (seconds) is the new time
     // NpadButton bits as the host reports what was pressed (Native.pkpSeen): A, B, Up, Down, the left stick up and down
     private static final long A = 1, B = 1 << 1, UP = 1 << 13, DOWN = 1 << 15, L_UP = 1 << 17, L_DOWN = 1 << 19;
@@ -91,10 +97,10 @@ final class SleepMod {
     private final Panel view;
     private final java.util.function.Supplier<float[]> picture;   // the game's picture in the view, normalized (x, y, w, h: TouchControls.picture)
     private Typeface face, faceBold;   // the stand-in font
-    private volatile GameFont font;   // the game's own (GameFont), once read
+    private volatile GameFont font, talkFont;   // the game's own (GameFont), once read: its HUD face (the clocks), its talk face (the menu)
     private boolean fontAsked;
     private boolean present, stopped, dex;
-    private long bedsSeen = -1, quitsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt, quietAt, loadsSeen = -1;
+    private long bedsSeen = -1, quitsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt, movedAt, quietAt, loadsSeen = -1;
     private final java.util.function.Consumer<Boolean> controls;   // hides and turns off the on-screen gamepad while the loading screen shows (TouchControls.suppress)
     private long sleepSec;   // how far this sleep moves the game's clock
     private boolean untilMorning;
@@ -174,9 +180,9 @@ final class SleepMod {
         if (rp.contains(".nup:")) { Native.note("sleep mod: the game is a .nup package: the stand-in font"); return; }
         File g = ga.gameDir();
         Thread t = new Thread(() -> {
-            GameFont f = GameFont.load(new File(rp), g != null ? new File(g, "base/romfs") : null);
+            GameFont[] f = GameFont.load(new File(rp), g != null ? new File(g, "base/romfs") : null);
             if (f == null) return;
-            font = f;
+            talkFont = f[1] != null ? f[1] : f[0]; font = f[0];
             Native.note("sleep mod: the game's own font is read");
             view.postInvalidate();
         }, "pkp-font");
@@ -237,28 +243,31 @@ final class SleepMod {
         Native.note("sleep mod: sleep " + (untilMorning ? "until morning" : HOURS[i] + " hours"));
     }
 
+    /** After the save: the count starts and the player gets out of bed (the input still held: Native.pkpHold(3)); the clock moves once they are up (moveClock) */
     private void startTick() {
         long now = Native.clockNow();
         if (now <= 0) now = System.currentTimeMillis() / 1000 + skip(act);
-        long[] tod = new long[2];
-        date0 = Native.pkpTod(tod) ? tod[1] : 0;
         if (untilMorning) sleepSec = untilMorning(now);
-        long total = skip(act) + sleepSec;
-        skip(act, total); Native.clockSkip(total);
-        todTarget = tod[0] >= 0 ? Instant.ofEpochSecond(now + sleepSec).atZone(ZoneId.systemDefault()).toLocalTime().toSecondOfDay() : -1;
-        // as the console does when the player comes back from the HOME menu after setting its clock: the game takes the new time then
-        Native.pkpFocus(2);
-        ui.postDelayed(() -> Native.pkpFocus(1), FOCUS_MS);
-        getupAt = 0; loadsSeen = -1;
-        ui.postDelayed(this::getUp, GETUP_MS);   // out of bed under the black, so the game's own new day runs before the picture comes back
+        Native.pkpHold(3); getupAt = SystemClock.uptimeMillis(); movedAt = 0; loadsSeen = -1; quietAt = 0;
         tickFrom = now; phase = TICK; phaseAt = SystemClock.uptimeMillis();
-        Native.note("sleep mod: " + (saveState == 3 ? "saved" : "not saved (" + saveState + ")") + ", the game's clock +" + sleepSec + " s (" + ahead(total) + " ahead of real time)");
+        Native.note("sleep mod: " + (saveState == 3 ? "saved" : "not saved (" + saveState + ")") + "; getting up before the clock moves");
     }
 
-    /** Out of bed after a sleep, the input held after it (Native.pkpHold(3)): once */
-    private void getUp() {
-        if (getupAt != 0 || (phase != TICK && phase != SETTLE)) return;
-        Native.pkpHold(3); getupAt = SystemClock.uptimeMillis();
+    /** The game's clock on by sleepSec, and the game told it is back in focus, which is when Pokopia takes a new clock (as when the player comes back from the HOME menu
+     *  after setting the console's clock) */
+    private void moveClock(long[] s) {
+        long[] tod = new long[2];
+        date0 = Native.pkpTod(tod) ? tod[1] : 0;
+        long total = skip(act) + sleepSec;
+        skip(act, total); Native.clockSkip(total);
+        long now = Native.clockNow() > 0 ? Native.clockNow() : tickFrom + sleepSec;
+        todTarget = tod[0] >= 0 ? Instant.ofEpochSecond(now).atZone(ZoneId.systemDefault()).toLocalTime().toSecondOfDay() : -1;
+        Native.pkpFocus(2);
+        ui.postDelayed(() -> Native.pkpFocus(1), FOCUS_MS);
+        movedAt = SystemClock.uptimeMillis();
+        boolean inBed = s != null && (s[7] & 0xff) != 0 && (s[7] >> 8 & 0xff) != 0;
+        Native.note("sleep mod: " + (movedAt - getupAt > GETUP_MAX_MS ? "getting up took too long; " : "") + (inBed ? "the bed's signs still say in bed; " : "up; ")
+            + "the game's clock +" + sleepSec + " s (" + ahead(total) + " ahead of real time)");
     }
 
     /** Seconds from the game's time now to just after the next MORNING_HOUR (10 s past it, so the game's new day has begun) */
@@ -267,6 +276,9 @@ final class SleepMod {
         if (!m.isAfter(z)) m = z.toLocalDate().plusDays(1).atTime(MORNING_HOUR, 0, 10).atZone(ZoneId.systemDefault());
         return m.toEpochSecond() - now;
     }
+
+    /** How long the question takes to type out */
+    static long revealMs() { return QUESTION.length() * CHAR_MS; }
 
     /** The counting clock's run: an hour a second */
     private long tickMs() { return sleepSec * 1000 / 3600; }
@@ -281,6 +293,7 @@ final class SleepMod {
                     if (seenFrames++ < 3 || seenPrev < 0) seenPrev = s;   // what was held when the menu came up (the A that got into bed) is no press
                     else {
                         long down = s & ~seenPrev; seenPrev = s;
+                        if (el < revealMs()) { if ((down & (A | B)) != 0) phaseAt -= revealMs() - el; break; }   // still typing: A or B shows the question whole
                         if ((down & (UP | L_UP)) != 0) sel = (sel + CHOICES.length - 1) % CHOICES.length;
                         if ((down & (DOWN | L_DOWN)) != 0) sel = (sel + 1) % CHOICES.length;
                         if ((down & A) != 0) choose(sel);
@@ -294,17 +307,18 @@ final class SleepMod {
                     if (saveState == 3 || saveState == 4 || el > SAVE_MAX_MS) startTick();
                     break;
                 }
-                case TICK: if (el >= tickMs() + HOLD_MS) { phase = SETTLE; phaseAt = SystemClock.uptimeMillis(); } break;
-                case SETTLE: {   // the loading screen: out of bed, then the game quiet for QUIET_MS (its new day done), then the fade in
-                    getUp();
+                case TICK: case SETTLE: {   // the count (an hour a second), then the loading screen until the game is quiet after its new day
                     long now = SystemClock.uptimeMillis();
                     long[] s = state();
                     boolean gettingUp = s != null && (s[7] >> 24 & 1) != 0;
+                    if (movedAt == 0 && (!gettingUp || now - getupAt > GETUP_MAX_MS)) moveClock(s);   // up: now the clock moves
+                    if (phase == TICK) { if (el >= tickMs() + HOLD_MS) { phase = SETTLE; phaseAt = now; } break; }
                     boolean busy = s != null && ((s[9] & 3) != 0 || (s[9] & 4) == 0 || (s[9] >> 8) != loadsSeen);   // an event, the autosave, no player, a new load
                     if (s != null) loadsSeen = s[9] >> 8;
-                    if (busy || gettingUp || quietAt == 0) quietAt = now;
-                    if (now - quietAt >= QUIET_MS || el > SETTLE_MAX_MS) {
-                        if (el > SETTLE_MAX_MS) Native.note("sleep mod: the game was still busy after " + SETTLE_MAX_MS / 1000 + " s (" + (s == null ? "no state" : "flags " + (s[9] & 0xff) + (gettingUp ? ", getting up" : "")) + ")");
+                    if (busy || gettingUp || movedAt == 0 || now - movedAt < AFTER_MOVE_MS || quietAt == 0) quietAt = now;
+                    boolean late = movedAt != 0 && now - movedAt > SETTLE_MAX_MS;
+                    if (now - quietAt >= QUIET_MS || late) {
+                        if (late) Native.note("sleep mod: the game was still busy " + SETTLE_MAX_MS / 1000 + " s after the clock moved (" + (s == null ? "no state" : "flags " + (s[9] & 0xff) + (gettingUp ? ", getting up" : "")) + ")");
                         if (!newTime()) { long[] g = new long[2]; Native.pkpTod(g); Native.note("sleep mod: the save data's time of day reads " + g[0] + " s (date " + g[1] + "), the new clock's " + todTarget + " s"); }
                         phase = FADE_IN; phaseAt = now;
                     }
@@ -333,10 +347,10 @@ final class SleepMod {
     private final class Panel extends View {
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), text = new Paint(Paint.ANTI_ALIAS_FLAG), dot = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint glyph = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF box = new RectF(), msg = new RectF(), r = new RectF(), okPill = new RectF(), noPill = new RectF();
-        private final Path tri = new Path();
+        private final RectF box = new RectF(), msg = new RectF(), r = new RectF();
+        private final Path tri = new Path(), talk = new Path(), talkIn = new Path();
         private final float dp;
-        private float rowH, rowTop;
+        private float u, rowH, rowTop, talkX, talkY;   // u: the game's picture height / 677 (the user's recording, a 1016×677 frame of it, is where the sizes were measured)
 
         Panel(Context c) {
             super(c);
@@ -344,9 +358,9 @@ final class SleepMod {
             edge.setStyle(Paint.Style.STROKE); edge.setStrokeJoin(Paint.Join.ROUND);
         }
 
-        /** s in the game's font when it has every character of it, else in the stand-in tf; x as align says; its width. Digits keep their places when tabular. */
-        private float say(Canvas c, String s, float x, float y, float size, int color, Typeface tf, Paint.Align align, boolean tabular) {
-            GameFont f = font;
+        /** s in the game's font f when it is read and has every character of it, else in the stand-in tf; x as align says; its width. Digits keep their places when
+         *  tabular. */
+        private float say(Canvas c, GameFont f, String s, float x, float y, float size, int color, Typeface tf, Paint.Align align, boolean tabular) {
             if (f != null && f.has(s)) {
                 float w = f.measure(s, size, tabular);
                 glyph.setColor(color);
@@ -357,35 +371,38 @@ final class SleepMod {
             return text.measureText(s);
         }
 
-        private float width(String s, float size, Typeface tf, boolean tabular) {
-            GameFont f = font;
+        private float width(GameFont f, String s, float size, Typeface tf, boolean tabular) {
             if (f != null && f.has(s)) return f.measure(s, size, tabular);
             text.setTypeface(tf); text.setTextSize(size);
             return text.measureText(s);
         }
 
-        /** A button pill's width at height ph: the button in its ring, then the label */
-        private float pillWidth(String label, float ph) { return ph * 1.3f + width(label, ph * 0.5f, face, false) + ph * 0.42f; }
-
-        /** A button pill as the game draws them under its menus (a light pill with a grey edge, the button's letter in a ring, the label), its left edge at x */
-        private void pill(Canvas c, String btn, String label, float x, float top, float ph, int a) {
-            float ts = ph * 0.5f;
-            r.set(x, top, x + pillWidth(label, ph), top + ph);
-            fill.setColor(Color.argb(a, 232, 231, 234)); c.drawRoundRect(r, ph / 2, ph / 2, fill);
-            edge.setColor(Color.argb(a, 196, 195, 199)); edge.setStrokeWidth(ph * 0.07f); c.drawRoundRect(r, ph / 2, ph / 2, edge);
-            float rad = ph * 0.32f, cx = x + ph * 0.18f + rad, cy = r.centerY();
-            edge.setColor(Color.argb(a, 92, 91, 96)); edge.setStrokeWidth(ph * 0.055f); c.drawCircle(cx, cy, rad, edge);
-            say(c, btn, cx, cy + ts * 0.34f, ts * 0.9f, Color.argb(a, 92, 91, 96), face, Paint.Align.CENTER, false);
-            say(c, label, cx + rad + ph * 0.24f, cy + ts * 0.36f, ts, Color.argb(a, 72, 71, 76), face, Paint.Align.LEFT, false);
-        }
-
-        /** The game's pointer at a selection (an orange-edged yellow triangle with round corners), pointing right at (cx, cy) */
-        private void pointer(Canvas c, float cx, float cy, float s, int a) {
-            tri.reset(); tri.moveTo(cx - s * 0.65f, cy - s * 0.95f); tri.lineTo(cx + s * 0.75f, cy); tri.lineTo(cx - s * 0.65f, cy + s * 0.95f); tri.close();
-            edge.setColor(Color.argb(a, 253, 148, 77)); edge.setStrokeWidth(s * 0.55f); c.drawPath(tri, edge);
-            fill.setShader(new LinearGradient(cx - s * 0.65f, cy, cx + s * 0.75f, cy, Color.argb(a, 253, 243, 190), Color.argb(a, 252, 220, 40), Shader.TileMode.CLAMP));
+        /** The game's pointer at a selection (a round-cornered triangle, salmon edge, yellow inside), pointing right, its middle at (cx, cy); h its half height */
+        private void pointer(Canvas c, float cx, float cy, float h, int a) {
+            tri.reset(); tri.moveTo(cx - h * 0.7f, cy - h); tri.lineTo(cx + h * 0.85f, cy); tri.lineTo(cx - h * 0.7f, cy + h); tri.close();
+            edge.setColor(Color.argb(a, 255, 131, 115)); edge.setStrokeWidth(h * 0.42f); c.drawPath(tri, edge);
+            fill.setShader(new LinearGradient(cx - h * 0.7f, cy, cx + h * 0.85f, cy, Color.argb(a, 253, 238, 130), Color.argb(a, 252, 215, 34), Shader.TileMode.CLAMP));
             c.drawPath(tri, fill);
             fill.setShader(null);
+        }
+
+        // The game's talk box: its outline through these points, in u from the middle of the picture's bottom edge (the last two below it), a smooth closed curve
+        private final float[] TALK = {-301, 20, -328, -67, -301, -127, -258, -137, -58, -152, 42, -140, 175, -132, 275, -130, 315, -120, 335, -74, 309, 20};
+
+        /** The talk box's outline into p; sx scales it across and top moves its top edge down (its inside: the edge's width) */
+        private void blob(Path p, float sx, float top) {
+            int n = TALK.length / 2;
+            float[] x = new float[n], y = new float[n];
+            for (int i = 0; i < n; i++) {
+                float yy = TALK[2 * i + 1];
+                x[i] = talkX + TALK[2 * i] * u * sx; y[i] = talkY + (yy + (yy < 0 ? top * Math.min(1f, -yy / 120f) : 0)) * u;
+            }
+            p.reset(); p.moveTo(x[0], y[0]);
+            for (int i = 0; i < n; i++) {   // Catmull-Rom through the points, as cubic Béziers
+                int i0 = (i + n - 1) % n, i2 = (i + 1) % n, i3 = (i + 2) % n;
+                p.cubicTo(x[i] + (x[i2] - x[i0]) / 6, y[i] + (y[i2] - y[i0]) / 6, x[i2] - (x[i3] - x[i]) / 6, y[i2] - (y[i3] - y[i]) / 6, x[i2], y[i2]);
+            }
+            p.close();
         }
 
         /** The game's picture in the view, in pixels */
@@ -398,16 +415,21 @@ final class SleepMod {
 
         private void layoutMenu(int w, int h) {
             RectF g = pic(w, h);
-            rowH = 50 * dp;
-            float bw = Math.max(210 * dp, Math.min(260 * dp, g.width() * 0.22f)), bh = rowH * CHOICES.length + 24 * dp;
-            float mw = Math.min(g.width() * 0.62f, 760 * dp), mh = 92 * dp, bottom = g.bottom - 26 * dp;
-            msg.set(g.centerX() - mw / 2, bottom - mh, g.centerX() + mw / 2, bottom);
-            box.set(msg.right - bw, msg.top - 18 * dp - bh, msg.right, msg.top - 18 * dp);
-            rowTop = box.top + 12 * dp;
+            u = Math.min(g.height() / 677f, g.width() / 700f);
+            talkX = g.centerX(); talkY = g.bottom;
+            msg.set(talkX - 330 * u, talkY - 152 * u, talkX + 336 * u, g.bottom);
+            // the choice window: as wide as its longest choice, its right edge 12 u in from the picture's, its bottom 157 u above the picture's (just above the talk box)
+            float tw = 0;
+            GameFont tf = talkFont;
+            for (String ch : CHOICES) tw = Math.max(tw, width(tf, ch, 26 * u, face, false));
+            rowH = 57 * u;
+            float bw = Math.max(220 * u, 36 * u + tw + 46 * u), bh = 30 * u + rowH * CHOICES.length - 12 * u, right = g.right - 12 * u, bottom = talkY - 157 * u;
+            box.set(right - bw, bottom - bh, right, bottom);
+            rowTop = box.top + 15 * u;
         }
 
         private int rowAt(float x, float y) {
-            if (!box.contains(x, y)) return -1;
+            if (!box.contains(x, y) || SystemClock.uptimeMillis() - phaseAt < revealMs()) return -1;
             int i = (int) ((y - rowTop) / rowH);
             return i >= 0 && i < CHOICES.length ? i : -1;
         }
@@ -419,13 +441,14 @@ final class SleepMod {
             float x = e.getX(e.getActionIndex()), y = e.getY(e.getActionIndex());
             int row = rowAt(x, y);
             switch (e.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN: case MotionEvent.ACTION_POINTER_DOWN:
+                case MotionEvent.ACTION_DOWN: case MotionEvent.ACTION_POINTER_DOWN: {
+                    long el = SystemClock.uptimeMillis() - phaseAt;
                     if (!box.contains(x, y) && !msg.contains(x, y)) return false;   // the gamepad's own touches go on to it
+                    if (el < revealMs()) { phaseAt -= revealMs() - el; pressedRow = -1; invalidate(); return true; }   // a tap shows the question whole
                     pressedRow = row; if (row >= 0) sel = row; invalidate(); return true;
+                }
                 case MotionEvent.ACTION_UP: case MotionEvent.ACTION_POINTER_UP:
                     if (row >= 0 && row == pressedRow) choose(row);
-                    else if (pressedRow < 0 && okPill.contains(x, y)) choose(sel);   // the button pills, tapped
-                    else if (pressedRow < 0 && noPill.contains(x, y)) choose(NOT_NOW);
                     pressedRow = -1; return true;
                 case MotionEvent.ACTION_CANCEL: pressedRow = -1; return true;
                 default: return true;
@@ -436,7 +459,7 @@ final class SleepMod {
             int w = getWidth(), h = getHeight();
             long el = SystemClock.uptimeMillis() - phaseAt;
             if (phase == IDLE) { if (dex) drawDexClock(c, w, h); return; }
-            if (phase == ASK) { drawMenu(c, w, h, Math.min(1f, el / 160f)); return; }
+            if (phase == ASK) { drawMenu(c, w, h, el); return; }
             float black = phase == FADE_OUT ? Math.min(1f, el / (float) FADE_MS) : phase == FADE_IN ? 1f - Math.min(1f, el / (float) FADE_MS) : 1f;
             c.drawColor(Color.argb(Math.round(255 * black), 0, 0, 0));
             if (phase == SAVE || phase == TICK || phase == SETTLE || phase == FADE_IN) {
@@ -446,34 +469,42 @@ final class SleepMod {
             }
         }
 
-        private void drawMenu(Canvas c, int w, int h, float in) {
+        /** The menu el ms after it came up: the game's talk box with the question typing out, then its choice window */
+        private void drawMenu(Canvas c, int w, int h, long el) {
             layoutMenu(w, h);
-            int a = Math.round(255 * in), ink = Color.argb(a, 48, 47, 52);
-            // the question along the bottom and the choices above its right end, in the game's menu colours (its Pokédex: light grey panels, dark grey text)
-            fill.setShadowLayer(10 * dp, 0, 3 * dp, Color.argb(Math.round(60 * in), 40, 20, 20));
-            fill.setColor(Color.argb(a, 245, 245, 247)); c.drawRoundRect(msg, 28 * dp, 28 * dp, fill);
-            fill.setColor(Color.argb(a, 237, 236, 239)); c.drawRoundRect(box, 24 * dp, 24 * dp, fill);
-            fill.clearShadowLayer();
-            String q = "How long would you like to sleep?";
-            float qs = 23 * dp, qx = msg.left + 32 * dp, qw = say(c, q, qx, msg.centerY() + 8 * dp, qs, ink, face, Paint.Align.LEFT, false);
-            // the buttons, as the game shows them under its menus, at the box's right end when there is room
-            float ph = 40 * dp, okW = pillWidth("Confirm", ph), noW = pillWidth("Not now", ph), gap = 10 * dp, py = msg.centerY() - ph / 2;
-            float noX = msg.right - 22 * dp - noW, okX = noX - gap - okW;
-            if (okX > qx + qw + 20 * dp) {
-                pill(c, "A", "Confirm", okX, py, ph, a); okPill.set(okX, py, okX + okW, py + ph);
-                pill(c, "B", "Not now", noX, py, ph, a); noPill.set(noX, py, noX + noW, py + ph);
-            } else { okPill.setEmpty(); noPill.setEmpty(); }
-            // the choices: the selected one in a white pill with the game's yellow ring and its pointer
+            float in = Math.min(1f, el / 160f);
+            int a = Math.round(255 * in);
+            // the talk box: a lavender edge, deeper toward the bottom, round a light grey inside with a soft rim
+            blob(talk, 1f, 0f); blob(talkIn, 1f - 13f / 320f, 9f);
+            fill.setShader(new LinearGradient(0, talkY - 150 * u, 0, talkY - 40 * u, Color.argb(a, 220, 198, 253), Color.argb(a, 187, 185, 252), Shader.TileMode.CLAMP));
+            c.drawPath(talk, fill);
+            fill.setShader(null);
+            fill.setColor(Color.argb(a, 244, 244, 244)); c.drawPath(talkIn, fill);
+            edge.setColor(Color.argb(Math.round(150 * in), 214, 208, 252)); edge.setStrokeWidth(4 * u); c.drawPath(talkIn, edge);
+            int shown = (int) Math.min(QUESTION.length(), el / CHAR_MS);
+            say(c, talkFont, QUESTION.substring(0, shown), talkX - 278 * u, talkY - 84 * u, 30 * u, Color.argb(a, 52, 50, 56), face, Paint.Align.LEFT, false);
+            if (el < revealMs()) return;
+            // the choice window pops up once the question is out: a light panel, a thin lavender edge, a grey pill a choice, the selected one yellow with the pointer
+            float pop = Math.min(1f, (el - revealMs()) / (float) POP_MS), k = 0.9f + 0.1f * pop;
+            int b = Math.round(255 * pop);
+            c.save(); c.scale(k, k, box.right, box.bottom);
+            fill.setShader(new LinearGradient(0, box.top, 0, box.bottom, Color.argb(b, 247, 247, 247), Color.argb(b, 233, 233, 235), Shader.TileMode.CLAMP));
+            c.drawRoundRect(box, 22 * u, 22 * u, fill);
+            fill.setShader(null);
+            edge.setColor(Color.argb(b, 227, 186, 253)); edge.setStrokeWidth(3.3f * u); c.drawRoundRect(box, 22 * u, 22 * u, edge);
             for (int i = 0; i < CHOICES.length; i++) {
                 float top = rowTop + i * rowH;
+                r.set(box.left + 13 * u, top, box.right - 14 * u, top + 45 * u);
+                float rad = r.height() / 2;
                 if (i == sel) {
-                    r.set(box.left + 10 * dp, top + 4 * dp, box.right - 10 * dp, top + rowH - 4 * dp);
-                    fill.setColor(Color.argb(a, 252, 252, 252)); c.drawRoundRect(r, r.height() / 2, r.height() / 2, fill);
-                    edge.setColor(Color.argb(a, 252, 227, 42)); edge.setStrokeWidth(4 * dp); c.drawRoundRect(r, r.height() / 2, r.height() / 2, edge);
-                    pointer(c, box.left + 30 * dp, top + rowH / 2, 9 * dp, a);
-                }
-                say(c, CHOICES[i], box.left + 50 * dp, top + rowH / 2 + 8 * dp, 21 * dp, i == sel ? ink : Color.argb(a, 98, 97, 102), i == sel ? faceBold : face, Paint.Align.LEFT, false);
+                    r.offset(0, 3 * u); fill.setColor(Color.argb(Math.round(45 * pop), 120, 100, 20)); c.drawRoundRect(r, rad, rad, fill); r.offset(0, -3 * u);
+                    fill.setColor(Color.argb(b, 253, 226, 51));
+                } else fill.setColor(Color.argb(b, 233, 232, 237));
+                c.drawRoundRect(r, rad, rad, fill);
+                say(c, talkFont, CHOICES[i], box.left + 36 * u, r.centerY() + 9 * u, 26 * u, i == sel ? Color.argb(b, 104, 78, 0) : Color.argb(b, 52, 50, 56), face, Paint.Align.LEFT, false);
+                if (i == sel) pointer(c, r.left + 2 * u, r.centerY(), 13 * u, b);
             }
+            c.restore();
         }
 
         private void drawClock(Canvas c, int w, int h, long t, float in) {
@@ -482,14 +513,15 @@ final class SleepMod {
             String time = hr + ":" + String.format(Locale.US, "%02d", z.getMinute()), ampm = z.getHour() < 12 ? "AM" : "PM";
             int a = Math.round(255 * in);
             float ts = 76 * dp, as = 30 * dp, gap = 12 * dp;
-            float tw = width(time, ts, faceBold, true), aw = width(ampm, as, faceBold, false), x = (w - tw - gap - aw) / 2, y = h / 2f + 22 * dp;
-            say(c, time, x, y, ts, Color.argb(a, 255, 255, 255), faceBold, Paint.Align.LEFT, true);   // the digits keep their places as the hours count
-            say(c, ampm, x + tw + gap, y, as, Color.argb(Math.round(a * 0.85f), 255, 233, 168), faceBold, Paint.Align.LEFT, false);
+            GameFont f = font;
+            float tw = width(f, time, ts, faceBold, true), aw = width(f, ampm, as, faceBold, false), x = (w - tw - gap - aw) / 2, y = h / 2f + 22 * dp;
+            say(c, f, time, x, y, ts, Color.argb(a, 255, 255, 255), faceBold, Paint.Align.LEFT, true);   // the digits keep their places as the hours count
+            say(c, f, ampm, x + tw + gap, y, as, Color.argb(Math.round(a * 0.85f), 255, 233, 168), faceBold, Paint.Align.LEFT, false);
             int soft = Color.argb(Math.round(a * 0.7f), 255, 255, 255);
             String date = z.format(java.time.format.DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH));   // the day and date: a long sleep shows the day change
-            say(c, date, w / 2f, y + 46 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
-            if (phase == SAVE) say(c, "Saving...", w / 2f, y + 86 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
-            else if (saveState != 3) say(c, "The game was busy and did not save", w / 2f, y + 86 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
+            say(c, f, date, w / 2f, y + 46 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
+            if (phase == SAVE) say(c, f, "Saving...", w / 2f, y + 86 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
+            else if (saveState != 3) say(c, f, "The game was busy and did not save", w / 2f, y + 86 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
         }
 
         /** The game's clock in the picture's top left corner while the Pokédex is up */

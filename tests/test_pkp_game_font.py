@@ -1,8 +1,8 @@
 # The sleep mod's reader of Pokopia's own font (bananative/android/app/src/main/java/dev/nxnative/android/GameFont.java): a made-up G1N font (a map of codes, 12-byte
 # glyphs, 4bpp bitmaps whose ink ends on the last row but one) in a zlib-chunked IDRK entry of a made-up RDB .fdata, at the place it has on 2.0.1 and moved after other
 # entries, goes through the real class (javac + java, with small stand-ins for the Android classes it draws with): the glyphs are found by their codes, the space is
-# glyph 0, letters sit on the baseline and descend below it by their place, the bitmaps' wide right margin is taken in, digits keep the widest digit's place, and only
-# as much of the entry is read as the first face needs.
+# glyph 0, letters sit on the baseline and descend below it by their place, the bitmaps' wide right margin is taken in, digits keep the widest digit's place, the
+# second face is the talk's (drawn at 0.825 of its width, 7 units closer, words too), and only as much of the entry is read as the first two faces need.
 import shutil, struct, subprocess, tempfile, unittest, zlib
 from pathlib import Path
 
@@ -33,9 +33,11 @@ public class Canvas { public final java.util.List<float[]> drawn = new java.util
     'dev/nxnative/android/Harness.java': '''package dev.nxnative.android;
 public class Harness {
     public static void main(String[] a) throws Exception {
-        GameFont f = GameFont.load(new java.io.File(a[0]), new java.io.File(a[1]));
-        System.out.println("loaded " + (f != null));
-        if (f == null) return;
+        GameFont[] fs = GameFont.load(new java.io.File(a[0]), new java.io.File(a[1]));
+        System.out.println("loaded " + (fs != null));
+        if (fs == null) return;
+        GameFont f = fs[0], t = fs[1];
+        System.out.println("talk " + t.measure("A", 60, false) + " " + t.measure(" ", 60, false));
         System.out.println("has " + f.has("A g") + " " + f.has("12:21") + " " + f.has("B"));
         System.out.println("width " + f.measure("A", 60, false) + " " + f.measure(" ", 60, false) + " " + f.measure("1", 60, false) + " " + f.measure("1", 60, true));
         android.graphics.Canvas c = new android.graphics.Canvas();
@@ -58,22 +60,25 @@ def bitmap(cols, rows):   # 4bpp, rows of W (even) pixels, high nibble first; in
     return bytes(px)
 
 
-def g1n(extra=0):
-    # code: (ordinal, width, place, advance, ink columns, ink rows); the ink always ends on row 14 (the last but one), as in the game's font
-    glyphs = [(0x20, 4, 20, 4, (), ()), (0x21, W, 20, W, (1,), range(3, 15)), (0x31, W, 20, W, range(1, 6), range(3, 15)), (0x32, W, 20, W, range(1, 6), range(3, 15)),
+def g1n(extra=0, faces=2):
+    # code: (ordinal, width, place, advance, ink columns, ink rows); the ink always ends on row 14 (the last but one), as in the game's font. Each face the same glyphs
+    glyphs = [(0x20, 4, 20, 12, (), ()), (0x21, W, 20, W, (1,), range(3, 15)), (0x31, W, 20, W, range(1, 6), range(3, 15)), (0x32, W, 20, W, range(1, 6), range(3, 15)),
               (0x3a, W, 20, W, (1,), (6, 14)), (0x41, W, 20, W, range(1, 6), range(3, 15)), (0x67, W, 16, W, range(1, 6), range(6, 15))]
-    t = 0x20 + 4 + 64   # the header, one face offset, one palette
+    t0 = 0x20 + 4 * faces + 64 * faces   # the header, the face offsets, a palette a face
     m = bytearray(0x20000)
     for i, (code, *_ ) in enumerate(glyphs):
         struct.pack_into('<H', m, 2 * code, i)
-    infos = b''; data = b''
-    for i, (code, w, place, adv, cols, rows) in enumerate(glyphs):
-        infos += struct.pack('<BBbBBbBBI', w, H, 0, place, adv, -32, 0, 0, 0x100 * i)
-        data += bitmap(cols, rows).ljust(0x100, b'\0')
-    gofs = t + len(m) + len(infos)
-    body = bytes(m) + infos + data + b'\x55' * extra   # extra: another face's bitmaps, which the reader does not need
-    head = b'_N1G0000' + struct.pack('<IIIIII', gofs + len(data) + extra, t, 10, gofs, 1, 1) + struct.pack('<I', t) + b'\0' * 64
-    assert len(head) == t
+    tables = b''; data = b''; offs = []
+    for f in range(faces):
+        offs.append(t0 + len(tables)); infos = b''
+        for i, (code, w, place, adv, cols, rows) in enumerate(glyphs):
+            infos += struct.pack('<BBbBBbBBI', w, H, 0, place, adv, -32, 0, 0, len(data))
+            data += bitmap(cols, rows).ljust(0x100, b'\0')
+        tables += bytes(m) + infos
+    gofs = t0 + len(tables)
+    body = tables + data + b'\x55' * extra   # extra: another face's bitmaps, which the reader does not need
+    head = b'_N1G0000' + struct.pack('<IIIIII', gofs + len(data) + extra, t0, 10, gofs, faces, faces) + struct.pack('<%dI' % faces, *offs) + b'\0' * 64 * faces
+    assert len(head) == t0
     return head + body
 
 
@@ -106,8 +111,10 @@ class GameFontRead(unittest.TestCase):
     def check(self, out, size):
         self.assertIn('loaded true', out)
         self.assertIn('has true true false', out)   # no 'B' in the font
-        # 'A' is 10 units wide, its margins 1 and 4: taken in by 3 (to 7); the space keeps its 4; a digit 7, and so as tabular; at size 60 a unit is a pixel
-        self.assertIn('width 7.0 4.0 7.0 7.0', out)
+        # 'A' is 10 units wide, its margins 1 and 4: taken in by 3 (to 7); the space keeps its 12; a digit 7, and so as tabular; at size 60 a unit is a pixel
+        self.assertIn('width 7.0 12.0 7.0 7.0', out)
+        talk = next(l for l in out if l.startswith('talk ')).split()[1:]   # the talk face: 7 units closer, words too, at 0.825 of its width
+        self.assertAlmostEqual(float(talk[0]), (10 - 7) * 0.825, places=4); self.assertAlmostEqual(float(talk[1]), (12 - 7) * 0.825, places=4)
         rects = [list(map(float, l.split()[1:])) for l in out if l.startswith('rect ')]
         self.assertEqual(len(rects), 2)
         a, g = rects

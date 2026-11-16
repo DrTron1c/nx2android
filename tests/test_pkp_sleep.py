@@ -86,15 +86,22 @@ class Input(unittest.TestCase):
         self.assertIn('if (dm_input_held()) {', (HOST / 'hle_touch.c').read_text())
         s = (HOST / 'android/pkp_sleep.c').read_text()
         self.assertIn('dm_input_hold(1, DM_BTN_B, 0, 0, 0, 0)', s)   # Not now: B first
-        # then always the stick toward the camera for 20 frames (build 20 left the player in bed: the signs read up after the clock moved)
+        # then always the stick toward the camera for 20 frames (build 20 left the player in bed: the signs read up after the clock moved), and B and the stick again
+        # while the bed's signs still say in bed, 4 rounds at most
         self.assertIn('if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 20)', s)
         self.assertNotIn('!atomic_load(&g_inbed)) g_up_step = 4;', s)
+        self.assertIn('g_up_step = ++g_up_round < UP_ROUNDS && atomic_load(&g_nsign) && atomic_load(&g_inbed) ? 0 : 4;', s)
+        self.assertIn('#define UP_ROUNDS 4', s)
         j = (JAVA / 'SleepMod.java').read_text()
-        # the loading screen (the user's recordings, builds 20 and 21): out of bed early under the black (the game's own new day waits for that), the input held and
-        # the gamepad hidden until the picture is back, which is once the game is quiet (no event, autosave or new load) for 1.2 s, 10 s at most
-        self.assertIn('private static final long GETUP_MS = 1500, QUIET_MS = 1200, SETTLE_MAX_MS = 10000;', j)
-        self.assertIn('ui.postDelayed(this::getUp, GETUP_MS);', j)
-        self.assertIn('Native.pkpHold(3); getupAt = SystemClock.uptimeMillis();', j)
+        # the loading screen (the user's recordings, builds 20, 21 and 25): out of bed as the count starts, before the clock moves (after it, the game took none of it),
+        # the clock moved once that is over (the game's own new day waits for the player to be up, and runs under the black), the input held and the gamepad hidden
+        # until the picture is back, which is once the game is quiet (no event, autosave or new load) for 1.2 s from 2.5 s after the move, 15 s after it at most
+        self.assertIn('private static final long GETUP_MAX_MS = 9000, AFTER_MOVE_MS = 2500, QUIET_MS = 1200, SETTLE_MAX_MS = 15000;', j)
+        self.assertIn('Native.pkpHold(3); getupAt = SystemClock.uptimeMillis(); movedAt = 0;', j)
+        self.assertIn('if (movedAt == 0 && (!gettingUp || now - getupAt > GETUP_MAX_MS)) moveClock(s);', j)
+        start = j[j.index('private void startTick() {'):j.index('private void moveClock(')]
+        self.assertIn('Native.pkpHold(3);', start); self.assertNotIn('clockSkip', start)   # up first; the clock moves in moveClock
+        self.assertIn('skip(act, total); Native.clockSkip(total);', j[j.index('private void moveClock('):])
         self.assertIn('controls.accept(true);', j)
         self.assertIn('case FADE_IN: if (el >= FADE_MS) { phase = IDLE; quietAt = 0; Native.pkpHold(0); controls.accept(false);', j)
         self.assertIn('dm_input_hold(atomic_load(&g_getup) == 2, 0, 0, 0, 0, 0);', s)
@@ -136,7 +143,8 @@ class Menu(unittest.TestCase):
         # seamless: the game is told it is back from HOME after the clock moves, the screen stays black until the game's own time of day is the new one, and the
         # player gets out of bed before the fade in
         self.assertIn('Native.pkpFocus(2);', j)
-        self.assertIn('if (now - quietAt >= QUIET_MS || el > SETTLE_MAX_MS)', j)
+        self.assertIn('if (busy || gettingUp || movedAt == 0 || now - movedAt < AFTER_MOVE_MS || quietAt == 0) quietAt = now;', j)
+        self.assertIn('if (now - quietAt >= QUIET_MS || late)', j)
         self.assertIn('SR_TIME_OF_DAY = 0x13d373c', (HOST / 'android/pkp_sleep.c').read_text())
         self.assertIn('sleepRows();', (JAVA / 'SidePanel.java').read_text())
         # Save and Quit (the title's key guide sets 152 / 183 after a game) moves the clock on 6 hours for the next time in, unless turned off

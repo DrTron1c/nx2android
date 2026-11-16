@@ -17,13 +17,15 @@ import java.util.Arrays;
 /**
  * nx2android: Pokémon Pokopia's own text font, read from the player's game files (never shipped), for the sleep mod's menu and clocks (SleepMod). The game's fonts are
  * KTGL G1N entries (type KTID 0x786dcd84) in RDB data file 0x05d525ae.fdata; on 2.0.1 (the sleep mod's survey, UiExport) the 2.2 MB one, file KTID 0x8207d16b, is the
- * text font: its first face has ASCII, Latin-1 and a few superscripts.
+ * text font: its first face (ASCII, Latin-1, a few superscripts) is the heavier one of the HUD's labels, its second (555 glyphs) the lighter one of the game's talk,
+ * which the game draws at TALK_SQUEEZE of its width with TALK_TRACK between letters and words (fitted to the word edges of three of the game's talk choices in the
+ * user's recording, 2026-11-16: within about a pixel at 1.33 pixels a unit).
  *
  * G1N (as lehieugch68/g1n-font-editor reads it): '_N1G0000', u32 size, u32 header size, u32, u32 glyph data offset, u32 palettes, u32 faces, u32 face offsets[faces],
  * palettes (16 RGBA each). A face: u16 map[0x10000] (code → glyph; 0 is glyph 0 only for the code just before the first one mapped, the space), then 12-byte glyphs
  * {u8 width, u8 height, s8 x offset, u8 place (the height of the bitmap's bottom: 'A' 74, 'g' 58, "'" 100), u8 advance, s8, u8 0, u8 0, u32 bitmap offset into the glyph
- * data}; a bitmap is 4bpp rows of the width rounded up to even, high nibble first, its ink ending on the last row but one. Only the first face is read, and only as much
- * of the entry as it needs.
+ * data}; a bitmap is 4bpp rows of the width rounded up to even, high nibble first, its ink ending on the last row but one. Only the first two faces are read, and only as
+ * much of the entry as they need.
  */
 final class GameFont {
     static final String FDATA = "motor_asset_re/KIDS_PLATFORM_OUNCE/0x05d525ae.fdata";
@@ -31,19 +33,26 @@ final class GameFont {
     static final long TEXT_AT = 0x2f021150L;   // where the text font's entry is on 2.0.1 (the survey); looked for by its file KTID when it is not there
     static final int TEXT_KTID = 0x8207d16b;
     private static final long IDRK = 0x303030304b524449L;   // 'IDRK0000'
+    static final float TALK_SQUEEZE = 0.825f, TALK_TRACK = -7f;
+    private static final int FACES = 2;
 
     private static final class Glyph { Bitmap bmp, big; int w, h, x, place, adv, bigH; }
     private final SparseArray<Glyph> glyphs = new SparseArray<>();
     private final float lift, track, digit;   // a bitmap's top sits (lift + place) units above the baseline; track: the space between letters the bitmaps' padding leaves too
                                                // wide; digit: the widest digit's advance (a clock's digits keep their places)
+    private final float sx;                   // the width the game draws it at
+    private final boolean trackSpace;          // the track also between words
     private final RectF r = new RectF();
 
-    GameFont(byte[] d) throws IOException {
+    /** Face `face` of the G1N d, drawn at sx of its width; track NaN: the one its bitmaps' margins say, between letters only; else that one, between words too */
+    GameFont(byte[] d, int face, float sx, float trackAs) throws IOException {
+        this.sx = sx; trackSpace = !Float.isNaN(trackAs);
         ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.LITTLE_ENDIAN);
         if (d.length < 0x24 || b.getInt(0) != 0x47314e5f) throw new IOException("no G1N font");   // '_N1G'
-        int gofs = b.getInt(0x14), faces = b.getInt(0x1c), t = b.getInt(0x20);
-        int end = faces > 1 ? b.getInt(0x24) : gofs, gi = t + 0x20000, n = (end - gi) / 12;
-        if (faces < 1 || t < 0x24 || gi + 12L * Math.max(n, 0) > d.length || n <= 0 || n > 0x10000) throw new IOException("a G1N face this reader does not know");
+        int gofs = b.getInt(0x14), faces = b.getInt(0x1c);
+        if (face < 0 || face >= faces || 0x20 + 4 * (face + 2) > d.length) throw new IOException("no face " + face + " in the G1N font");
+        int t = b.getInt(0x20 + 4 * face), end = face + 1 < faces ? b.getInt(0x24 + 4 * face) : gofs, gi = t + 0x20000, n = (end - gi) / 12;
+        if (t < 0x24 || gi + 12L * Math.max(n, 0) > d.length || n <= 0 || n > 0x10000) throw new IOException("a G1N face this reader does not know");
         Glyph[] byIndex = new Glyph[n];
         boolean first = true;
         for (int c = 0; c < 0x10000; c++) {
@@ -61,7 +70,7 @@ final class GameFont {
         String s = "AHMNOabdehlmnopsuvx0123456789";
         int[] lm = new int[s.length()], rm = new int[s.length()]; int k = 0;
         for (int i = 0; i < s.length(); i++) { Glyph g = glyphs.get(s.charAt(i)); int[] cl = g != null && g.bmp != null ? cols(g) : null; if (cl != null) { lm[k] = cl[0]; rm[k++] = g.w - 1 - cl[1]; } }
-        track = k > 0 ? median(lm, k) - median(rm, k) : 0;
+        track = trackSpace ? trackAs : k > 0 ? median(lm, k) - median(rm, k) : 0;
         float dw = 0;
         for (char ch = '0'; ch <= '9'; ch++) { Glyph g = glyphs.get(ch); if (g != null) dw = Math.max(dw, adv(g, ch)); }
         digit = dw;
@@ -106,11 +115,11 @@ final class GameFont {
         return l < 0 ? null : new int[] {l, rr};
     }
 
-    /** g's bitmap at k times its size, its edges kept sharp: a bitmap scaled up smoothly has soft edges k pixels wide; they are steepened back to about one */
-    private Bitmap big(Glyph g, float k) {
+    /** g's bitmap at kx by k times its size, its edges kept sharp: a bitmap scaled up smoothly has soft edges k pixels wide; they are steepened back to about one */
+    private Bitmap big(Glyph g, float kx, float k) {
         int bh = Math.round(g.h * k);
         if (g.big != null && g.bigH == bh) return g.big;
-        Bitmap s = Bitmap.createScaledBitmap(g.bmp, Math.max(1, Math.round(g.w * k)), Math.max(1, bh), true);
+        Bitmap s = Bitmap.createScaledBitmap(g.bmp, Math.max(1, Math.round(g.w * kx)), Math.max(1, bh), true);
         if (s.getConfig() != Bitmap.Config.ALPHA_8) { Bitmap a = s.extractAlpha(); if (s != g.bmp) s.recycle(); s = a; }
         ByteBuffer px = ByteBuffer.allocate(s.getRowBytes() * s.getHeight());
         s.copyPixelsToBuffer(px);
@@ -130,7 +139,7 @@ final class GameFont {
 
     private static float scale(float size) { return size / 60f; }   // size as Paint's text size: the cell is 64 units, the capitals 42 of them
 
-    private float adv(Glyph g, char ch) { return ch == ' ' || g.bmp == null ? g.adv : g.adv + track; }
+    private float adv(Glyph g, char ch) { return (ch == ' ' || g.bmp == null) && !(trackSpace && ch == ' ') ? g.adv : g.adv + track; }
 
     /** s's width; digits all as wide as the widest when tabular */
     float measure(String s, float size, boolean tabular) {
@@ -139,29 +148,30 @@ final class GameFont {
             char ch = s.charAt(i); Glyph g = glyphs.get(ch);
             if (g != null) w += tabular && ch >= '0' && ch <= '9' ? digit : adv(g, ch);
         }
-        return w * scale(size);
+        return w * scale(size) * sx;
     }
 
     /** s from x (left), its baseline at y, in p's colour and alpha (p should filter bitmaps); its width. Digits keep the widest digit's place when tabular. */
     float draw(Canvas c, String s, float x, float y, float size, Paint p, boolean tabular) {
-        float k = scale(size), x0 = x;
+        float k = scale(size), kx = k * sx, x0 = x;
         for (int i = 0; i < s.length(); i++) {
             char ch = s.charAt(i); Glyph g = glyphs.get(ch);
             if (g == null) continue;
             boolean slot = tabular && ch >= '0' && ch <= '9';
             float a = slot ? digit : adv(g, ch);
             if (g.bmp != null) {
-                float top = y - (lift + g.place) * k, left = x + (g.x + (slot ? (digit - adv(g, ch)) / 2 : 0)) * k;
-                r.set(left, top, left + g.w * k, top + g.h * k);
-                c.drawBitmap(k > 1.3f ? big(g, k) : g.bmp, null, r, p);
+                float top = y - (lift + g.place) * k, left = x + (g.x + (slot ? (digit - adv(g, ch)) / 2 : 0)) * kx;
+                r.set(left, top, left + g.w * kx, top + g.h * k);
+                c.drawBitmap(k > 1.3f ? big(g, kx, k) : g.bmp, null, r, p);
             }
-            x += a * k;
+            x += a * kx;
         }
         return x - x0;
     }
 
-    /** The text font from the game's RomFS folders (the first that has it), null when none has */
-    static GameFont load(File... romfs) {
+    /** The text font from the game's RomFS folders (the first that has it): {its first face (the HUD's), its second as the game's talk draws it}; null when none
+     *  has it, and the second null when the font has one face */
+    static GameFont[] load(File... romfs) {
         for (File root : romfs) {
             File f = root != null ? new File(root, FDATA) : null;
             if (f == null || !f.isFile()) continue;
@@ -169,7 +179,10 @@ final class GameFont {
                 long e = entry(ch, TEXT_AT, TEXT_KTID);
                 if (e < 0) e = find(ch, TEXT_KTID);
                 if (e < 0) { Native.note("sleep mod: no font " + Integer.toHexString(TEXT_KTID) + " in " + f); continue; }
-                return new GameFont(face(ch, e));
+                byte[] d = face(ch, e);
+                GameFont talk = null;
+                try { talk = new GameFont(d, 1, TALK_SQUEEZE, TALK_TRACK); } catch (IOException ex) { Native.note("sleep mod: the game's talk face: " + ex.getMessage()); }
+                return new GameFont[] {new GameFont(d, 0, 1f, Float.NaN), talk};
             } catch (IOException | RuntimeException ex) {
                 Native.note("sleep mod: the game's font in " + f + " did not load: " + ex);
             }
@@ -177,7 +190,7 @@ final class GameFont {
         return null;
     }
 
-    /** The entry's data up to the end of its first face's bitmaps */
+    /** The entry's data up to the end of its first faces' bitmaps */
     static byte[] face(FileChannel ch, long e) throws IOException {
         ByteBuffer h = ByteBuffer.allocate(0x30).order(ByteOrder.LITTLE_ENDIAN); ch.read(h, e);
         long esz = h.getLong(8), csz = h.getLong(0x10), n = h.getLong(0x18);
@@ -192,17 +205,20 @@ final class GameFont {
         return o.toByteArray();
     }
 
-    /** How much of the G1N the first face needs: the header and the face tables, then its glyphs' bitmaps (n until that is known) */
+    /** How much of the G1N its first FACES faces need: the header and the face tables, then their glyphs' bitmaps (n until that is known) */
     private static long needed(byte[] d, long n) {
         if (d.length < 0x24) return n;
         ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.LITTLE_ENDIAN);
         long gofs = b.getInt(0x14) & 0xffffffffL;
-        if (d.length < gofs) return n;
-        int faces = b.getInt(0x1c), t = b.getInt(0x20), end = faces > 1 ? b.getInt(0x24) : (int) gofs, gi = t + 0x20000;
+        int faces = b.getInt(0x1c);
+        if (d.length < gofs || faces < 1 || 0x20 + 4L * faces > d.length) return n;
         long most = 0;
-        for (int at = gi; at + 12 <= end && at + 12 <= d.length; at += 12) {
-            int w = d[at] & 0xff, hh = d[at + 1] & 0xff;
-            most = Math.max(most, (b.getInt(at + 8) & 0xffffffffL) + (long) ((w + 1) & ~1) * hh / 2);
+        for (int f = 0; f < Math.min(faces, FACES); f++) {
+            int t = b.getInt(0x20 + 4 * f), end = f + 1 < faces ? b.getInt(0x24 + 4 * f) : (int) gofs, gi = t + 0x20000;
+            for (int at = gi; at >= 0 && at + 12 <= end && at + 12 <= d.length; at += 12) {
+                int w = d[at] & 0xff, hh = d[at + 1] & 0xff;
+                most = Math.max(most, (b.getInt(at + 8) & 0xffffffffL) + (long) ((w + 1) & ~1) * hh / 2);
+            }
         }
         return Math.min(n, gofs + most);
     }
