@@ -55,6 +55,7 @@ static uint64_t rq(uint64_t a) { uint64_t v = 0; return rd(a, &v, 8) ? v : 0; }
 
 static _Atomic int g_cur = -1, g_last, g_beds_in, g_online, g_save, g_getup;
 static _Atomic int64_t g_frames;
+static _Atomic int g_loads, g_game_flags;   // the player of a new load seen (a new manager, character or action component); the game's busy flags (pkp_state out[9])
 static _Atomic int g_in_game, g_quits, g_pt_reset = 1;   // a game has run since the title (its play time moved on 5 s); Save and Quits seen; the mark is taken again
 static _Atomic uint64_t g_recent;   // the last four actions the player started, newest in the low 16 bits (the in-game panel shows them)
 static int g_save_tries, g_save_wait, g_up_frame, g_up_step, g_changes;
@@ -202,7 +203,7 @@ static void getup_step(int cur) {
     if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 20) { g_up_step = 3; g_up_frame = 0; } return; }
     if (g_up_step == 3) { dm_input_hold(1, 0, 0, 0, 0, 0); if (f >= 20) { g_up_step = !again++ && atomic_load(&g_nsign) && atomic_load(&g_inbed) ? 2 : 4; g_up_frame = 0; } return; }
     LOG("pkp sleep: out of bed%s (action %d)", atomic_load(&g_inbed) ? " not confirmed: the signs still say in bed" : "", cur);
-    dm_input_hold(0, 0, 0, 0, 0, 0); atomic_store(&g_getup, 0);
+    dm_input_hold(atomic_load(&g_getup) == 2, 0, 0, 0, 0, 0); atomic_store(&g_getup, 0);   // 2 (after a sleep): the input stays held until the picture is back
 }
 
 static void frame_work(void) {
@@ -232,7 +233,7 @@ static void frame_work(void) {
     uint64_t who = rq(base + M_PLAYER_MGR) * 31 + ch * 7 + ac;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     int64_t now = ts.tv_sec * 1000000000ll + ts.tv_nsec;
-    if (who != ch_seen || !ch) { if (who != ch_seen) ch_since = now; ch_seen = who; up_frames = 0; armed = 0; if (ch && atomic_load(&g_nsign)) LOG("pkp sleep: a player appeared (a load): no sleep menu until they are seen standing"); }
+    if (who != ch_seen || !ch) { if (who != ch_seen) { ch_since = now; atomic_fetch_add(&g_loads, 1); } ch_seen = who; up_frames = 0; armed = 0; if (ch && atomic_load(&g_nsign)) LOG("pkp sleep: a player appeared (a load): no sleep menu until they are seen standing"); }
     int awake = 0, into = bed_step(ch, ac, &awake);
     up_frames = awake && !atomic_load(&g_inbed) ? up_frames + 1 : 0;
     if (!armed && ch && up_frames >= 30 && now - ch_since >= 8000000000ll) armed = 1;
@@ -243,6 +244,11 @@ static void frame_work(void) {
         if (!armed) LOG("pkp sleep: in bed since the game loaded: no sleep menu");
         else if (!pressed) LOG("pkp sleep: in bed without pressing A just before (a load or a scene): no sleep menu");
         else if (!atomic_load(&g_online) && !atomic_load(&g_getup) && !atomic_load(&g_learn)) { atomic_fetch_add(&g_beds_in, 1); LOG("pkp sleep: the player got into a bed"); }
+    }
+    {   // what the sleep's loading screen waits on: the game's event (its new day after a sleep) and its autosave
+        uint64_t game = rq(base + M_GAME_STATE), ev = game ? rq(game + GS_EVENT) : 0; uint32_t as = 0; uint8_t busy = 0;
+        int fl = (ev && rd(ev + EV_BUSY, &busy, 1) && busy ? 1 : 0) | (game && rd(game + GS_AUTOSAVE, &as, 4) && as - 1 < 4 ? 2 : 0) | (ch ? 4 : 0);
+        atomic_store(&g_game_flags, fl);
     }
     save_step(base);
     getup_step(cur);
@@ -277,8 +283,9 @@ void nxhost_clock_skip(int64_t seconds) { dm_time_skip_set(seconds); }
 int nxhost_pkp_state(int64_t out[10]) {
     out[0] = atomic_load(&g_cur); out[1] = atomic_load(&g_last); out[2] = atomic_load(&g_beds_in);
     out[3] = atomic_load(&g_save); out[4] = atomic_load(&g_online); out[5] = atomic_load(&g_frames); out[6] = (int64_t)atomic_load(&g_recent);
-    out[7] = atomic_load(&g_inbed) | atomic_load(&g_nsign) << 8 | atomic_load(&g_learn_done) << 16 | atomic_load(&g_learn) << 20 | atomic_load(&g_getup) << 24;
-    out[8] = atomic_load(&g_quits); out[9] = 0;
+    out[7] = atomic_load(&g_inbed) | atomic_load(&g_nsign) << 8 | atomic_load(&g_learn_done) << 16 | atomic_load(&g_learn) << 20 | (atomic_load(&g_getup) != 0) << 24;
+    out[8] = atomic_load(&g_quits);
+    out[9] = atomic_load(&g_game_flags) | (int64_t)atomic_load(&g_loads) << 8;
     return main_base() && gate_obs_present(OBS_PKP_FRAME);
 }
 int nxhost_pkp_learn(int step) {
@@ -313,7 +320,7 @@ void nxhost_pkp_signs_set(const char *s) {
     LOG("pkp sleep: %d bed signs", n);
 }
 void nxhost_pkp_hold(int mode) {
-    if (mode == 2) { g_up_frame = 0; g_up_step = 0; dm_input_hold(1, 0, 0, 0, 0, 0); atomic_store(&g_getup, 1); return; }
+    if (mode == 2 || mode == 3) { g_up_frame = 0; g_up_step = 0; dm_input_hold(1, 0, 0, 0, 0, 0); atomic_store(&g_getup, mode == 3 ? 2 : 1); return; }
     atomic_store(&g_getup, 0);
     dm_input_hold(mode == 1, 0, 0, 0, 0, 0);
 }

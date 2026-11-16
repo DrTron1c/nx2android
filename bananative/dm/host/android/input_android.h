@@ -94,7 +94,8 @@ NXHOST_API void nxhost_clock_skip(int64_t seconds);
 // out[1] the last action the player started, out[2] how many times the player got into a bed (the bed's signs say so), out[3] the save (PKP_SAVE_*),
 // out[4] 1 in a Link Play session (the mod then never asks), out[5] game frames the gate counted, out[6] the last four actions started (16 bits each, newest lowest),
 // out[7] bit 0 in bed now, bits 8-15 the bed's signs, bits 16-18 the learning windows sampled, bits 20-21 the window being sampled, bit 24 getting out of bed,
-// out[8] how many times the game went back to its title after a player's game (Save and Quit; gate OBS_PKP_GUIDE), out[9] 0
+// out[8] how many times the game went back to its title after a player's game (Save and Quit; gate OBS_PKP_GUIDE), out[9] bit 0 the game's event busy, bit 1 its autosave
+// writing, bit 2 a player present, bits 8 on the loads seen (a new player manager, character or action component)
 enum { PKP_SAVE_IDLE = 0, PKP_SAVE_ASKED = 1, PKP_SAVE_WRITING = 2, PKP_SAVE_DONE = 3, PKP_SAVE_FAILED = 4 };
 NXHOST_API int nxhost_pkp_state(int64_t out[10]);
 // Learning the bed (pkp_sleep.c "The bed, learned"): 1, 2, 3 sample the window standing / in the bed / standing again (about half a second of game frames);
@@ -103,7 +104,7 @@ NXHOST_API int nxhost_pkp_learn(int step);
 NXHOST_API int nxhost_pkp_signs(char *buf, int cap);   // the signs as text ("reg:offset:bed:standing;..." hex), for the launcher to keep; their number
 NXHOST_API void nxhost_pkp_signs_set(const char *signs);   // the signs kept from an earlier start
 // 0 the player's own input; 1 held: the game sees nothing of player 1 (dm_input_hold) while the mod's menu is up, nxhost_pkp_seen says what was pressed; 2 held, and the
-// player gets out of bed (B, then the left stick toward the camera while the bed action lasts), then back to 0
+// player gets out of bed (B, then the left stick toward the camera), then back to 0; 3 the same, and the input stays held after (the sleep's loading screen ends it with 0)
 NXHOST_API void nxhost_pkp_hold(int mode);
 NXHOST_API uint64_t nxhost_pkp_seen(void);
 // The game's own time of day: out[0] seconds into its day (-1 unknown), out[1] its date (y * 10000 + m * 100 + d, 0 unknown); 1 when read. The sleep stays black until

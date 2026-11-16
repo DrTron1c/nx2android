@@ -29,9 +29,9 @@ import java.util.Locale;
  * over the game like its own talk choices, read from the touch gamepad, a controller (the game sees nothing of them while the menu is up: Native.pkpHold) or a tap.
  * A choice of hours: the picture fades to black, the game saves, the game's clock moves on by that much (Native.clockSkip: only the game's clock, the tablet's is
  * never set) and the game is told it is back from the HOME menu (Native.pkpFocus), which is when Pokopia takes a new clock; the time counts up in the middle of the
- * screen one hour a second, the day and date under it, with a loading icon turning in the bottom right corner; the screen stays black until the game's own time of day is the new one
- * (Native.pkpTod; at most 2.5 s after the count: on the user's tablet that time never read as the new one, and the screen sat black 20 s more) and the
- * player is out of bed (Native.pkpHold(2)), so the picture fades back in on the new time with the player up.
+ * screen one hour a second, the day and date under it, with a loading icon turning in the bottom right corner. Early in the count the player gets out of bed
+ * (Native.pkpHold(3)), which lets the game run its own new day (its fade and load at 5 AM) under the black; after the count the picture fades back in once the game
+ * has been quiet for a moment. The on-screen gamepad is hidden and no input reaches the game from the fade out to the end of the fade in.
  * The total skip is kept (pkp_clock_skip) and given to every start (DM_TIME_SKIP), so the game stays ahead of real time until Back to real time (the in-game panel).
  * Save and Quit (the game back at its title after a game: pkp_sleep.c guide_gate) moves the game's clock on 6 hours, so the next time in is later in the day.
  * The bed is learned once, in three taps in the in-game panel (standing next to it, lying in it, standing again): the host keeps the values of the player's state that
@@ -45,7 +45,11 @@ final class SleepMod {
     static final int MORNING = HOURS.length, NOT_NOW = HOURS.length + 1;   // the choices after the hours
     static final int MORNING_HOUR = 5;   // Pokopia's day starts at 5 AM: Until morning wakes the player just after it
     private static final int IDLE = 0, ASK = 1, FADE_OUT = 2, SAVE = 3, TICK = 4, SETTLE = 5, FADE_IN = 6;
-    private static final long FADE_MS = 650, HOLD_MS = 600, SAVE_MAX_MS = 20000, SETTLE_MAX_MS = 2500, FOCUS_MS = 400;
+    private static final long FADE_MS = 650, HOLD_MS = 400, SAVE_MAX_MS = 20000, FOCUS_MS = 400;
+    // The loading screen after the count: the player is got out of bed early in the count (GETUP_MS after the clock moved, under the black), the game's own new day
+    // (its fade and load at 5 AM, which waits for the player to be up: the user's recording, build 21) then runs under the black too; the picture comes back once the
+    // game has been quiet (no event, no autosave, no new load, a player) for QUIET_MS, SETTLE_MAX_MS at most
+    private static final long GETUP_MS = 1500, QUIET_MS = 1200, SETTLE_MAX_MS = 10000;
     private static final long TOD_NEAR = 15 * 60;   // the game's time of day this close to the new clock (seconds) is the new time
     // NpadButton bits as the host reports what was pressed (Native.pkpSeen): A, B, Up, Down, the left stick up and down
     private static final long A = 1, B = 1 << 1, UP = 1 << 13, DOWN = 1 << 15, L_UP = 1 << 17, L_DOWN = 1 << 19;
@@ -84,13 +88,14 @@ final class SleepMod {
     private final java.util.function.Supplier<float[]> picture;   // the game's picture in the view, normalized (x, y, w, h: TouchControls.picture)
     private Typeface face, faceBold;
     private boolean present, stopped, dex;
-    private long bedsSeen = -1, quitsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt;
+    private long bedsSeen = -1, quitsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt, quietAt, loadsSeen = -1;
+    private final java.util.function.Consumer<Boolean> controls;   // hides and turns off the on-screen gamepad while the loading screen shows (TouchControls.suppress)
     private long sleepSec;   // how far this sleep moves the game's clock
     private boolean untilMorning;
     private int phase = IDLE, sel, seenFrames, pressedRow = -1, saveState, teach;
 
-    SleepMod(Activity a, java.util.function.Supplier<float[]> picture) {
-        act = a; this.picture = picture;
+    SleepMod(Activity a, java.util.function.Supplier<float[]> picture, java.util.function.Consumer<Boolean> controls) {
+        act = a; this.picture = picture; this.controls = controls;
         view = new Panel(a);
         view.setVisibility(View.GONE);
         try { face = Typeface.createFromAsset(a.getAssets(), "fonts/MPLUSRounded1c-Bold-subset.ttf"); faceBold = Typeface.createFromAsset(a.getAssets(), "fonts/MPLUSRounded1c-ExtraBold-subset.ttf"); }
@@ -105,7 +110,7 @@ final class SleepMod {
     View view() { return view; }
 
     /** The screen goes: the player's input back to the game */
-    void stop() { stopped = true; ui.removeCallbacksAndMessages(null); Choreographer.getInstance().removeFrameCallback(frame); if (phase != IDLE) Native.pkpHold(0); }
+    void stop() { stopped = true; ui.removeCallbacksAndMessages(null); Choreographer.getInstance().removeFrameCallback(frame); if (phase != IDLE) { Native.pkpHold(0); controls.accept(false); } }
 
     /** The game's state now (Native.pkpState), null when the mod's gate is not in the game's code */
     long[] state() { long[] o = new long[10]; return Native.pkpState(o) ? o : null; }
@@ -201,6 +206,7 @@ final class SleepMod {
         }
         untilMorning = i == MORNING; sleepSec = untilMorning ? 0 : HOURS[i] * 3600L;   // until morning: measured when the clock moves (startTick)
         phase = FADE_OUT; phaseAt = SystemClock.uptimeMillis();
+        controls.accept(true);   // the loading screen: no gamepad on it, and no input reaches the game until the picture is back (the hold stays on)
         Native.note("sleep mod: sleep " + (untilMorning ? "until morning" : HOURS[i] + " hours"));
     }
 
@@ -216,9 +222,16 @@ final class SleepMod {
         // as the console does when the player comes back from the HOME menu after setting its clock: the game takes the new time then
         Native.pkpFocus(2);
         ui.postDelayed(() -> Native.pkpFocus(1), FOCUS_MS);
-        getupAt = 0;
+        getupAt = 0; loadsSeen = -1;
+        ui.postDelayed(this::getUp, GETUP_MS);   // out of bed under the black, so the game's own new day runs before the picture comes back
         tickFrom = now; phase = TICK; phaseAt = SystemClock.uptimeMillis();
         Native.note("sleep mod: " + (saveState == 3 ? "saved" : "not saved (" + saveState + ")") + ", the game's clock +" + sleepSec + " s (" + ahead(total) + " ahead of real time)");
+    }
+
+    /** Out of bed after a sleep, the input held after it (Native.pkpHold(3)): once */
+    private void getUp() {
+        if (getupAt != 0 || (phase != TICK && phase != SETTLE)) return;
+        Native.pkpHold(3); getupAt = SystemClock.uptimeMillis();
     }
 
     /** Seconds from the game's time now to just after the next MORNING_HOUR (10 s past it, so the game's new day has begun) */
@@ -255,17 +268,22 @@ final class SleepMod {
                     break;
                 }
                 case TICK: if (el >= tickMs() + HOLD_MS) { phase = SETTLE; phaseAt = SystemClock.uptimeMillis(); } break;
-                case SETTLE: {   // black until the game shows the new time, then out of bed, then the fade in
+                case SETTLE: {   // the loading screen: out of bed, then the game quiet for QUIET_MS (its new day done), then the fade in
+                    getUp();
+                    long now = SystemClock.uptimeMillis();
                     long[] s = state();
                     boolean gettingUp = s != null && (s[7] >> 24 & 1) != 0;
-                    if (getupAt == 0 && (newTime() || el > SETTLE_MAX_MS)) {
-                        if (!newTime()) { long[] t = new long[2]; Native.pkpTod(t); Native.note("sleep mod: the game's time of day reads " + t[0] + " s (date " + t[1] + "), the new clock's " + todTarget + " s: on after " + SETTLE_MAX_MS + " ms"); }
-                        Native.pkpHold(2); getupAt = SystemClock.uptimeMillis();
-                    } else if (getupAt != 0 && !gettingUp && SystemClock.uptimeMillis() - getupAt > 300) { phase = FADE_IN; phaseAt = SystemClock.uptimeMillis(); }
-                    else if (getupAt != 0 && SystemClock.uptimeMillis() - getupAt > 5000) { Native.pkpHold(0); phase = FADE_IN; phaseAt = SystemClock.uptimeMillis(); }
+                    boolean busy = s != null && ((s[9] & 3) != 0 || (s[9] & 4) == 0 || (s[9] >> 8) != loadsSeen);   // an event, the autosave, no player, a new load
+                    if (s != null) loadsSeen = s[9] >> 8;
+                    if (busy || gettingUp || quietAt == 0) quietAt = now;
+                    if (now - quietAt >= QUIET_MS || el > SETTLE_MAX_MS) {
+                        if (el > SETTLE_MAX_MS) Native.note("sleep mod: the game was still busy after " + SETTLE_MAX_MS / 1000 + " s (" + (s == null ? "no state" : "flags " + (s[9] & 0xff) + (gettingUp ? ", getting up" : "")) + ")");
+                        if (!newTime()) { long[] g = new long[2]; Native.pkpTod(g); Native.note("sleep mod: the save data's time of day reads " + g[0] + " s (date " + g[1] + "), the new clock's " + todTarget + " s"); }
+                        phase = FADE_IN; phaseAt = now;
+                    }
                     break;
                 }
-                case FADE_IN: if (el >= FADE_MS) { phase = IDLE; view.setVisibility(dex ? View.VISIBLE : View.GONE); return; } break;
+                case FADE_IN: if (el >= FADE_MS) { phase = IDLE; quietAt = 0; Native.pkpHold(0); controls.accept(false); view.setVisibility(dex ? View.VISIBLE : View.GONE); return; } break;
                 default: break;
             }
             view.invalidate();
@@ -273,11 +291,12 @@ final class SleepMod {
         }
     };
 
-    /** Whether the game's own time of day is the new clock's (and for a whole day, its date moved on); true when the game's time cannot be read */
+    /** Whether the save data's time of day is the new clock's (and for a whole day, its date moved on): only noted in the log (on the user's tablet it never read
+     *  as the new time, though the game showed it); true when it cannot be read */
     private boolean newTime() {
-        if (todTarget < 0) return SystemClock.uptimeMillis() - phaseAt > 1500;
+        if (todTarget < 0) return true;
         long[] t = new long[2];
-        if (!Native.pkpTod(t) || t[0] < 0) return SystemClock.uptimeMillis() - phaseAt > 1500;
+        if (!Native.pkpTod(t) || t[0] < 0) return true;
         long d = Math.abs(t[0] % 86400 - todTarget); d = Math.min(d, 86400 - d);
         return d <= TOD_NEAR && (sleepSec < 23 * 3600L + 1800 || date0 == 0 || t[1] != date0);
     }

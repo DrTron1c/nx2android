@@ -89,7 +89,16 @@ class Input(unittest.TestCase):
         # then always the stick toward the camera for 20 frames (build 20 left the player in bed: the signs read up after the clock moved)
         self.assertIn('if (g_up_step == 2) { dm_input_hold(1, 0, 0, -DM_STICK_MAX, 0, 0); if (f >= 20)', s)
         self.assertNotIn('!atomic_load(&g_inbed)) g_up_step = 4;', s)
-        self.assertIn('SETTLE_MAX_MS = 2500,', (JAVA / 'SleepMod.java').read_text())   # black at most 2.5 s past the count (build 20 sat 20 s)
+        j = (JAVA / 'SleepMod.java').read_text()
+        # the loading screen (the user's recordings, builds 20 and 21): out of bed early under the black (the game's own new day waits for that), the input held and
+        # the gamepad hidden until the picture is back, which is once the game is quiet (no event, autosave or new load) for 1.2 s, 10 s at most
+        self.assertIn('private static final long GETUP_MS = 1500, QUIET_MS = 1200, SETTLE_MAX_MS = 10000;', j)
+        self.assertIn('ui.postDelayed(this::getUp, GETUP_MS);', j)
+        self.assertIn('Native.pkpHold(3); getupAt = SystemClock.uptimeMillis();', j)
+        self.assertIn('controls.accept(true);', j)
+        self.assertIn('case FADE_IN: if (el >= FADE_MS) { phase = IDLE; quietAt = 0; Native.pkpHold(0); controls.accept(false);', j)
+        self.assertIn('dm_input_hold(atomic_load(&g_getup) == 2, 0, 0, 0, 0, 0);', s)
+        self.assertIn('void suppress(boolean on)', (JAVA / 'TouchControls.java').read_text())
 
 
 class Interface(unittest.TestCase):
@@ -127,7 +136,7 @@ class Menu(unittest.TestCase):
         # seamless: the game is told it is back from HOME after the clock moves, the screen stays black until the game's own time of day is the new one, and the
         # player gets out of bed before the fade in
         self.assertIn('Native.pkpFocus(2);', j)
-        self.assertIn('if (getupAt == 0 && (newTime() || el > SETTLE_MAX_MS))', j)
+        self.assertIn('if (now - quietAt >= QUIET_MS || el > SETTLE_MAX_MS)', j)
         self.assertIn('SR_TIME_OF_DAY = 0x13d373c', (HOST / 'android/pkp_sleep.c').read_text())
         self.assertIn('sleepRows();', (JAVA / 'SidePanel.java').read_text())
         # Save and Quit (the title's key guide sets 152 / 183 after a game) moves the clock on 6 hours for the next time in, unless turned off

@@ -169,7 +169,9 @@ final class TouchControls extends View {
     }
 
     /** Whether anything is drawn, the show / hide button included; onSwitch gets each change (GameActivity: the panel's handle) */
-    private boolean visible() { return available && (mode == MODE_ON || mode == MODE_AUTO && !gamepad); }
+    private boolean visible() { return available && !suppressed && (mode == MODE_ON || mode == MODE_AUTO && !gamepad); }
+    private boolean suppressed;   // nx2android: hidden and off while the sleep mod's loading screen shows (SleepMod)
+    void suppress(boolean on) { if (suppressed == on) return; suppressed = on; apply(); }
     java.util.function.Consumer<Boolean> onSwitch;
     private boolean told = true;
     private void tell() { boolean v = mode == MODE_ON || mode == MODE_AUTO && !gamepad; if (v != told) { told = v; if (onSwitch != null) onSwitch.accept(v); } }

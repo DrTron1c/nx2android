@@ -122,7 +122,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         }
         root.addView(controls, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         if (SleepMod.game(id)) {   // nx2android: Pokopia's sleep mod, its menu and its fade over the game and the controls (under the overlay and the panel)
-            sleep = new SleepMod(this, controls::picture);
+            sleep = new SleepMod(this, controls::picture, controls::suppress);
             root.addView(sleep.view(), new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         }
         hidePointer(surface, controls);   // Xiaomi: no mouse in the game (NO_MOUSE)
