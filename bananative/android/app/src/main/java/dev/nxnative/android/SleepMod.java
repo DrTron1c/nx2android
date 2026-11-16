@@ -5,9 +5,11 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,6 +17,7 @@ import android.os.SystemClock;
 import android.view.Choreographer;
 import android.view.MotionEvent;
 import android.view.View;
+import java.io.File;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -26,7 +29,8 @@ import java.util.Locale;
  * nx2android: Pokémon Pokopia's sleep mod, the launcher's side; the game's side is dm/host/android/pkp_sleep.c, which counts the player getting into a bed, makes the
  * game's own save and gets the player out of bed. Here: when the player gets into a bed the menu asks how long to sleep (6, 12, 18 or 24 hours, until morning: the
  * next 5 AM, when the game's day starts, or Not now), drawn
- * over the game like its own talk choices, read from the touch gamepad, a controller (the game sees nothing of them while the menu is up: Native.pkpHold) or a tap.
+ * over the game in its own menus' look (the Pokédex's: light grey panels, its yellow selection and orange-edged pointer, its button pills) and in its own font, read
+ * from the player's game files (GameFont; M PLUS Rounded stands in until it is read, or when it is not there), read from the touch gamepad, a controller (the game sees nothing of them while the menu is up: Native.pkpHold) or a tap.
  * A choice of hours: the picture fades to black, the game saves, the game's clock moves on by that much (Native.clockSkip: only the game's clock, the tablet's is
  * never set) and the game is told it is back from the HOME menu (Native.pkpFocus), which is when Pokopia takes a new clock; the time counts up in the middle of the
  * screen one hour a second, the day and date under it, with a loading icon turning in the bottom right corner. Early in the count the player gets out of bed
@@ -86,7 +90,9 @@ final class SleepMod {
     private final long[] st = new long[10];
     private final Panel view;
     private final java.util.function.Supplier<float[]> picture;   // the game's picture in the view, normalized (x, y, w, h: TouchControls.picture)
-    private Typeface face, faceBold;
+    private Typeface face, faceBold;   // the stand-in font
+    private volatile GameFont font;   // the game's own (GameFont), once read
+    private boolean fontAsked;
     private boolean present, stopped, dex;
     private long bedsSeen = -1, quitsSeen = -1, phaseAt, tickFrom, seenPrev = -1, todTarget = -1, date0, getupAt, quietAt, loadsSeen = -1;
     private final java.util.function.Consumer<Boolean> controls;   // hides and turns off the on-screen gamepad while the loading screen shows (TouchControls.suppress)
@@ -158,6 +164,26 @@ final class SleepMod {
 
     void forgetBed() { Prefs.of(act).edit().remove("pkp_bed_signs").commit(); Native.pkpSignsSet(""); teach = 0; }
 
+    /** The game's own font, read once the game's RomFS folder is known (GameFont, off the UI thread); the stand-in until then, or when it is not there */
+    private void loadFont() {
+        if (fontAsked || !(act instanceof GameActivity)) return;
+        GameActivity ga = (GameActivity) act;
+        String rp = ga.romfsPath();
+        if (rp == null) return;
+        fontAsked = true;
+        if (rp.contains(".nup:")) { Native.note("sleep mod: the game is a .nup package: the stand-in font"); return; }
+        File g = ga.gameDir();
+        Thread t = new Thread(() -> {
+            GameFont f = GameFont.load(new File(rp), g != null ? new File(g, "base/romfs") : null);
+            if (f == null) return;
+            font = f;
+            Native.note("sleep mod: the game's own font is read");
+            view.postInvalidate();
+        }, "pkp-font");
+        t.setDaemon(true);
+        t.start();
+    }
+
     /** Back to real time: the game's clock follows the tablet's again */
     void realTime() { skip(act, 0); Native.clockSkip(0); Native.note("sleep mod: the game's clock is back on real time"); }
 
@@ -165,6 +191,7 @@ final class SleepMod {
     private final Runnable poll = new Runnable() {
         @Override public void run() {
             if (stopped) return;
+            loadFont();
             present = Native.pkpState(st);
             if (present) {
                 if (bedsSeen < 0) bedsSeen = st[2];   // the count when this screen started
@@ -305,7 +332,8 @@ final class SleepMod {
     @SuppressLint("ViewConstructor")
     private final class Panel extends View {
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), text = new Paint(Paint.ANTI_ALIAS_FLAG), dot = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF box = new RectF(), msg = new RectF(), r = new RectF();
+        private final Paint glyph = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF box = new RectF(), msg = new RectF(), r = new RectF(), okPill = new RectF(), noPill = new RectF();
         private final Path tri = new Path();
         private final float dp;
         private float rowH, rowTop;
@@ -313,6 +341,51 @@ final class SleepMod {
         Panel(Context c) {
             super(c);
             dp = c.getResources().getDisplayMetrics().density;
+            edge.setStyle(Paint.Style.STROKE); edge.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        /** s in the game's font when it has every character of it, else in the stand-in tf; x as align says; its width. Digits keep their places when tabular. */
+        private float say(Canvas c, String s, float x, float y, float size, int color, Typeface tf, Paint.Align align, boolean tabular) {
+            GameFont f = font;
+            if (f != null && f.has(s)) {
+                float w = f.measure(s, size, tabular);
+                glyph.setColor(color);
+                return f.draw(c, s, align == Paint.Align.CENTER ? x - w / 2 : align == Paint.Align.RIGHT ? x - w : x, y, size, glyph, tabular);
+            }
+            text.setTypeface(tf); text.setTextSize(size); text.setColor(color); text.setTextAlign(align); text.setStyle(Paint.Style.FILL);
+            c.drawText(s, x, y, text);
+            return text.measureText(s);
+        }
+
+        private float width(String s, float size, Typeface tf, boolean tabular) {
+            GameFont f = font;
+            if (f != null && f.has(s)) return f.measure(s, size, tabular);
+            text.setTypeface(tf); text.setTextSize(size);
+            return text.measureText(s);
+        }
+
+        /** A button pill's width at height ph: the button in its ring, then the label */
+        private float pillWidth(String label, float ph) { return ph * 1.3f + width(label, ph * 0.5f, face, false) + ph * 0.42f; }
+
+        /** A button pill as the game draws them under its menus (a light pill with a grey edge, the button's letter in a ring, the label), its left edge at x */
+        private void pill(Canvas c, String btn, String label, float x, float top, float ph, int a) {
+            float ts = ph * 0.5f;
+            r.set(x, top, x + pillWidth(label, ph), top + ph);
+            fill.setColor(Color.argb(a, 232, 231, 234)); c.drawRoundRect(r, ph / 2, ph / 2, fill);
+            edge.setColor(Color.argb(a, 196, 195, 199)); edge.setStrokeWidth(ph * 0.07f); c.drawRoundRect(r, ph / 2, ph / 2, edge);
+            float rad = ph * 0.32f, cx = x + ph * 0.18f + rad, cy = r.centerY();
+            edge.setColor(Color.argb(a, 92, 91, 96)); edge.setStrokeWidth(ph * 0.055f); c.drawCircle(cx, cy, rad, edge);
+            say(c, btn, cx, cy + ts * 0.34f, ts * 0.9f, Color.argb(a, 92, 91, 96), face, Paint.Align.CENTER, false);
+            say(c, label, cx + rad + ph * 0.24f, cy + ts * 0.36f, ts, Color.argb(a, 72, 71, 76), face, Paint.Align.LEFT, false);
+        }
+
+        /** The game's pointer at a selection (an orange-edged yellow triangle with round corners), pointing right at (cx, cy) */
+        private void pointer(Canvas c, float cx, float cy, float s, int a) {
+            tri.reset(); tri.moveTo(cx - s * 0.65f, cy - s * 0.95f); tri.lineTo(cx + s * 0.75f, cy); tri.lineTo(cx - s * 0.65f, cy + s * 0.95f); tri.close();
+            edge.setColor(Color.argb(a, 253, 148, 77)); edge.setStrokeWidth(s * 0.55f); c.drawPath(tri, edge);
+            fill.setShader(new LinearGradient(cx - s * 0.65f, cy, cx + s * 0.75f, cy, Color.argb(a, 253, 243, 190), Color.argb(a, 252, 220, 40), Shader.TileMode.CLAMP));
+            c.drawPath(tri, fill);
+            fill.setShader(null);
         }
 
         /** The game's picture in the view, in pixels */
@@ -351,6 +424,8 @@ final class SleepMod {
                     pressedRow = row; if (row >= 0) sel = row; invalidate(); return true;
                 case MotionEvent.ACTION_UP: case MotionEvent.ACTION_POINTER_UP:
                     if (row >= 0 && row == pressedRow) choose(row);
+                    else if (pressedRow < 0 && okPill.contains(x, y)) choose(sel);   // the button pills, tapped
+                    else if (pressedRow < 0 && noPill.contains(x, y)) choose(NOT_NOW);
                     pressedRow = -1; return true;
                 case MotionEvent.ACTION_CANCEL: pressedRow = -1; return true;
                 default: return true;
@@ -373,30 +448,31 @@ final class SleepMod {
 
         private void drawMenu(Canvas c, int w, int h, float in) {
             layoutMenu(w, h);
-            int a = Math.round(255 * in);
-            // the question, in a speech box along the bottom
-            fill.setColor(Color.argb(a, 255, 252, 244));
-            fill.setShadowLayer(10 * dp, 0, 3 * dp, Color.argb(Math.round(70 * in), 60, 40, 20));
-            c.drawRoundRect(msg, 26 * dp, 26 * dp, fill);
-            c.drawRoundRect(box, 22 * dp, 22 * dp, fill);
+            int a = Math.round(255 * in), ink = Color.argb(a, 48, 47, 52);
+            // the question along the bottom and the choices above its right end, in the game's menu colours (its Pokédex: light grey panels, dark grey text)
+            fill.setShadowLayer(10 * dp, 0, 3 * dp, Color.argb(Math.round(60 * in), 40, 20, 20));
+            fill.setColor(Color.argb(a, 245, 245, 247)); c.drawRoundRect(msg, 28 * dp, 28 * dp, fill);
+            fill.setColor(Color.argb(a, 237, 236, 239)); c.drawRoundRect(box, 24 * dp, 24 * dp, fill);
             fill.clearShadowLayer();
-            text.setTypeface(face); text.setTextSize(22 * dp); text.setColor(Color.argb(a, 74, 64, 54)); text.setTextAlign(Paint.Align.LEFT);
-            c.drawText("How long would you like to sleep?", msg.left + 30 * dp, msg.centerY() + 8 * dp, text);
-            // the choices, with the game's kind of cursor beside the selected one
+            String q = "How long would you like to sleep?";
+            float qs = 23 * dp, qx = msg.left + 32 * dp, qw = say(c, q, qx, msg.centerY() + 8 * dp, qs, ink, face, Paint.Align.LEFT, false);
+            // the buttons, as the game shows them under its menus, at the box's right end when there is room
+            float ph = 40 * dp, okW = pillWidth("Confirm", ph), noW = pillWidth("Not now", ph), gap = 10 * dp, py = msg.centerY() - ph / 2;
+            float noX = msg.right - 22 * dp - noW, okX = noX - gap - okW;
+            if (okX > qx + qw + 20 * dp) {
+                pill(c, "A", "Confirm", okX, py, ph, a); okPill.set(okX, py, okX + okW, py + ph);
+                pill(c, "B", "Not now", noX, py, ph, a); noPill.set(noX, py, noX + noW, py + ph);
+            } else { okPill.setEmpty(); noPill.setEmpty(); }
+            // the choices: the selected one in a white pill with the game's yellow ring and its pointer
             for (int i = 0; i < CHOICES.length; i++) {
                 float top = rowTop + i * rowH;
                 if (i == sel) {
                     r.set(box.left + 10 * dp, top + 4 * dp, box.right - 10 * dp, top + rowH - 4 * dp);
-                    fill.setColor(Color.argb(a, 255, 233, 168));
-                    c.drawRoundRect(r, r.height() / 2, r.height() / 2, fill);
-                    float cx = box.left + 26 * dp, cy = top + rowH / 2, s = 7 * dp;
-                    tri.reset(); tri.moveTo(cx - s * 0.7f, cy - s); tri.lineTo(cx + s, cy); tri.lineTo(cx - s * 0.7f, cy + s); tri.close();
-                    fill.setColor(Color.argb(a, 242, 165, 65));
-                    c.drawPath(tri, fill);
+                    fill.setColor(Color.argb(a, 252, 252, 252)); c.drawRoundRect(r, r.height() / 2, r.height() / 2, fill);
+                    edge.setColor(Color.argb(a, 252, 227, 42)); edge.setStrokeWidth(4 * dp); c.drawRoundRect(r, r.height() / 2, r.height() / 2, edge);
+                    pointer(c, box.left + 30 * dp, top + rowH / 2, 9 * dp, a);
                 }
-                text.setTypeface(i == sel ? faceBold : face); text.setTextSize(20 * dp);
-                text.setColor(i == sel ? Color.argb(a, 60, 48, 38) : Color.argb(a, 110, 98, 86));
-                c.drawText(CHOICES[i], box.left + 44 * dp, top + rowH / 2 + 7 * dp, text);
+                say(c, CHOICES[i], box.left + 50 * dp, top + rowH / 2 + 8 * dp, 21 * dp, i == sel ? ink : Color.argb(a, 98, 97, 102), i == sel ? faceBold : face, Paint.Align.LEFT, false);
             }
         }
 
@@ -405,17 +481,15 @@ final class SleepMod {
             int hr = z.getHour() % 12 == 0 ? 12 : z.getHour() % 12;
             String time = hr + ":" + String.format(Locale.US, "%02d", z.getMinute()), ampm = z.getHour() < 12 ? "AM" : "PM";
             int a = Math.round(255 * in);
-            text.setTextAlign(Paint.Align.LEFT);
-            text.setTypeface(faceBold); text.setTextSize(76 * dp);
-            float tw = text.measureText(time);
-            Paint small = new Paint(text); small.setTextSize(30 * dp);
-            float aw = small.measureText(ampm), gap = 12 * dp, x = (w - tw - gap - aw) / 2, y = h / 2f + 22 * dp;
-            text.setColor(Color.argb(a, 255, 255, 255)); c.drawText(time, x, y, text);
-            small.setColor(Color.argb(Math.round(a * 0.85f), 255, 233, 168)); c.drawText(ampm, x + tw + gap, y, small);
-            small.setTypeface(face); small.setTextSize(22 * dp); small.setTextAlign(Paint.Align.CENTER); small.setColor(Color.argb(Math.round(a * 0.7f), 255, 255, 255));
-            c.drawText(z.format(java.time.format.DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH)), w / 2f, y + 46 * dp, small);   // the day and date: a long sleep shows the day change
-            if (phase == SAVE) c.drawText("Saving…", w / 2f, y + 86 * dp, small);
-            else if (saveState != 3) c.drawText("The game was busy and did not save", w / 2f, y + 86 * dp, small);
+            float ts = 76 * dp, as = 30 * dp, gap = 12 * dp;
+            float tw = width(time, ts, faceBold, true), aw = width(ampm, as, faceBold, false), x = (w - tw - gap - aw) / 2, y = h / 2f + 22 * dp;
+            say(c, time, x, y, ts, Color.argb(a, 255, 255, 255), faceBold, Paint.Align.LEFT, true);   // the digits keep their places as the hours count
+            say(c, ampm, x + tw + gap, y, as, Color.argb(Math.round(a * 0.85f), 255, 233, 168), faceBold, Paint.Align.LEFT, false);
+            int soft = Color.argb(Math.round(a * 0.7f), 255, 255, 255);
+            String date = z.format(java.time.format.DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ENGLISH));   // the day and date: a long sleep shows the day change
+            say(c, date, w / 2f, y + 46 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
+            if (phase == SAVE) say(c, "Saving...", w / 2f, y + 86 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
+            else if (saveState != 3) say(c, "The game was busy and did not save", w / 2f, y + 86 * dp, 22 * dp, soft, face, Paint.Align.CENTER, false);
         }
 
         /** The game's clock in the picture's top left corner while the Pokédex is up */
@@ -425,6 +499,15 @@ final class SleepMod {
             int hr = z.getHour() % 12 == 0 ? 12 : z.getHour() % 12;
             String t = z.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.ENGLISH) + "  " + hr + ":" + String.format(Locale.US, "%02d", z.getMinute()) + (z.getHour() < 12 ? " AM" : " PM");
             float size = Math.max(16 * dp, g.height() * 0.034f), x = g.left + g.width() * 0.028f, y = g.top + g.height() * 0.035f + size;
+            GameFont f = font;
+            if (f != null && f.has(t)) {   // the game's font, its outline drawn as copies around it
+                float o = size * 0.075f;
+                glyph.setColor(Color.rgb(74, 64, 54));
+                for (int i = 0; i < 8; i++) f.draw(c, t, x + o * (float) Math.cos(i * Math.PI / 4), y + o * (float) Math.sin(i * Math.PI / 4), size, glyph, false);
+                glyph.setColor(Color.WHITE);
+                f.draw(c, t, x, y, size, glyph, false);
+                return;
+            }
             text.setTypeface(faceBold); text.setTextSize(size); text.setTextAlign(Paint.Align.LEFT);
             text.setStyle(Paint.Style.STROKE); text.setStrokeWidth(size * 0.16f); text.setStrokeJoin(Paint.Join.ROUND); text.setColor(Color.rgb(74, 64, 54));
             c.drawText(t, x, y, text);

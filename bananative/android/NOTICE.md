@@ -120,4 +120,6 @@ The Android adaptation keeps the game's original aspect field and corrects its c
 [`dm/host/android/pkp_sleep.c`](../dm/host/android/pkp_sleep.c) uses the game addresses and the save request that Recompia found on the same game build
 ([`runtime/games/pkp/core/pkp_layout.h`](https://github.com/Dittobyte/Recompia/blob/ea632e4/runtime/games/pkp/core/pkp_layout.h) and
 [`runtime/games/pkp/ui/pkp_save_now.cpp`](https://github.com/Dittobyte/Recompia/blob/ea632e4/runtime/games/pkp/ui/pkp_save_now.cpp), GPL-3.0-or-later). Its menu and clock
-(`SleepMod.java`) are drawn in M PLUS Rounded 1c (SIL Open Font License 1.1, `dm/third_party/fonts/OFL-MPLUSRounded1c.txt`), subset to Latin.
+(`SleepMod.java`) are drawn in the game's own font, read from the player's game files on the device (`GameFont.java`; nothing of it is shipped), and where that
+is not there in M PLUS Rounded 1c (SIL Open Font License 1.1, `dm/third_party/fonts/OFL-MPLUSRounded1c.txt`), subset to Latin. `GameFont.java` reads the G1N format
+as described by lehieugch68's g1n-font-editor (MIT); none of its code is used.

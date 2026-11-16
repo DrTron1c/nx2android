@@ -25,7 +25,7 @@ pyftsubset NotoSans/hinted/ttf/NotoSans-Regular.ttf \
 
 ## M PLUS Rounded 1c (nx2android's Pokopia sleep mod)
 
-`MPLUSRounded1c-Bold-subset.ttf` and `MPLUSRounded1c-ExtraBold-subset.ttf` are the rounded face of the sleep mod's menu and clock (`android/app/src/main/java/dev/nxnative/android/SleepMod.java`), copied into the APK's `assets/fonts/` with the others (`nxFontAssets`). Not the game's own font: that one is in the game's files, which are never included here.
+`MPLUSRounded1c-Bold-subset.ttf` and `MPLUSRounded1c-ExtraBold-subset.ttf` are the rounded face of the sleep mod's menu and clock (`android/app/src/main/java/dev/nxnative/android/SleepMod.java`), copied into the APK's `assets/fonts/` with the others (`nxFontAssets`). Not the game's own font: that one is in the game's files, which are never included here; the sleep mod reads it from the player's files when they have it (`GameFont.java`), and these stand in when they do not.
 
 | | |
 |---|---|

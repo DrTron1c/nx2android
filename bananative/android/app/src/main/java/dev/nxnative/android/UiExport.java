@@ -149,10 +149,10 @@ final class UiExport {
         return -1;
     }
 
-    /** Inflates an IDRK entry's chunks into sink (stops when sink says so) */
-    private interface Sink { boolean take(byte[] b, int n); }
+    /** Inflates an IDRK entry's chunks into sink (stops when sink says so; GameFont reads the game's font with it too) */
+    interface Sink { boolean take(byte[] b, int n); }
 
-    private static void idrkChunks(FileChannel ch, long a, long b, int flags, Sink sink) throws IOException {
+    static void idrkChunks(FileChannel ch, long a, long b, int flags, Sink sink) throws IOException {
         boolean neu = (flags & 0x400000) != 0, lz4 = (flags & 0x500000) == 0x500000;
         if ((flags & 0x500000) == 0) {   // stored
             ByteBuffer buf = ByteBuffer.allocate(1 << 16);
