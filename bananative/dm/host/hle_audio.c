@@ -129,10 +129,17 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
 
 // A six-channel output (front-left front-right center LFE back-left back-right) goes to the device as stereo, downmixed here with the audio renderer's default Q15 coefficients (hle_audren.c):
 // Core Audio's own 6 → 2 mapping keeps only the front pair, so voices on the center (Luigi's Mansion 3) and the back channels were silent. The queue still takes all six guest channels,
-// in blocks through a stack buffer (no allocation in the real-time callback)
-static int device_channels(const aout *a) { return a->ch == 6 ? 2 : a->ch; }
-static void pull_device(aout *a, uint8_t *dst, uint64_t bytes) {
-    if (a->ch != 6) { pull(a, dst, bytes); return; }
+// in blocks through a stack buffer (no allocation in the real-time callback).
+// nx2android: on Android with DM_AUDIO_SURROUND=1 a six-channel output goes to Android as 5.1 instead (aa_try): the system's mixer, and an effect such as a tablet's Dolby Atmos,
+// then place the channels on the device's speakers; a device that will not open a 5.1 stream gets the downmix (dev 2)
+#if PLAT_APPLE
+int dm_audio_surround(void) { return 0; }
+#else
+int dm_audio_surround(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_AUDIO_SURROUND"); on = e && atoi(e) > 0; } return on; }
+#endif
+static int device_channels(const aout *a) { return a->ch == 6 && !dm_audio_surround() ? 2 : a->ch; }
+static void pull_device(aout *a, uint8_t *dst, uint64_t bytes, int dev) {
+    if (a->ch != 6 || dev == 6) { pull(a, dst, bytes); return; }
     enum { BLOCK = 128, CF = 32768, CC = 23167, CL = 8224, CB = 23167 };
     int16_t scratch[BLOCK * 6], *out = (int16_t *)dst;
     uint64_t frames = bytes / (2 * sizeof *out);
@@ -170,7 +177,7 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
             atomic_store_explicit(&a->st_pending, 1, memory_order_release);
             a->st_fmin = ~0u; a->st_fmax = 0; a->st_qsum = a->st_count = 0; a->st_u0 = un; a->st_ub0 = ubb;
         } }
-    pull_device(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
+    pull_device(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize, device_channels(a));
     { static int mute = -1; if (mute < 0) { const char *e = getenv("DM_AUDIO_MUTE"); mute = e && atoi(e); }   // diagnostic: the whole real-output path (AudioUnit callback pacing, background take-over) but with the output silenced (lifecycle tests on the Mac without noise)
       if (mute) memset(bl->mBuffers[0].mData, 0, bl->mBuffers[0].mDataByteSize); }
     return noErr;
@@ -267,13 +274,13 @@ static aaudio_data_callback_result_t aa_render(AAudioStream *s, void *ctx, void 
             a->st_fmin = ~0u; a->st_fmax = 0; a->st_qsum = a->st_count = 0; a->st_u0 = un; a->st_ub0 = ubb;
         } }
     uint64_t fb = 2u * (uint64_t)o->ch;
-    if (o->rate == RATE) pull_device(a, data, (uint64_t)frames * fb);
+    if (o->rate == RATE) pull_device(a, data, (uint64_t)frames * fb, o->ch);
     else {
         int16_t *d = data; uint32_t left = (uint32_t)frames;
         while (left) {
             uint32_t n = left, need = rs_need(&o->rs, n);
             while (need > o->scratch_frames && n > 1) { n /= 2; need = rs_need(&o->rs, n); }
-            pull_device(a, (uint8_t *)o->scratch, (uint64_t)need * fb);
+            pull_device(a, (uint8_t *)o->scratch, (uint64_t)need * fb, o->ch);
             rs_run(&o->rs, o->scratch, need, d, n);
             d += (size_t)n * o->ch; left -= n;
         }
@@ -291,17 +298,20 @@ static void aa_close(struct aa_out *o) {
     if (o->s) { AAudioStream_close(o->s); o->s = NULL; }
     free(o->scratch); o->scratch = NULL; o->scratch_frames = 0;
 }
+// A 5.1 stream (o->ch 6, DM_AUDIO_SURROUND) is not asked for low latency: the fast path takes only what the output's own channels are, and skips the effects (a tablet's Dolby
+// Atmos) that the system's mixer applies; its content type is a film's, whose effect profile is the one for surround
 static aaudio_result_t aa_try(struct aa_out *o, int rate) {
     AAudioStreamBuilder *b = NULL; aaudio_result_t r = AAudio_createStreamBuilder(&b);
     if (r != AAUDIO_OK) return r;
     AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setPerformanceMode(b, o->ch == 6 ? AAUDIO_PERFORMANCE_MODE_NONE : AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);   // several outputs at once (a game's middleware and the audio renderer)
     AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setChannelCount(b, o->ch);
+    if (o->ch == 6) AAudioStreamBuilder_setChannelMask(b, AAUDIO_CHANNEL_5POINT1);   // front-left front-right center LFE back-left back-right: the guest's order
+    else AAudioStreamBuilder_setChannelCount(b, o->ch);
     if (rate) AAudioStreamBuilder_setSampleRate(b, rate);
     AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_GAME);
-    AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MUSIC);
+    AAudioStreamBuilder_setContentType(b, o->ch == 6 ? AAUDIO_CONTENT_TYPE_MOVIE : AAUDIO_CONTENT_TYPE_MUSIC);
     AAudioStreamBuilder_setDataCallback(b, aa_render, o);
     AAudioStreamBuilder_setErrorCallback(b, aa_error, o);
     r = AAudioStreamBuilder_openStream(b, &o->s);
@@ -309,10 +319,17 @@ static aaudio_result_t aa_try(struct aa_out *o, int rate) {
     if (r != AAUDIO_OK) o->s = NULL;
     return r;
 }
+static _Atomic int g_aa_game_ch, g_aa_dev_ch, g_aa_mask, g_aa_fast;   // the last output stream opened: the game's channels, the stream's, its channel mask, low latency (dm_audio_info)
+void dm_audio_info(int out[4]) { out[0] = atomic_load(&g_aa_game_ch); out[1] = atomic_load(&g_aa_dev_ch); out[2] = atomic_load(&g_aa_mask); out[3] = atomic_load(&g_aa_fast); }
 static aaudio_result_t aa_open(struct aa_out *o) {
     aa_close(o); atomic_store(&o->lost, 0);
+    o->ch = device_channels(o->a);   // a reopen (a new route) tries 5.1 again
     aaudio_result_t r = aa_try(o, RATE);
     if (r != AAUDIO_OK) { aaudio_result_t r0 = r; r = aa_try(o, 0); if (r == AAUDIO_OK) LOG("[RED] audio #%d: no 48 kHz stream (%s): resampling to the device's rate", o->a->id, AAudio_convertResultToText(r0)); }
+    if (r != AAUDIO_OK && o->ch == 6) {   // no 5.1 stream on this device: the stereo downmix
+        LOG("[RED] audio #%d: Android will not open a 5.1 stream (%s): the game's six channels go to the device as stereo", o->a->id, AAudio_convertResultToText(r));
+        o->ch = 2; r = aa_try(o, RATE); if (r != AAUDIO_OK) r = aa_try(o, 0);
+    }
     if (r != AAUDIO_OK) { LOG("[RED] audio #%d: AAudio cannot open an output stream (%s)", o->a->id, AAudio_convertResultToText(r)); atomic_store(&o->lost, 1); return r; }
     o->rate = AAudioStream_getSampleRate(o->s);
     if (o->rate != RATE) {
@@ -326,9 +343,11 @@ static aaudio_result_t aa_open(struct aa_out *o) {
     if (want < o->rate / 100) want = o->rate / 100;
     const char *e = getenv("DM_DBG_AU_FRAMES"); if (e && atoi(e) > 0) want = atoi(e);
     int32_t got = AAudioStream_setBufferSizeInFrames(o->s, want);
-    LOG("audio #%d AAudio stream: %d Hz, %d channels, burst %d frames, buffer %d frames (asked %d), %s, %s, device %d", o->a->id, o->rate, o->ch, burst, got, want,
-        AAudioStream_getPerformanceMode(o->s) == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY ? "low latency" : "not low latency",
+    int fast = AAudioStream_getPerformanceMode(o->s) == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY;
+    LOG("audio #%d AAudio stream: %d Hz, %d channels (mask %#x, the game's %d), burst %d frames, buffer %d frames (asked %d), %s, %s, device %d", o->a->id, o->rate,
+        AAudioStream_getChannelCount(o->s), (unsigned)AAudioStream_getChannelMask(o->s), o->a->ch, burst, got, want, fast ? "low latency" : "not low latency",
         AAudioStream_getSharingMode(o->s) == AAUDIO_SHARING_MODE_EXCLUSIVE ? "exclusive" : "shared", AAudioStream_getDeviceId(o->s));
+    atomic_store(&g_aa_game_ch, o->a->ch); atomic_store(&g_aa_dev_ch, AAudioStream_getChannelCount(o->s)); atomic_store(&g_aa_mask, (int)AAudioStream_getChannelMask(o->s)); atomic_store(&g_aa_fast, fast);
     return AAUDIO_OK;
 }
 // Never fails for a missing device: the output then has no stream, and each start tries to open one (au_go's silent sink and retries cover the gap)

@@ -60,6 +60,7 @@ void nxhost_env_changed(void);
 #pragma weak nxhost_pkp_save
 #pragma weak nxhost_pkp_tod
 #pragma weak nxhost_pkp_focus
+#pragma weak nxhost_audio_info
 #pragma weak nxhost_watch_fs
 #pragma weak nxhost_watch_fs_age
 #pragma weak nxhost_paused
@@ -402,6 +403,12 @@ JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_pkpTod(JNIEnv *env, 
     (*env)->SetLongArrayRegion(env, out, 0, 2, j); return ok ? JNI_TRUE : JNI_FALSE;
 }
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_pkpFocus(JNIEnv *env, jclass cls, jint st) { (void)env; (void)cls; if (nxhost_pkp_focus) nxhost_pkp_focus(st); }
+// nx2android: surround sound's status (input_android.h nxhost_audio_info); false without the entry point
+JNIEXPORT jboolean JNICALL Java_dev_nxnative_android_Native_audioInfo(JNIEnv *env, jclass cls, jintArray out) {
+    (void)cls; if (!nxhost_audio_info || (*env)->GetArrayLength(env, out) < 7) return JNI_FALSE;
+    int v[7] = {0}; nxhost_audio_info(v); jint j[7]; for (int i = 0; i < 7; i++) j[i] = v[i];
+    (*env)->SetIntArrayRegion(env, out, 0, 7, j); return JNI_TRUE;
+}
 JNIEXPORT void JNICALL Java_dev_nxnative_android_Native_watchFs(JNIEnv *env, jclass cls, jlongArray keys) {
     (void)cls; if (!nxhost_watch_fs) return;
     jsize n = keys ? (*env)->GetArrayLength(env, keys) : 0; uint64_t v[4] = {0}; if (n > 4) n = 4;

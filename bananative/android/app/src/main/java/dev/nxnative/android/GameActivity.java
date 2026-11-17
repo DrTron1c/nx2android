@@ -464,6 +464,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             if (!tod.isEmpty()) env.add("DM_TIME=" + tod);
         }
         SleepMod.env(this, id, env);   // nx2android: Pokopia's clock as far ahead as its sleeps moved it (DM_TIME_SKIP)
+        Surround.env(this, env);   // nx2android: six-channel sound to Android as 5.1 (DM_AUDIO_SURROUND)
         if (prof != null && prof.vegetationDetail && !Prefs.fullVegetation(this, id)) env.add("DM_VK_VEGETATION=0");
         if (prof != null) env.addAll(prof.optionsEnv(optEnv -> Prefs.gameOption(this, id, optEnv)));
         Lsfg.env(this, env);   // frame generation: the user's Lossless.dll and the settings

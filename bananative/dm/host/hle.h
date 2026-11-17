@@ -70,6 +70,8 @@ int dm_movie_playing(void);   // hle_movie.c: a video decoder of the SDK's movie
 void dm_audio_suspend(int on);
 uint64_t dm_audio_render_calls(void);   // Cumulative sound card callback count (the silent sink is not counted)
 void dm_audio_reset(void);   // iOS media services reset: recreate the AudioUnits (hle_audio.c)
+int dm_audio_surround(void);   // nx2android: six-channel outputs go to Android as 5.1 (DM_AUDIO_SURROUND=1; 0 on Apple)
+void dm_audio_info(int out[4]);   // nx2android, Android: the last output stream opened: the game's channels, the stream's, its channel mask, low latency
 // An nn::gs::NativeSyncHandle (16 bytes, magic first) the host made that never signals: GameChat's camera pictures, which never come (no camera; hle_misc.c). nn::gs::TryWaitNativeSync (hle_codec_video.c) reads it as not reached
 #define DM_SYNC_NEVER 0x4e436d44u   // 'DmCN'
 uint32_t dm_sf_host_session(const char *name);   // hle_sf.c: a session the host answers (success, zeroed output) for a service the game reaches without sm

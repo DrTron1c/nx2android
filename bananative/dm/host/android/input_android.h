@@ -110,6 +110,9 @@ NXHOST_API uint64_t nxhost_pkp_seen(void);
 // The game's own time of day: out[0] seconds into its day (-1 unknown), out[1] its date (y * 10000 + m * 100 + d, 0 unknown); 1 when read. The sleep stays black until
 // the game shows the new time
 NXHOST_API int nxhost_pkp_tod(int64_t out[2]);
+// nx2android: surround sound (pkp_sound.c, hle_audio.c): {DM_AUDIO_SURROUND on, Pokopia's sound file's channel count (-1 not seen), the count its engine got, the last
+// output stream's channels from the game, the stream's own, its AAudio channel mask, low latency}
+NXHOST_API int nxhost_audio_info(int out[7]);
 // The game's focus, as the console's HOME menu changes it (dm_focus_set: 2 lost, 1 back): Pokopia takes a new clock when it comes back to the game
 NXHOST_API void nxhost_pkp_focus(int st);
 NXHOST_API void nxhost_pkp_save(void);   // the game's own save of the player's file (what Save and Quit writes), at the next game frame; out[3] follows it

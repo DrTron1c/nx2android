@@ -32,6 +32,8 @@ Each change is its own commit after the copy (`git log -- bananative`), so a new
 - Pokémon Pokopia's sleep mod (`dm/host/android/pkp_sleep.c`, `android/app/src/main/java/dev/nxnative/android/SleepMod.java`, gate 60 in `dm/games/0400A3A01EE4C000/patches.py`):
   getting into a bed asks how long to sleep; the game saves, its clock moves on (`hle_time.c` `DM_TIME_SKIP`, only the game's), a counting clock and a spinner show over black;
   the Pokédex shows the game's clock (`vka_draw.c` `nxhost_watch_fs`); the menu and clocks use the game's own font, read from the player's files (`GameFont.java`). Player 1's input can be held by a mod (`hle_hid.c` `dm_input_hold`, `hle_touch.c`).
+- Surround sound (`hle_audio.c` `DM_AUDIO_SURROUND`, `Surround.java`): a game's six-channel output goes to Android as a 5.1 stream (not low latency, so the system mixer
+  and effects such as Dolby Atmos take it) instead of the stereo downmix; Pokopia's sound engine is set to mix 5.1 (`dm/host/android/pkp_sound.c`, gate 62).
 - Frame generation keeps the game's HUD (`dm/gfx/vk_android/lsfg/lsfg_chain.c` hud_new, `lsfg_hud.comp`, compiled by the NDK's glslc in `android/host/CMakeLists.txt`):
   after LSFG generates a frame, every pixel the game left unchanged between the two real frames is the newer real frame's, so a still HUD is never warped (`DM_LSFG_HUD`).
 - The engine's own Check for updates (Settings › Updates, and at each start) finds nx2android's engine builds, not Banana Native's releases (`Updater.java`

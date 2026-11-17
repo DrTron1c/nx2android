@@ -118,6 +118,9 @@ final class Native {
 
     /** The game's own time: out[0] seconds into its day (-1 unknown), out[1] its date (y * 10000 + m * 100 + d, 0 unknown); true when read */
     static native boolean pkpTod(long[] out);
+    /** nx2android: surround sound's status: {DM_AUDIO_SURROUND on, Pokopia's sound file's channels (-1 not seen), its engine's, the last output's channels from the game,
+     *  the stream's, its AAudio channel mask, low latency}; false without the host's entry point */
+    static native boolean audioInfo(int[] out);
 
     /** The game's focus, as the console's HOME menu changes it: 2 lost, 1 back (Pokopia takes a new clock when it comes back) */
     static native void pkpFocus(int st);

@@ -15,6 +15,9 @@ OBS = {
         # nx2android (OBS_PKP_GUIDE = 61): the key guide widget takes a set (Recompia's kFillSet: x0 the widget, w1 the set id); the title screen's sets are 152 and 183,
         # so a player's game reaching them is a Save and Quit (the sleep mod moves the clock on 6 hours for the next time in)
         (0x0ec5de0, 61, '72001c3f', 'key guide widget takes a set; w1 the set id (the sleep mod: the title screen)'),
+        # nx2android (OBS_PKP_SOUND = 62, dm/host/android/pkp_sound.c): the first instruction after the game's sound settings file parsed into the engine's parameters
+        # (x29 - 0x80; +0x20 the output channel count), before the engine reads them: 6 for 5.1 surround when the host plays it (DM_AUDIO_SURROUND)
+        (0x115ccdc, 62, 'b9467a95', "sound settings parsed; x29 - 0x80 the engine's parameters, +0x20 its channel count (surround)"),
     ],
 }
 BINDING = [
@@ -22,6 +25,11 @@ BINDING = [
      'goal': 'game', 'purpose': 'runtime',
      'checked': 'main 76a489f3bd3642fa5e18bd83d32c98ba (disassembled 2026-11-15)',
      'why': 'the frame step and the save manager calls are at fixed places in this exact build',
+     'blocked': 'future game builds require exact offset and original-word validation'},
+    {'what': 'Pokopia surround sound gate in main v2.0.1 (nx2android)', 'now': 'build',
+     'goal': 'game', 'purpose': 'runtime',
+     'checked': 'main 76a489f3bd3642fa5e18bd83d32c98ba (disassembled 2026-11-17)',
+     'why': "the engine takes its channel count from the game's own sound settings file, parsed at a fixed place in this exact build",
      'blocked': 'future game builds require exact offset and original-word validation'},
     {'what': 'Pokopia camera aspect hooks in main v2.0.1', 'now': 'build',
      'goal': 'game', 'purpose': 'rendering',

@@ -503,6 +503,7 @@ final class SidePanel extends FrameLayout {
     private void general() {
         note("The game runs on behind this panel; every change applies now and is kept, except those marked for the next start.");
         sleepRows();
+        soundRows();
         panelRows();
 
         Button pause = new Button(act);   // the game suspended (clock, graphics, threads, audio) until a tap on the screen, or A / Start: GameActivity.pause
@@ -531,6 +532,18 @@ final class SidePanel extends FrameLayout {
     }
 
     /** nx2android: Pokopia's sleep mod (SleepMod): teaching it the bed, Sleep now, and how far the game's clock is ahead */
+    /** nx2android: surround sound (Surround): on or off for the next start, and what the game and the tablet do with the sound now */
+    private void soundRows() {
+        head("Sound");
+        android.widget.CheckBox sur = new android.widget.CheckBox(act);
+        sur.setText("Surround sound (5.1, all the tablet's speakers)");
+        sur.setChecked(Surround.on(act));
+        TextView next = note("");
+        sur.setOnCheckedChangeListener((b, on) -> { Surround.on(act, on); next.setText("Applies the next time the game starts."); });
+        box.addView(sur, box.indexOfChild(next));
+        note(Surround.status(act));
+    }
+
     private void sleepRows() {
         SleepMod m = act instanceof GameActivity ? ((GameActivity) act).sleepMod() : null;
         if (m == null) return;
