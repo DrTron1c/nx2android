@@ -146,16 +146,15 @@ static fg_snap *snap_for(const vka_img *im) {
     if (!r && ai.memoryTypeIndex == UINT32_MAX) r = VK_ERROR_OUT_OF_DEVICE_MEMORY;
     if (!r) r = vk.vkAllocateMemory(V.dev, &ai, NULL, &s->mem);
     if (!r) r = vk.vkBindImageMemory(V.dev, s->img, s->mem, 0);
-    if (!r) {   // GENERAL, as the replay keeps its images
-        VkCommandBuffer cb = VK_NULL_HANDLE;
+    if (!r) {   // GENERAL, as the replay keeps its images; one command buffer for it, kept (the queue is idle after each use)
+        static VkCommandBuffer cb;
         VkCommandBufferAllocateInfo cai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = F.pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
         VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-        r = F.pool ? vk.vkAllocateCommandBuffers(V.dev, &cai, &cb) : VK_ERROR_INITIALIZATION_FAILED;
+        r = !F.pool ? VK_ERROR_INITIALIZATION_FAILED : cb ? vk.vkResetCommandBuffer(cb, 0) : vk.vkAllocateCommandBuffers(V.dev, &cai, &cb);
         if (!r) r = vk.vkBeginCommandBuffer(cb, &bi);
         if (!r) { vka_img_barrier(cb, s->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL); r = vk.vkEndCommandBuffer(cb); }
         VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cb};
         if (!r) { pthread_mutex_lock(&V.qmu); r = vk.vkQueueSubmit(V.q, 1, &si, VK_NULL_HANDLE); if (!r) r = vk.vkQueueWaitIdle(V.q); pthread_mutex_unlock(&V.qmu); }
-        if (cb) vk.vkFreeCommandBuffers(V.dev, F.pool, 1, &cb);
     }
     if (r) {
         VRED("frame generation in layers: a snapshot of %ux%u (VkFormat %d): %d; whole frames instead", im->w, im->h, im->f.vk, r);
