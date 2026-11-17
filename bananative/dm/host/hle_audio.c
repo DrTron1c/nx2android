@@ -8,6 +8,7 @@
 typedef AudioUnit au_t; typedef OSStatus au_status_t;
 #else
 #include <aaudio/AAudio.h>
+#include <pthread.h>
 #include "android/av_android.h"
 typedef struct aa_out *au_t; typedef int32_t au_status_t;   // an AAudio stream per output (below), in the AudioUnit's place
 #endif
@@ -259,7 +260,74 @@ static void au_teardown(au_t au) { AudioUnitUninitialize(au); AudioComponentInst
 // pulls exactly the frames it is asked for, as au_render does. The buffer is two bursts, at least 5 ms (the Mac's request; DM_DBG_AU_FRAMES=N asks N frames). A device that will
 // not open at 48 kHz gets a stream at its own rate and the linear resampler of av_android.h. A stream that is disconnected (headphones out, a Bluetooth route change) stops calling
 // back: the watchdog's silent sink takes over, and the next start opens a new stream on the current route; nxhost_audio_route_changed (dm_audio_reset) does it at once
-struct aa_out { AAudioStream *s; aout *a; int rate, ch; nx_rs rs; int16_t *scratch; uint32_t scratch_frames; _Atomic int lost; };
+// nx2android: a cushion between the game's buffers and a stream whose bursts are long. AAudio asks for a burst at a time, and the game's buffers go back to it only as they
+// are played (pull), so a burst longer than what the game keeps queued always runs dry part way: build 30's 5.1 stream on the user's tablet (a normal mixer track, not a
+// fast one) was "extremely choppy". For a burst of CUSH_MIN_MS or more a pump thread moves the game's queued sound into a ring as it comes, handing each buffer back at once,
+// and keeps the ring CUSH_BURSTS bursts deep (no deeper: the game is paced by the hand-backs); the callback reads the ring, which starts (and starts again after running dry)
+// once it holds a burst and a half. A fast track's short bursts read the game's queue straight, as before. The ring holds the device's channels at the game's rate
+struct aa_out {
+    AAudioStream *s; aout *a; int rate, ch; nx_rs rs; int16_t *scratch; uint32_t scratch_frames; _Atomic int lost;
+    int16_t *ring; uint32_t ring_frames, cush_target, cush_prime; _Atomic uint64_t ring_wr, ring_rd; _Atomic int pump_run; pthread_t pump; int primed;
+};
+enum { CUSH_MIN_MS = 8, CUSH_BURSTS = 3, CUSH_BLK = 256 };
+// The game's sound queued now, in bytes of its own format (the pump is the only reader of the queue then)
+static uint64_t queued(aout *a) {
+    if (atomic_load_explicit(&a->state, memory_order_acquire) != STATE_STARTED) return 0;
+    uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_relaxed), qt = atomic_load_explicit(&a->q_tail, memory_order_acquire);
+    uint64_t n = 0;
+    for (uint32_t i = qh; i != qt; i++) n += a->q[i & (QMAX - 1)]->size;
+    return n > a->pos ? n - a->pos : 0;
+}
+static void *aa_pump(void *p) {
+    struct aa_out *o = p; aout *a = o->a;
+    int16_t blk[CUSH_BLK * 6];
+    while (atomic_load_explicit(&o->pump_run, memory_order_acquire)) {
+        for (;;) {
+            uint64_t wr = atomic_load_explicit(&o->ring_wr, memory_order_relaxed), fill = wr - atomic_load_explicit(&o->ring_rd, memory_order_acquire);
+            if (fill >= o->cush_target) break;
+            uint64_t n = queued(a) / (2u * (uint64_t)a->ch);   // the game's frames ready
+            if (!n) break;
+            if (n > o->cush_target - fill) n = o->cush_target - fill;
+            if (n > CUSH_BLK) n = CUSH_BLK;
+            pull_device(a, (uint8_t *)blk, n * 2u * (uint64_t)o->ch, o->ch);
+            for (uint64_t i = 0; i < n; i++) memcpy(o->ring + (size_t)((wr + i) & (o->ring_frames - 1)) * o->ch, blk + (size_t)i * o->ch, 2u * (size_t)o->ch);
+            atomic_store_explicit(&o->ring_wr, wr + n, memory_order_release);
+        }
+        usleep(1000);
+    }
+    return NULL;
+}
+// The callback's read of the ring: silence until it holds cush_prime frames, and after it runs dry
+static void ring_read(struct aa_out *o, int16_t *dst, uint32_t frames) {
+    uint64_t rd = atomic_load_explicit(&o->ring_rd, memory_order_relaxed), fill = atomic_load_explicit(&o->ring_wr, memory_order_acquire) - rd;
+    uint32_t n = 0;
+    if (o->primed || fill >= o->cush_prime) { o->primed = 1; n = fill < frames ? (uint32_t)fill : frames; }
+    for (uint32_t i = 0; i < n; i++) memcpy(dst + (size_t)i * o->ch, o->ring + (size_t)((rd + i) & (o->ring_frames - 1)) * o->ch, 2u * (size_t)o->ch);
+    if (n < frames) {
+        memset(dst + (size_t)n * o->ch, 0, (size_t)(frames - n) * 2u * o->ch);
+        if (o->primed && atomic_load_explicit(&o->a->state, memory_order_acquire) == STATE_STARTED) { atomic_fetch_add(&o->a->under_n, 1); atomic_fetch_add(&o->a->under_b, (uint64_t)(frames - n) * 2u * o->ch); }
+        o->primed = 0;
+    }
+    atomic_store_explicit(&o->ring_rd, rd + n, memory_order_release);
+}
+static void aa_src(struct aa_out *o, uint8_t *dst, uint32_t frames) {
+    if (o->ring) ring_read(o, (int16_t *)dst, frames); else pull_device(o->a, dst, (uint64_t)frames * 2u * (uint64_t)o->ch, o->ch);
+}
+static void cush_stop(struct aa_out *o) {
+    if (o->ring) { atomic_store_explicit(&o->pump_run, 0, memory_order_release); pthread_join(o->pump, NULL); free(o->ring); o->ring = NULL; }
+}
+// After an open: the cushion when the stream's bursts are long
+static void cush_start(struct aa_out *o, int32_t burst) {
+    if (burst <= 0 || (int64_t)burst * 1000 < (int64_t)CUSH_MIN_MS * o->rate) return;
+    uint32_t bg = (uint32_t)((int64_t)burst * RATE / o->rate) + 1, need = (CUSH_BURSTS + 2) * bg, rf = 1;   // a burst at the game's rate
+    while (rf < need) rf <<= 1;
+    o->ring = malloc((size_t)rf * 2u * o->ch);
+    if (!o->ring) return;
+    o->ring_frames = rf; o->cush_target = CUSH_BURSTS * bg; o->cush_prime = bg + bg / 2; o->primed = 0;
+    atomic_store(&o->ring_wr, 0); atomic_store(&o->ring_rd, 0); atomic_store(&o->pump_run, 1);
+    if (pthread_create(&o->pump, NULL, aa_pump, o)) { free(o->ring); o->ring = NULL; return; }
+    LOG("audio #%d: a cushion of %u frames (%d bursts of %d) between the game and the stream", o->a->id, o->cush_target, CUSH_BURSTS, burst);
+}
 static aaudio_data_callback_result_t aa_render(AAudioStream *s, void *ctx, void *data, int32_t frames) {
     (void)s; struct aa_out *o = ctx; aout *a = o->a;
     atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed); atomic_fetch_add_explicit(&a->cb_n, 1, memory_order_relaxed);
@@ -274,13 +342,13 @@ static aaudio_data_callback_result_t aa_render(AAudioStream *s, void *ctx, void 
             a->st_fmin = ~0u; a->st_fmax = 0; a->st_qsum = a->st_count = 0; a->st_u0 = un; a->st_ub0 = ubb;
         } }
     uint64_t fb = 2u * (uint64_t)o->ch;
-    if (o->rate == RATE) pull_device(a, data, (uint64_t)frames * fb, o->ch);
+    if (o->rate == RATE) aa_src(o, data, (uint32_t)frames);
     else {
         int16_t *d = data; uint32_t left = (uint32_t)frames;
         while (left) {
             uint32_t n = left, need = rs_need(&o->rs, n);
             while (need > o->scratch_frames && n > 1) { n /= 2; need = rs_need(&o->rs, n); }
-            pull_device(a, (uint8_t *)o->scratch, (uint64_t)need * fb, o->ch);
+            aa_src(o, (uint8_t *)o->scratch, need);
             rs_run(&o->rs, o->scratch, need, d, n);
             d += (size_t)n * o->ch; left -= n;
         }
@@ -295,16 +363,18 @@ static void aa_error(AAudioStream *s, void *ctx, aaudio_result_t err) {
         atomic_store(&((struct aa_out *)ctx)->lost, 1);
 }   // no stream call here: the next start reopens
 static void aa_close(struct aa_out *o) {
-    if (o->s) { AAudioStream_close(o->s); o->s = NULL; }
+    if (o->s) { AAudioStream_close(o->s); o->s = NULL; }   // its callbacks over, then the pump's
+    cush_stop(o);
     free(o->scratch); o->scratch = NULL; o->scratch_frames = 0;
 }
-// A 5.1 stream (o->ch 6, DM_AUDIO_SURROUND) is not asked for low latency: the fast path takes only what the output's own channels are, and skips the effects (a tablet's Dolby
-// Atmos) that the system's mixer applies; its content type is a film's, whose effect profile is the one for surround
+// A 5.1 stream (o->ch 6, DM_AUDIO_SURROUND): its content type is a film's, whose effect profile (a tablet's Dolby Atmos) is the one for surround. It asks for low latency as
+// the stereo one does: Android cannot make a 5.1 track a fast one on a stereo output, so it lands on the normal mixer, where the effects apply, with that mixer's bursts
+// rather than a deep buffer's (build 30 asked for none and was choppy: the cushion above covers the longer bursts)
 static aaudio_result_t aa_try(struct aa_out *o, int rate) {
     AAudioStreamBuilder *b = NULL; aaudio_result_t r = AAudio_createStreamBuilder(&b);
     if (r != AAUDIO_OK) return r;
     AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setPerformanceMode(b, o->ch == 6 ? AAUDIO_PERFORMANCE_MODE_NONE : AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);   // several outputs at once (a game's middleware and the audio renderer)
     AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
     if (o->ch == 6) AAudioStreamBuilder_setChannelMask(b, AAUDIO_CHANNEL_5POINT1);   // front-left front-right center LFE back-left back-right: the guest's order
@@ -348,6 +418,7 @@ static aaudio_result_t aa_open(struct aa_out *o) {
         AAudioStream_getChannelCount(o->s), (unsigned)AAudioStream_getChannelMask(o->s), o->a->ch, burst, got, want, fast ? "low latency" : "not low latency",
         AAudioStream_getSharingMode(o->s) == AAUDIO_SHARING_MODE_EXCLUSIVE ? "exclusive" : "shared", AAudioStream_getDeviceId(o->s));
     atomic_store(&g_aa_game_ch, o->a->ch); atomic_store(&g_aa_dev_ch, AAudioStream_getChannelCount(o->s)); atomic_store(&g_aa_mask, (int)AAudioStream_getChannelMask(o->s)); atomic_store(&g_aa_fast, fast);
+    cush_start(o, burst);
     return AAUDIO_OK;
 }
 // Never fails for a missing device: the output then has no stream, and each start tries to open one (au_go's silent sink and retries cover the gap)

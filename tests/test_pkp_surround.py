@@ -30,7 +30,15 @@ class Host(unittest.TestCase):
         self.assertIn('static int device_channels(const aout *a) { return a->ch == 6 && !dm_audio_surround() ? 2 : a->ch; }', a)
         self.assertIn('if (a->ch != 6 || dev == 6) { pull(a, dst, bytes); return; }', a)   # six channels straight through when the stream is 5.1
         self.assertIn('if (o->ch == 6) AAudioStreamBuilder_setChannelMask(b, AAUDIO_CHANNEL_5POINT1);', a)
-        self.assertIn('o->ch == 6 ? AAUDIO_PERFORMANCE_MODE_NONE : AAUDIO_PERFORMANCE_MODE_LOW_LATENCY', a)   # the system mixer, where the effects are
+        self.assertIn('AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);', a)   # not a deep buffer (build 30's 5.1 stream was choppy)
+        # the cushion (a stream with long bursts): a pump moves the game's queued sound into a ring three bursts deep, the callback reads the ring
+        self.assertIn('enum { CUSH_MIN_MS = 8, CUSH_BURSTS = 3, CUSH_BLK = 256 };', a)
+        self.assertIn('if (burst <= 0 || (int64_t)burst * 1000 < (int64_t)CUSH_MIN_MS * o->rate) return;', a)
+        self.assertIn('if (o->ring) ring_read(o, (int16_t *)dst, frames); else pull_device(', a)
+        self.assertIn('if (o->rate == RATE) aa_src(o, data, (uint32_t)frames);', a)
+        self.assertIn('aa_src(o, (uint8_t *)o->scratch, need);', a)
+        self.assertIn('cush_start(o, burst);\n    return AAUDIO_OK;', a)
+        self.assertIn('if (o->s) { AAudioStream_close(o->s); o->s = NULL; }   // its callbacks over, then the pump\'s\n    cush_stop(o);', a)
         self.assertIn('o->ch == 6 ? AAUDIO_CONTENT_TYPE_MOVIE : AAUDIO_CONTENT_TYPE_MUSIC', a)
         self.assertIn('o->ch = 2; r = aa_try(o, RATE);', a)   # no 5.1 stream: the downmix
         self.assertIn('o->ch = device_channels(o->a);   // a reopen (a new route) tries 5.1 again', a)
