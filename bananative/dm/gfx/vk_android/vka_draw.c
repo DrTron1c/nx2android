@@ -2214,6 +2214,23 @@ static void mdi_cpu(int indexed, uint64_t ind, uint64_t cnt, uint32_t n, uint32_
         if (indexed) vk.vkCmdDrawIndexedIndirect(g_cb, b, o, 1, 20); else vk.vkCmdDrawIndirect(g_cb, b, o, 1, 16);
     }
 }
+// nx2android: frame generation in layers (vka_framegen.c "Layers"). A draw that covers a window texture whole without blending, a full-screen triangle or quad (the
+// game's last pass over its 3D picture: tone map, upscale, anti-aliasing), ends the pass, and the picture is copied before the HUD's draws go on; the next draw begins the
+// pass again with what is in the image
+static void layer_scene(const vka_dstate *d, const p_draw *dw, const p_draw_idx *di) {
+    if (R.nci < 1 || !R.cim[0] || R.clv[0] || R.cl0[0] || (d->color.blend_en & 1)) return;
+    if (dw ? dw->ind : di->ind) return;
+    int32_t n = dw ? dw->count : di->count; int inst = dw ? dw->instances : di->instances;
+    if (n > 6 || inst > 1) return;
+    float x = d->has_vp ? d->vp[0][0] : 0, y = d->has_vp ? d->vp[0][1] : 0, w = d->has_vp ? d->vp[0][2] : (float)R.full_w, h = d->has_vp ? d->vp[0][3] : (float)R.full_h;
+    float x0 = w < 0 ? x + w : x, y0 = h < 0 ? y + h : y;
+    if (x0 > 0.5f || y0 > 0.5f || fabsf(w) < (float)R.full_w - 0.5f || fabsf(h) < (float)R.full_h - 0.5f) return;
+    vka_img *im = R.cim[0];
+    if (im->w != R.full_w || im->h != R.full_h || !vka_fg_scene_wants(im)) return;
+    vka_draw_run_break();
+    vka_rp_end();
+    vka_fg_scene(g_cb, im);
+}
 static void draw_body(vka_dstate *d, const p_set_rt *rt, int has_rt, const p_scissor *sc, int has_sc, const p_draw *dw, const p_draw_idx *di) {
     if (!g_cb || !draws_on() || !statics()) { g_skipped++; return; }
     if (RUN.open && RUN.fast && di && !dw && g_inst_on && inst_fast(d, rt, has_rt, sc, has_sc, di)) {   // DM_VK_INSTANCE: the run's next object, no walk
@@ -2663,6 +2680,7 @@ static void draw_body(vka_dstate *d, const p_set_rt *rt, int has_rt, const p_sci
     if (icand && !istart && !RUN.open) { if (inst_snap(&g_ia, p, i_ib, i_io, i_it, di, d)) g_ia.mark = vka_enc_total(); } else g_ia.valid = 0;   // a run may start from this draw
     PT(8);
     if (vka_nan_on() >= 2 && vka_nan_split(R.cim, R.nci)) vka_rp_end();   // DM_VK_NANSCAN=2: a scan inside the game's pass
+    if (vka_fg_layers_armed()) layer_scene(d, dw, di);   // nx2android: frame generation in layers
 }
 
 int dm_sdk_ounce(void);

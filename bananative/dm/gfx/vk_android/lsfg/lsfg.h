@@ -46,5 +46,9 @@ lsfg_chain *lsfg_chain_new(const lsfg_modules *mods, VkExtent2D ext, float flow_
 void lsfg_chain_free(lsfg_chain *c);   // the GPU must be done with it
 VkImage lsfg_chain_input(lsfg_chain *c, uint64_t count);   // the image game frame count is copied into (GENERAL layout)
 void lsfg_chain_shared(lsfg_chain *c, VkCommandBuffer cb, uint64_t count);                            // after the copy: mipmaps, alpha, beta of frame count
-void lsfg_chain_generate(lsfg_chain *c, VkCommandBuffer cb, uint64_t count, size_t ngen, size_t gen);  // generation gen of ngen between frames count - 1 and count, into outs[gen]
+// generation gen of ngen between frames count - 1 and count, into outs[gen]; layered (nx2android): the inputs are the game's 3D pictures, and the HUD of the frame as
+// shown (lsfg_chain_full) is laid back over it
+void lsfg_chain_generate(lsfg_chain *c, VkCommandBuffer cb, uint64_t count, size_t ngen, size_t gen, int layered);
+int lsfg_chain_layers(const lsfg_chain *c);                  // nx2android: the chain can generate in layers
+VkImage lsfg_chain_full(lsfg_chain *c, uint64_t count);      // nx2android: the image game frame count as shown (HUD and all) is copied into for layers (GENERAL layout)
 #endif

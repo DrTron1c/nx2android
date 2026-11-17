@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// nx2android: frame generation in layers (lsfg_chain.c layer_new, vka_framegen.c "Layers"). The chain generates its frames from the game's 3D picture alone (the
+// window texture as it was before the game drew its HUD over it); this pass lays the newer real frame's HUD back over each generated frame: where the real frame as
+// shown differs from its 3D picture (more than eps on a channel), that is the HUD, and it is the real frame's, blended in over 3 eps so the HUD's soft edges and
+// see-through parts keep their look. Compiled by the build (android/host/CMakeLists.txt: glslc from the NDK) into lsfg_layer.comp.inc
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba8) uniform readonly image2D scene;   // the newer real frame's 3D picture (the chain's input)
+layout(binding = 1, rgba8) uniform readonly image2D full;    // the newer real frame as shown, its HUD over it
+layout(binding = 2, rgba8) uniform image2D outp;             // the generated frame (of the 3D pictures)
+layout(push_constant) uniform Params { float eps; } p;
+void main() {
+    ivec2 xy = ivec2(gl_GlobalInvocationID.xy), size = imageSize(outp);
+    if (xy.x >= size.x || xy.y >= size.y) return;
+    vec4 s = imageLoad(scene, xy), f = imageLoad(full, xy);
+    vec3 d = abs(f.rgb - s.rgb);
+    float m = max(d.r, max(d.g, d.b));
+    if (m <= p.eps) return;
+    float a = clamp((m - p.eps) / (3.0 * p.eps), 0.0, 1.0);
+    imageStore(outp, xy, mix(imageLoad(outp, xy), f, a));
+}

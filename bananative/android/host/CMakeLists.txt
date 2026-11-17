@@ -88,7 +88,14 @@ if(NX_LSFG)
     COMMAND ${NX_GLSLC} -O --target-env=vulkan1.1 -mfmt=num -o ${LSFG_HUD_INC} ${GFX}/vk_android/lsfg/lsfg_hud.comp
     DEPENDS ${GFX}/vk_android/lsfg/lsfg_hud.comp
     COMMENT "the HUD keeper's shader")
-  add_custom_target(lsfg_hud_spv DEPENDS ${LSFG_HUD_INC})
+  # nx2android: frame generation in layers (lsfg/lsfg_layer.comp, lsfg_chain.c layer_new): the HUD laid back over the generated 3D picture
+  set(LSFG_LAYER_INC ${GEN}/lsfg/lsfg_layer.comp.inc)
+  add_custom_command(OUTPUT ${LSFG_LAYER_INC}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${GEN}/lsfg
+    COMMAND ${NX_GLSLC} -O --target-env=vulkan1.1 -mfmt=num -o ${LSFG_LAYER_INC} ${GFX}/vk_android/lsfg/lsfg_layer.comp
+    DEPENDS ${GFX}/vk_android/lsfg/lsfg_layer.comp
+    COMMENT "frame generation in layers' shader")
+  add_custom_target(lsfg_hud_spv DEPENDS ${LSFG_HUD_INC} ${LSFG_LAYER_INC})
 endif()
 
 # libvpx (VP8 / VP9 movies), as the Makefile builds it: its arm64 configuration is plain NEON C

@@ -50,6 +50,9 @@ int nxhost_framegen_status(char *buf, int n) {
 }
 
 #ifndef NX_LSFG
+int vka_fg_layers_armed(void) { return 0; }
+int vka_fg_scene_wants(const vka_img *im) { (void)im; return 0; }
+void vka_fg_scene(VkCommandBuffer cb, vka_img *im) { (void)cb; (void)im; }
 int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence, int format, vka_img **gen, double *hold, double *out_period) {
     (void)serial; (void)crop; (void)period; (void)fence; (void)format; (void)gen;
     settings_init(); *hold = 0; *out_period = 0;
@@ -66,7 +69,105 @@ static struct {
     VkCommandPool pool; struct { VkCommandBuffer cb; VkFence fence; vka_img *held; } fr[NFG]; unsigned fi;
     lsfg_pacer pacer; uint64_t count; uint32_t warm_streak;
     double out_period, longer_since;   // the output period the window's frame rate is set for, and since when a longer one is wanted
+    int layered;                       // nx2android: the last frame went in as its 3D picture (Layers)
 } F;
+
+// ---------- Layers (nx2android) ----------
+// Frame generation in layers: the HUD is never generated. The replay catches the game's 3D picture in each window texture before the game draws its HUD over it: after a
+// draw that covers the whole window texture without blending (the game's last pass over its picture: tone map, upscale, anti-aliasing) it ends the pass and copies the
+// image into a snapshot of its own (vka_fg_scene, from vka_draw.c), and the HUD's draws go on after the copy; the last such draw of a frame wins. The chain then takes the
+// snapshot in, the frame as shown goes beside it (lsfg_chain_full), and what differs between the two (the HUD) is laid back over each generated frame from the newer real
+// frame (lsfg_layer.comp). A frame with no snapshot (a game that never draws its picture that way, a screen with no such draw) goes in whole with the still-pixel keeper,
+// and no frame is generated across a change between the two. DM_LSFG_LAYERS=0 (live) turns it off.
+// A snapshot per window texture (the game draws the next frame into another while one is shown, so the copy into one never races the chain's read of another), NSNAP at
+// most. The replay reads a slot under a sequence check (serial before and after); a slot's old image is freed GRAVE_PRESENTS presents after it was left, with the queue idle.
+enum { NSNAP = 4, NGRAVE = 8, GRAVE_PRESENTS = 120 };
+typedef struct { _Atomic uint64_t serial; VkImage img; VkDeviceMemory mem; VkFormat fmt; uint32_t w, h; _Atomic uint64_t seq; uint64_t used; } fg_snap;
+static fg_snap S[NSNAP]; static unsigned g_snap_next; static _Atomic uint64_t g_snap_seq; static _Atomic int g_layers_armed;
+static struct { VkImage img; VkDeviceMemory mem; uint64_t at; } G[NGRAVE]; static uint64_t g_presents;
+int vka_fg_layers_armed(void) { return atomic_load_explicit(&g_layers_armed, memory_order_relaxed); }
+// The replay's question at a whole-picture draw: is its target a window texture with a snapshot of its shape
+int vka_fg_scene_wants(const vka_img *im) {
+    if (!im || im->base || im->layers != 1 || im->samples != 1) return 0;
+    for (int i = 0; i < NSNAP; i++) {
+        uint64_t s0 = atomic_load_explicit(&S[i].serial, memory_order_acquire);
+        if (s0 != im->serial || !s0) continue;
+        int ok = S[i].img && S[i].fmt == im->f.vk && S[i].w == im->w && S[i].h == im->h;
+        return ok && atomic_load_explicit(&S[i].serial, memory_order_acquire) == s0;
+    }
+    return 0;
+}
+// The copy, recorded by the replay with its pass ended (vka_draw.c layer_scene)
+void vka_fg_scene(VkCommandBuffer cb, vka_img *im) {
+    for (int i = 0; i < NSNAP; i++) {
+        uint64_t s0 = atomic_load_explicit(&S[i].serial, memory_order_acquire);
+        if (s0 != im->serial || !s0) continue;
+        VkImage dst = S[i].img; int ok = dst && S[i].fmt == im->f.vk && S[i].w == im->w && S[i].h == im->h;
+        if (!ok || atomic_load_explicit(&S[i].serial, memory_order_acquire) != s0) return;
+        VkImageCopy c = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {im->w, im->h, 1}};
+        vk.vkCmdCopyImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        vka_barrier(cb);   // the copy before the HUD's draws write the image
+        atomic_store_explicit(&S[i].seq, atomic_fetch_add(&g_snap_seq, 1) + 1, memory_order_release);
+        static _Atomic int told; if (!atomic_exchange(&told, 1)) VLOG("frame generation in layers: the game's 3D picture caught before its HUD (window texture serial %llu, %ux%u)", (unsigned long long)im->serial, im->w, im->h);
+        return;
+    }
+}
+static void grave_put(VkImage img, VkDeviceMemory mem) {
+    if (!img) return;
+    for (int i = 0; i < NGRAVE; i++) if (!G[i].img) { G[i].img = img; G[i].mem = mem; G[i].at = g_presents; return; }
+    pthread_mutex_lock(&V.qmu); vk.vkQueueWaitIdle(V.q); pthread_mutex_unlock(&V.qmu);   // full: freed now (behind a frame or two of recorded copies at worst: rare)
+    vk.vkDestroyImage(V.dev, img, NULL); vk.vkFreeMemory(V.dev, mem, NULL);
+}
+static void grave_sweep(void) {
+    g_presents++;
+    int due = 0; for (int i = 0; i < NGRAVE; i++) due |= G[i].img && g_presents - G[i].at >= GRAVE_PRESENTS;
+    if (!due) return;
+    pthread_mutex_lock(&V.qmu); vk.vkQueueWaitIdle(V.q); pthread_mutex_unlock(&V.qmu);
+    for (int i = 0; i < NGRAVE; i++) if (G[i].img && g_presents - G[i].at >= GRAVE_PRESENTS) { vk.vkDestroyImage(V.dev, G[i].img, NULL); vk.vkFreeMemory(V.dev, G[i].mem, NULL); G[i].img = VK_NULL_HANDLE; G[i].mem = VK_NULL_HANDLE; }
+}
+static void snaps_drop(void) {   // frame generation off: the slots left (freed later)
+    atomic_store(&g_layers_armed, 0);
+    for (int i = 0; i < NSNAP; i++) if (S[i].img) { atomic_store(&S[i].serial, 0); grave_put(S[i].img, S[i].mem); S[i].img = VK_NULL_HANDLE; S[i].mem = VK_NULL_HANDLE; }
+}
+// The window texture's slot, made (or remade for a new shape) on the present thread; NULL: none can be made
+static fg_snap *snap_for(const vka_img *im) {
+    fg_snap *s = NULL;
+    for (int i = 0; i < NSNAP && !s; i++) if (atomic_load(&S[i].serial) == im->serial) s = &S[i];
+    if (s && s->img && s->fmt == im->f.vk && s->w == im->w && s->h == im->h) return s;
+    if (!s) s = &S[g_snap_next++ % NSNAP];
+    atomic_store(&s->serial, 0);   // the replay leaves it alone from here
+    grave_put(s->img, s->mem); s->img = VK_NULL_HANDLE; s->mem = VK_NULL_HANDLE;
+    if (!F.pool) { VkCommandPoolCreateInfo pi = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = V.qf}; vk.vkCreateCommandPool(V.dev, &pi, NULL, &F.pool); }
+    VkImageCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = im->f.vk, .extent = {im->w, im->h, 1}, .mipLevels = 1, .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
+    VkResult r = vk.vkCreateImage(V.dev, &ci, NULL, &s->img);
+    VkMemoryRequirements mr = {0}; if (!r) vk.vkGetImageMemoryRequirements(V.dev, s->img, &mr);
+    VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mr.size, .memoryTypeIndex = vka_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0)};
+    if (!r && ai.memoryTypeIndex == UINT32_MAX) r = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    if (!r) r = vk.vkAllocateMemory(V.dev, &ai, NULL, &s->mem);
+    if (!r) r = vk.vkBindImageMemory(V.dev, s->img, s->mem, 0);
+    if (!r) {   // GENERAL, as the replay keeps its images
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = F.pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+        VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+        r = F.pool ? vk.vkAllocateCommandBuffers(V.dev, &cai, &cb) : VK_ERROR_INITIALIZATION_FAILED;
+        if (!r) r = vk.vkBeginCommandBuffer(cb, &bi);
+        if (!r) { vka_img_barrier(cb, s->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL); r = vk.vkEndCommandBuffer(cb); }
+        VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cb};
+        if (!r) { pthread_mutex_lock(&V.qmu); r = vk.vkQueueSubmit(V.q, 1, &si, VK_NULL_HANDLE); if (!r) r = vk.vkQueueWaitIdle(V.q); pthread_mutex_unlock(&V.qmu); }
+        if (cb) vk.vkFreeCommandBuffers(V.dev, F.pool, 1, &cb);
+    }
+    if (r) {
+        VRED("frame generation in layers: a snapshot of %ux%u (VkFormat %d): %d; whole frames instead", im->w, im->h, im->f.vk, r);
+        if (s->img) vk.vkDestroyImage(V.dev, s->img, NULL);
+        if (s->mem) vk.vkFreeMemory(V.dev, s->mem, NULL);
+        s->img = VK_NULL_HANDLE; s->mem = VK_NULL_HANDLE; return NULL;
+    }
+    s->fmt = im->f.vk; s->w = im->w; s->h = im->h; s->used = atomic_load(&s->seq);
+    atomic_store_explicit(&s->serial, im->serial, memory_order_release);
+    return s;
+}
+
 
 static double mono_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static void unavailable(const char *why, const char *a) { F.state = -1; reason(why, a); atomic_store(&g_state, -1); VRED("frame generation unavailable: %s", g_reason); }
@@ -101,6 +202,7 @@ static int load(void) {
 }
 
 static void teardown(void) {
+    snaps_drop();
     if (!F.chain && !F.out[0]) return;
     pthread_mutex_lock(&V.qmu); vk.vkQueueWaitIdle(V.q); pthread_mutex_unlock(&V.qmu);
     for (int i = 0; i < NFG; i++) if (F.fr[i].held) { vka_tex_drop(F.fr[i].held); F.fr[i].held = NULL; }
@@ -173,6 +275,7 @@ int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence
     settings_init();
     *hold = 0; *out_period = 0;
     int on = atomic_load(&g_on) > 0, mult = atomic_load(&g_mult), target = atomic_load(&g_target), flow = atomic_load(&g_flow);
+    grave_sweep();
     if (!on) {
         if (F.chain) { teardown(); VLOG("frame generation off"); }
         if (F.state >= 0) { atomic_store(&g_state, 0); reason("%s", "off"); }
@@ -215,6 +318,18 @@ int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence
     if (!F.chain || F.ext.width != e.width || F.ext.height != e.height || F.flow != flow) {
         if (!rebuild(e, flow)) { vka_tex_drop(im); unavailable("%s", "the frame generation chain could not be made (see the [RED] lines)"); vka_fps_fg(-1, 1); return 0; }
     }
+    // Layers: this frame's 3D picture, when the replay caught it before the HUD (vka_fg_scene); a window texture's slot is made the first time it is seen, so the
+    // picture is caught from its next frame on
+    int lay_on = VKA_ENV("DM_LSFG_LAYERS", 1) && lsfg_chain_layers(F.chain);
+    atomic_store(&g_layers_armed, lay_on);
+    fg_snap *sn = lay_on ? snap_for(im) : NULL;
+    uint64_t sq = sn ? atomic_load_explicit(&sn->seq, memory_order_acquire) : 0;
+    int layered = sn && sq > sn->used;
+    if (layered) sn->used = sq;
+    if (layered != F.layered) {
+        F.layered = layered; F.warm_streak = 0;   // no frame generated between a whole frame and a 3D picture
+        static int nlog; if (nlog++ < 6) VLOG("frame generation: %s", layered ? "in layers (the game's 3D picture in, its HUD laid back over the generated frames)" : "whole frames (no 3D picture caught for this one), the still-pixel HUD keeper");
+    }
     F.pacer.decoupled = &nxhost_fps_decoupled && nxhost_fps_decoupled();   // the game's speed follows its measured rate (hle_fpslock.c sead_rate), not only held by the limiter
     F.pacer.min_base = (float)VKA_ENV("DM_LSFG_MIN_FPS", 30);   // its floor (live)
     lsfg_plan plan = lsfg_pacer_plan(&F.pacer, LSFG_MAX_GENERATIONS, mult, target, mono_s());
@@ -254,15 +369,19 @@ int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     vk.vkBeginCommandBuffer(cb, &bi);
     vka_barrier(cb);   // the replay's writes to the window texture, and the presents still reading the outputs (earlier submissions)
+    // In layers the chain takes the 3D picture (the snapshot, the window texture's shape and format) and the frame as shown goes to its full image (lsfg_chain_full)
+    VkImage src = layered ? sn->img : im->img;
     if (wv) {   // the same rectangle as the blit (1:1, no flip), without the read in the image's format
         VkImageCopy c = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {cx, cy, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {(uint32_t)cw, (uint32_t)ch, 1}};
-        vk.vkCmdCopyImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, lsfg_chain_input(F.chain, count), VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        vk.vkCmdCopyImage(cb, src, VK_IMAGE_LAYOUT_GENERAL, lsfg_chain_input(F.chain, count), VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        if (layered) vk.vkCmdCopyImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, lsfg_chain_full(F.chain, count), VK_IMAGE_LAYOUT_GENERAL, 1, &c);
     } else {
         VkImageBlit b = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{cx, cy, 0}, {cx + cw, cy + ch, 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{0, 0, 0}, {cw, ch, 1}}};
-        vk.vkCmdBlitImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, lsfg_chain_input(F.chain, count), VK_IMAGE_LAYOUT_GENERAL, 1, &b, VK_FILTER_NEAREST);
+        vk.vkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_GENERAL, lsfg_chain_input(F.chain, count), VK_IMAGE_LAYOUT_GENERAL, 1, &b, VK_FILTER_NEAREST);
+        if (layered) vk.vkCmdBlitImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, lsfg_chain_full(F.chain, count), VK_IMAGE_LAYOUT_GENERAL, 1, &b, VK_FILTER_NEAREST);
     }
     if (warm) lsfg_chain_shared(F.chain, cb, count);
-    for (size_t g = 0; g < ng; g++) lsfg_chain_generate(F.chain, cb, count, ng, g);
+    for (size_t g = 0; g < ng; g++) lsfg_chain_generate(F.chain, cb, count, ng, g, layered);
     vka_barrier(cb);   // the outputs for the presents after this
     vk.vkEndCommandBuffer(cb);
     VkPipelineStageFlags st = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
@@ -276,6 +395,10 @@ int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence
     double interval = F.pacer.smoothed_interval > 0 ? F.pacer.smoothed_interval : period;
     if (interval < period) interval = period;
     if (ng) *hold = interval / (double)(ng + 1);
+    // nx2android: DM_LSFG_LOWLAT=1 (live; the launcher's Lower latency): each generated frame is held one refresh instead of an equal share of the game's frame, so the
+    // game's own frame follows it sooner (21 fps, 2x, 120 Hz: about 8 ms after the generated one instead of 24) and reaches the screen that much earlier; the motion is
+    // less even (the game's frame stays on longer)
+    if (ng && rns && VKA_ENV("DM_LSFG_LOWLAT", 0)) { double one = (double)rns / 1e9; if (*hold > one) *hold = one; }
     // A hold within 0.15 refresh of a whole number of refreshes is that number: the measured interval runs a little long (34 ms at a 30 fps frame step), and a hold of 17 ms on a
     // 16.7 ms panel let each image's desired time (vka_present.c, the previous one's plus the hold) drift across a refresh every few dozen frames, two images in one refresh
     if (ng && rns) { double r = *hold * 1e9 / (double)rns, w = floor(r + 0.5); if (w >= 1 && fabs(r - w) <= 0.15) *hold = w * (double)rns / 1e9; }

@@ -117,7 +117,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [NieR:Automata The End of YoRHa Edition (010056B015FE8000)](#nierautomata-the-end-of-yorha-edition-010056b015fe8000) | 8 | 0 | 0 | 0 | 1 | `build` → `game` ×2 |
 | [NieR:Automata The End of YoRHa Edition (0100B8E016F76000)](#nierautomata-the-end-of-yorha-edition-0100b8e016f76000) | 8 | 0 | 0 | 0 | 1 | `build` → `game` ×2 |
 | [Paper Mario: The Thousand-Year Door](#paper-mario-the-thousand-year-door) | 1 | 0 | 1 | 0 | 0 | `build` → `game` |
-| [Pokemon Pokopia](#pokemon-pokopia) | 0 | 6 | 0 | 0 | 2 | `build` → `game` ×3 |
+| [Pokemon Pokopia](#pokemon-pokopia) | 0 | 6 | 0 | 0 | 3 | `build` → `game` ×3 |
 | [Pokémon Brilliant Diamond](#pokémon-brilliant-diamond) | 0 | 0 | 0 | 0 | 1 | `build` → `engine` |
 | [Subnautica](#subnautica) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Subnautica: Below Zero](#subnautica-below-zero) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
@@ -529,6 +529,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - gate 62 at `+0x115ccdc`: sound settings parsed; x29 - 0x80 the engine's parameters, +0x20 its channel count (surround)
   - host [pkp_aspect.c:58](../../dm/host/android/pkp_aspect.c#L58): build check
   - host [pkp_sleep.c:32](../../dm/host/android/pkp_sleep.c#L32): build check
+  - host [pkp_sound.c:19](../../dm/host/android/pkp_sound.c#L19): build check
 
 ### Pokémon Brilliant Diamond
 

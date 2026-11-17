@@ -597,4 +597,9 @@ void vka_fps_fg(int state, int mult);
 // and the output period for the window's frame rate (0 = frame generation off). Present thread only
 enum { VKA_FG_MAX = 3 };
 int vka_fg_frame(uint64_t serial, const int *crop, double period, uint64_t fence, int format, vka_img **gen, double *hold, double *out_period);
+// nx2android: frame generation in layers (vka_framegen.c "Layers"): armed while frames are generated; whether a whole-picture draw's target is a window texture with a
+// snapshot; the copy of its 3D picture into the snapshot (the replay's pass ended first)
+int vka_fg_layers_armed(void);
+int vka_fg_scene_wants(const vka_img *im);
+void vka_fg_scene(VkCommandBuffer cb, vka_img *im);
 uint64_t vka_refresh_ns(void);   // vka_present.c: the panel's refresh period in ns from display timing, 0 when not known (present thread)

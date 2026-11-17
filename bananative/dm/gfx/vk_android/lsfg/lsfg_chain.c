@@ -51,6 +51,8 @@ struct lsfg_chain {
     lpass gen_pass; VkDescriptorSet gen_sets[LSFG_GENERATION_SLOTS][LSFG_MAX_GENERATIONS][2]; VkExtent2D out_ext;
     // nx2android: the game's HUD kept out of the generated frames (hud_new)
     lpass hud_pass; VkDescriptorSet hud_sets[LSFG_MAX_GENERATIONS][2]; float hud_eps; int hud_on;
+    // nx2android: frame generation in layers (layer_new): the real frames as shown, HUD and all, beside the 3D pictures the chain takes in
+    limg *full[2]; lpass layer_pass; VkDescriptorSet layer_sets[LSFG_MAX_GENERATIONS][2]; float layer_eps; int layer_on;
 };
 
 // Entry points the replay's table (vka.h) does not carry
@@ -229,6 +231,45 @@ static void hud_new(lsfg_chain *c, VkImageView out_views[LSFG_MAX_GENERATIONS]) 
     VLOG("lsfg: the game's HUD kept out of the generated frames (unchanged within %.0f/255; DM_LSFG_HUD=0: off)", e);
 }
 
+// nx2android: frame generation in layers (vka_framegen.c "Layers"). When the replay caught the game's 3D picture before its HUD, the chain takes in the 3D picture
+// and the real frame as shown goes to full[]; after each generated frame the HUD is laid back over it from the newer real frame (lsfg_layer.comp: where the frame as
+// shown differs from its 3D picture). DM_LSFG_LAYER_EPS: the difference that is no HUD, in 255ths of a channel (default 2). A shader that does not build leaves the
+// still-pixel keeper above (a log line)
+static const uint32_t lsfg_layer_spv[] = {
+#include "lsfg_layer.comp.inc"
+};
+static void layer_new(lsfg_chain *c, VkExtent2D ext, VkImageView out_views[LSFG_MAX_GENERATIONS]) {
+    if (c->bad) return;
+    for (int i = 0; i < 2; i++) if (!(c->full[i] = img_new(c, ext, LSFG_FORMAT))) return;
+    lpass *p = &c->layer_pass;
+    VkDescriptorSetLayoutBinding bs[3];
+    for (uint32_t i = 0; i < 3; i++) bs[i] = (VkDescriptorSetLayoutBinding){i, S_STO, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL};
+    VkDescriptorSetLayoutCreateInfo dl = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = bs};
+    VkPushConstantRange pr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(float)};
+    VkResult r = vk.vkCreateDescriptorSetLayout(V.dev, &dl, NULL, &p->dsl);
+    VkPipelineLayoutCreateInfo li = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &p->dsl, .pushConstantRangeCount = 1, .pPushConstantRanges = &pr};
+    if (!r) r = vk.vkCreatePipelineLayout(V.dev, &li, NULL, &p->pl);
+    VkShaderModule sm = VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo mi = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = sizeof lsfg_layer_spv, .pCode = lsfg_layer_spv};
+    if (!r) r = vk.vkCreateShaderModule(V.dev, &mi, NULL, &sm);
+    VkComputePipelineCreateInfo pi = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = sm, .pName = "main"}, .layout = p->pl};
+    if (!r) r = vk.vkCreateComputePipelines(V.dev, VK_NULL_HANDLE, 1, &pi, NULL, &p->pipe);
+    if (sm) vk.vkDestroyShaderModule(V.dev, sm, NULL);
+    lwriter w;
+    for (int t = 0; t < LSFG_MAX_GENERATIONS && !r; t++) for (int k = 0; k < 2 && !r; k++) {   // k: the newer frame's input, as the generate pass's sets
+        VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = c->pool, .descriptorSetCount = 1, .pSetLayouts = &p->dsl};
+        r = vk.vkAllocateDescriptorSets(V.dev, &ai, &c->layer_sets[t][k]);
+        if (r) break;
+        w_begin(&w, c, c->layer_sets[t][k]); w_store(&w, c->frames[k]); w_store(&w, c->full[k]); w_view(&w, out_views[t]); w_end(&w);
+    }
+    if (r) { VRED("lsfg: frame generation in layers: %d; the still-pixel HUD keeper instead", r); return; }
+    float e = (float)VKA_ENV("DM_LSFG_LAYER_EPS", 2); if (e < 0) e = 0; if (e > 255) e = 255;
+    c->layer_eps = e / 255.0f + 1e-4f; c->layer_on = 1;
+}
+int lsfg_chain_layers(const lsfg_chain *c) { return c && c->layer_on; }
+VkImage lsfg_chain_full(lsfg_chain *c, uint64_t count) { return c->full[count % 2] ? c->full[count % 2]->img : VK_NULL_HANDLE; }
+
 // ---------- The chain ----------
 lsfg_chain *lsfg_chain_new(const lsfg_modules *mods, VkExtent2D ext, float flow_scale, VkImage outs[LSFG_MAX_GENERATIONS], VkImageView out_views[LSFG_MAX_GENERATIONS]) {
     if (!lk_load()) return NULL;
@@ -237,7 +278,7 @@ lsfg_chain *lsfg_chain_new(const lsfg_modules *mods, VkExtent2D ext, float flow_
     lwriter w;
     // Descriptor pool, samplers, uniform buffer
     VkDescriptorPoolSize ps[4] = {{S_UBO, DESCRIPTORS_PER_TYPE}, {S_SMP, DESCRIPTORS_PER_TYPE}, {S_TEX, DESCRIPTORS_PER_TYPE}, {S_STO, DESCRIPTORS_PER_TYPE}};
-    VkDescriptorPoolCreateInfo pi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = FIXED_SETS + SETS_PER_SLOT * LSFG_GENERATION_SLOTS + 2 * LSFG_MAX_GENERATIONS /* nx2android: hud_sets */, .poolSizeCount = 4, .pPoolSizes = ps};
+    VkDescriptorPoolCreateInfo pi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = FIXED_SETS + SETS_PER_SLOT * LSFG_GENERATION_SLOTS + 4 * LSFG_MAX_GENERATIONS /* nx2android: hud_sets, layer_sets */, .poolSizeCount = 4, .pPoolSizes = ps};
     if (vk.vkCreateDescriptorPool(V.dev, &pi, NULL, &c->pool)) { VRED("lsfg: descriptor pool"); c->bad = 1; }
     c->samp = sampler_new(c, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_COMPARE_OP_NEVER, 0);
     c->samp_border = sampler_new(c, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_COMPARE_OP_NEVER, 1);
@@ -396,6 +437,7 @@ lsfg_chain *lsfg_chain_new(const lsfg_modules *mods, VkExtent2D ext, float flow_
     }
 
     hud_new(c, out_views);
+    layer_new(c, ext, out_views);
 
     // Every image in GENERAL layout, once (the outputs too)
     if (!c->bad) {
@@ -433,7 +475,7 @@ void lsfg_chain_free(lsfg_chain *c) {
         if (c->imgs[i].img) vk.vkDestroyImage(V.dev, c->imgs[i].img, NULL);
         if (c->imgs[i].mem) vk.vkFreeMemory(V.dev, c->imgs[i].mem, NULL);
     }
-    pass_free(&c->mip_pass); pass_free(&c->gen_pass); pass_free(&c->hud_pass);
+    pass_free(&c->mip_pass); pass_free(&c->gen_pass); pass_free(&c->hud_pass); pass_free(&c->layer_pass);
     for (int i = 0; i < ALPHA_STAGES; i++) pass_free(&c->alpha_pass[i]);
     for (int i = 0; i < BETA_STAGES; i++) pass_free(&c->beta_pass[i]);
     for (int i = 0; i < GAMMA_STAGES; i++) pass_free(&c->gamma_pass[i]);
@@ -472,7 +514,7 @@ void lsfg_chain_shared(lsfg_chain *c, VkCommandBuffer cb, uint64_t count) {
 }
 
 // LsfgChain::DispatchGeneration: gamma at each level (delta at the finest three) for the generation's slot, then generate into its output
-void lsfg_chain_generate(lsfg_chain *c, VkCommandBuffer cb, uint64_t count, size_t ngen, size_t gen) {
+void lsfg_chain_generate(lsfg_chain *c, VkCommandBuffer cb, uint64_t count, size_t ngen, size_t gen, int layered) {
     size_t slot = gen_slot(ngen, gen); int h = (int)(count % HIST);
     for (int i = 0; i < MIPS; i++) {
         __typeof__(c->gamma[0]) *g = &c->gamma[i];
@@ -488,7 +530,13 @@ void lsfg_chain_generate(lsfg_chain *c, VkCommandBuffer cb, uint64_t count, size
     }
     cbar(cb);
     run(cb, &c->gen_pass, c->gen_sets[slot][gen][count % 2], groups(c->out_ext.width, 4), groups(c->out_ext.height, 4));
-    if (c->hud_on && VKA_ENV("DM_LSFG_HUD", 1)) {   // the still pixels (the game's HUD) back from the newer real frame (hud_new); live off with DM_LSFG_HUD=0
+    if (layered && c->layer_on) {   // in layers: the newer real frame's HUD over the generated 3D picture (layer_new)
+        cbar(cb);
+        vk.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, c->layer_pass.pipe);
+        vk.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, c->layer_pass.pl, 0, 1, &c->layer_sets[gen][count % 2], 0, NULL);
+        vk.vkCmdPushConstants(cb, c->layer_pass.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof c->layer_eps, &c->layer_eps);
+        vk.vkCmdDispatch(cb, groups(c->out_ext.width, 3), groups(c->out_ext.height, 3), 1);
+    } else if (c->hud_on && VKA_ENV("DM_LSFG_HUD", 1)) {   // the still pixels (the game's HUD) back from the newer real frame (hud_new); live off with DM_LSFG_HUD=0
         cbar(cb);
         vk.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, c->hud_pass.pipe);
         vk.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, c->hud_pass.pl, 0, 1, &c->hud_sets[gen][count % 2], 0, NULL);

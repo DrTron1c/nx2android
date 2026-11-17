@@ -39,6 +39,10 @@ final class Lsfg {
     /** Motion estimation resolution, % of the picture: 50 by default (at 1280x720 on an Adreno 740, 3x at the game's own 33 fps where 100 % was not worth one
      *  generated frame). The old Auto (0) was the full size: read as 100 */
     static int flow(Context c) { int v = prefs(c).getInt("lsfg_flow", 50); return v <= 0 ? 100 : v; }
+    // nx2android: frame generation in layers (the game's 3D picture generated, its HUD laid back over: DM_LSFG_LAYERS, on by default) and lower latency (each generated
+    // frame held one refresh: DM_LSFG_LOWLAT, off by default); both live in game through the control file (vka_framegen.c)
+    static boolean layers(Context c) { return prefs(c).getBoolean("lsfg_layers", true); }
+    static boolean lowLatency(Context c) { return prefs(c).getBoolean("lsfg_lowlat", false); }
 
     /** Where the DLL in use came from (for the main screen and the log) */
     static String note = "";
@@ -103,6 +107,8 @@ final class Lsfg {
         env.add("DM_LSFG_MULT=" + multiplier(c));
         env.add("DM_LSFG_TARGET=" + target(c));
         env.add("DM_LSFG_FLOW=" + flow(c));
+        env.add("DM_LSFG_LAYERS=" + (layers(c) ? 1 : 0));
+        env.add("DM_LSFG_LOWLAT=" + (lowLatency(c) ? 1 : 0));
     }
 
     private static RadioGroup choice(Context c, int[] values, int current, String[] labels, java.util.function.IntConsumer pick) {
@@ -147,6 +153,16 @@ final class Lsfg {
         opts.addView(fixed);
         TextView l3 = new TextView(c); l3.setText("Motion estimation resolution (lower is faster)"); opts.addView(l3);
         opts.addView(choice(c, FLOWS, flow(c), new String[]{"25%", "50%", "75%", "100%"}, v -> { prefs(c).edit().putInt("lsfg_flow", v).commit(); apply.run(); }));
+        CheckBox lay = new CheckBox(c);
+        lay.setText("Keep the HUD out (frame generation on the 3D picture only, the HUD laid back over it)");
+        lay.setChecked(layers(c));
+        lay.setOnCheckedChangeListener((b, v) -> { prefs(c).edit().putBoolean("lsfg_layers", v).commit(); apply.run(); });
+        opts.addView(lay);
+        CheckBox low = new CheckBox(c);
+        low.setText("Lower latency (each generated frame shown briefly: less delay, less smooth)");
+        low.setChecked(lowLatency(c));
+        low.setOnCheckedChangeListener((b, v) -> { prefs(c).edit().putBoolean("lsfg_lowlat", v).commit(); apply.run(); });
+        opts.addView(low);
         TextView mode = new TextView(c);   // Eden ports only the performance shader set (lossless_dll.h PerformanceShader); the quality set would need its own chain
         mode.setText("Mode: performance (the only shader set Eden's LSFG uses)");
         mode.setTextSize(12);
@@ -156,5 +172,12 @@ final class Lsfg {
         return st;
     }
 
-    static void push(Context c) { Native.frameGenSet(on(c), multiplier(c), target(c), flow(c)); }
+    static void push(Context c) {
+        Native.frameGenSet(on(c), multiplier(c), target(c), flow(c));
+        File ext = c.getExternalFilesDir(null);   // GameActivity's DM_CTL (<app files>/ctl.txt): the running game takes these at its next frame
+        if (ext == null) return;
+        try (java.io.FileWriter w = new java.io.FileWriter(new File(ext, "ctl.txt"), true)) {
+            w.write("env DM_LSFG_LAYERS=" + (layers(c) ? 1 : 0) + "\nenv DM_LSFG_LOWLAT=" + (lowLatency(c) ? 1 : 0) + "\n");
+        } catch (java.io.IOException e) { /* applies at the next start */ }
+    }
 }
