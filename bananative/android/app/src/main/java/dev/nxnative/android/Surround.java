@@ -25,14 +25,15 @@ final class Surround {
     /** The host's DM_AUDIO_SURROUND for a start */
     static void env(Context c, List<String> env) { if (on(c)) env.add("DM_AUDIO_SURROUND=1"); }
 
-    /** What the game and the tablet do with the sound now, for the in-game panel */
-    static String status(Context c) {
+    /** What the game and the tablet do with the sound now, for the in-game panel; titleId the running game's */
+    static String status(Context c, String titleId) {
         StringBuilder b = new StringBuilder();
         int[] h = new int[7];
         if (Native.audioInfo(h)) {
             if (h[0] == 0) b.append("Off this time: the game's sound goes to the tablet as stereo.");
             else {
                 if (h[1] >= 0) b.append(h[2] > 2 ? "The game mixes 5.1 (its own setting is " + h[1] + " channels). " : "The game mixes " + h[2] + " channels. ");
+                else if (SleepMod.game(titleId)) b.append("The 5.1 hook is not in this game's code yet: Game settings › Storage › Prepare again, then start it. ");
                 if (h[3] == 6 && h[4] == 6) b.append("Android gets all six channels" + (h[6] == 0 ? "" : " (low latency)") + ".");
                 else if (h[3] == 6) b.append("Android would not take 5.1 here: the six channels are folded to stereo.");
                 else if (h[3] > 0) b.append("The game's output is " + h[3] + " channels, so there is nothing to spread.");

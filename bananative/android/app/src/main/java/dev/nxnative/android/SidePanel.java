@@ -541,7 +541,7 @@ final class SidePanel extends FrameLayout {
         TextView next = note("");
         sur.setOnCheckedChangeListener((b, on) -> { Surround.on(act, on); next.setText("Applies the next time the game starts."); });
         box.addView(sur, box.indexOfChild(next));
-        note(Surround.status(act));
+        note(Surround.status(act, game()));
     }
 
     private void sleepRows() {
